@@ -1,0 +1,154 @@
+#!/bin/bash
+#
+# Running MOBILE
+# This file links the Makefile and source files of the program to the local folder,
+# compiles the program and executes it. It will create a 'build' folder where one
+# can find the object and mod files. 
+
+# Index ------------------------
+# A) Read flags
+# 0) Prepare folder to save simulation
+# 1) Link Makefile and src folder
+# 2) Compile program
+# 3) Create NAMELIST
+# 4) Execute MOBILE
+#-------------------------------
+
+# A) Read flags
+
+usage() { echo "Usage:              \n
+                -o: Output filename [String]  \n
+                -p: Path to population file [String] (Optional) \n
+                -r: Path to rainfall file [String] (Optional) \n
+                -d: Disease ID (0: Cholera) [Integer] \n
+                -n: Number of integration steps (days) [Integer <= length of forcing files] \n
+                -s: Seed [Integer]
+                -a: Number of agents [Integer]
+                -u: Spin up length [days]
+
+                 "; }
+# Resources
+# https://stackoverflow.com/questions/16483119/an-example-of-how-to-use-getopts-in-bash
+# https://serverfault.com/questions/266867/bash-getops-allow-but-not-require-arg
+while getopts ":ho:p:r:d:n:s:a:c:u:" flag; do
+ case $flag in
+   h) # Handle the -h flag
+   # Display script help information
+   usage
+   exit 0
+   ;;
+   o) # Handle the -o flag
+   filename=$OPTARG
+   ;;
+   p) # Handle the -p flag
+   pop_file=$OPTARG
+   ;;
+   r) # Handle the -r flag
+   rain_file=$OPTARG
+   ;;
+   d) # Handle the -d flag
+   disID=$OPTARG
+   ;;
+   n) # Handle the -n flag
+   nstep=$OPTARG
+   ;;
+   s) # Handle the -s flag
+   seed=$OPTARG
+   ;;
+   a) # Handle the -a flag
+   nagent=$OPTARG
+   ;;
+   c) # Handle the -c flag
+   const=$OPTARG
+   ;;
+   u) # Handle the -c flag
+   spin_up=$OPTARG
+   ;;
+   \?) # Handle invalid options
+   usage
+   exit 1
+   ;;
+ esac
+done
+
+# 0) Prepare folder to save simulation and namelist options
+
+path=$PWD/$filename
+namelist=namelist.nml
+
+# If you are trying to run MOBILE in the root stop simulation
+# Useful for GitHub development.
+
+if [[ $PWD == *${MOBILE}* ]]; then # If PWD contains ${MOBILE} stop 
+  echo 'Running MOBILE in root ; Stop.'
+  exit 1
+fi
+
+mkdir -p $path
+
+# 1) Link Makefile and src folder
+# https://www.man7.org/linux/man-pages/man1/ln.1.html
+ln -sf ${MOBILE}/Makefile ${path}
+ln -sf ${MOBILE}/src ${path}
+#-------------------------------
+
+# 2) Compile program
+(cd $path && make)
+exit=$? # Save exit status of 'make'.
+
+# $? = Exit status of last executed command 
+
+# For BASH zero means a successful execution, while non-zero values are 
+# mapped to different  numbers depending on the exit reason. Exit statuses 
+# fall between [0,255].
+# (https://www.gnu.org/software/bash/manual/html_node/Exit-Status.html)
+
+# For MAKE the exit status is always 0,1 or 2. 0 again means success.
+# (https://www.gnu.org/software/make/manual/html_node/Running.html)
+
+# "0: The exit status is zero if make is successful. 
+#  2: The exit status is two if make encounters any errors. 
+#     It will print messages describing the particular errors. 
+#  1: The exit status is one if you use the ‘-q’ flag and 
+#     make determines that some target is not already up to date."
+
+if [ $exit != 0 ]; then
+  echo "Makefile not successful" " --> Exit status:" $exit  
+  exit 1
+fi
+#-------------------------------
+
+lines=$(<"$const")  # < reads the entire content of the file into the variable "lines"
+#echo $lines
+# 3) Create NAMELIST
+# https://cyber.dabamos.de/programming/modernfortran/namelists.html
+cat << EOM > ${namelist}
+! Program NAMELIST
+! See: https://cyber.dabamos.de/programming/modernfortran/namelists.html
+&INOUT
+run_name='${filename}',
+disID=${disID},
+nsteps=${nstep},
+seed=${seed},
+spin_up=${spin_up}
+/
+&CLIMA
+rain_file='${rain_file}'
+/
+&HUMAN
+pop_file='${pop_file}',
+nagent=${nagent}
+/
+&CONST
+${lines}
+/
+EOM
+
+
+# 4) Execute MOBILE (mobile.out)
+echo '================= Running MoBILE ================='
+${path}/mobile.out ${namelist}
+#-------------------------------
+mv namelist.nml ${filename}.nc ${filename}.info ${filename}/
+cp $const ${filename}/
+
