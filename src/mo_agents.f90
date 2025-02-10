@@ -5,6 +5,9 @@ MODULE mo_agents
 ! Adrian M. Tompkins 2014 
 ! tompkins@ictp.it
 
+! Miguel Garrido Zornoza 2024
+! mgarrizoraca@gmail.com
+
 USE mo_const
 USE mo_control
 !

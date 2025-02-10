@@ -1,5 +1,10 @@
 MODULE mo_namelist
 ! This module deals with the NAMELIST(S) information
+
+! Miguel Garrido Zornoza 2024
+! mgarrizoraca@gmail.com
+!
+
     use, intrinsic :: iso_fortran_env, only: stderr => error_unit
     use mo_const
     use mo_control

@@ -2,7 +2,7 @@ MODULE mo_bulk
     ! This module either links to VECTRI or integrates
     ! the local source of disease, e.g., bacteria, ...
     !
-    ! Miguel Garrido Zornoza November 2024 
+    ! Miguel Garrido Zornoza 2024 
     ! mgarrizoraca@gmail.com
     !
     implicit none

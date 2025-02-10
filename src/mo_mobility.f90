@@ -1,7 +1,7 @@
 MODULE mo_mobility
   ! This module ...
   !
-  ! Miguel Garrido Zornoza November 2024 
+  ! Miguel Garrido Zornoza 2024 
   ! mgarrizoraca@gmail.com
   !
   implicit none

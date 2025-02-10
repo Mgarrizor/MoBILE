@@ -3,7 +3,7 @@ MODULE mo_netcdf
 ! of NetCDF files. From:
 ! https://docs.unidata.ucar.edu/netcdf-fortran/current/f90_The-NetCDF-Fortran-90-Interface-Guide.html
 !
-! Miguel Garrido Zornoza November 2024 
+! Miguel Garrido Zornoza 2024 
 ! mgarrizoraca@gmail.com
 !
     use netcdf
