@@ -1,14 +1,6 @@
 PROGRAM MOBILE
 !
-! Restructured version of the
-! Welfare-Indexed Socio Demographic Migration 
-!                       WISDOM 
-!                      (model) by
-!
-!          Adrian M. Tompkins (tompkins@ictp.it) 
-!
-!                      (2014)
-!
+
 ! Mobility-Based Integrated Landscape Epidemiology
 !                       MoBILE
 !                      (model) by
@@ -361,16 +353,13 @@ PROGRAM MOBILE
             case (1) ! Malaria [Non-functional]
             ! NEED TO REORGANIZE THIS 
             ! 4.2) Source
-            ! call VECTRI(ixy,S,E,I,R)
+            ! call VECTRI(ixy,nbites,V,S,E,I,R)
             ! Input
-            !   - SEIR(ixy) (Bulk stats)
+            !   - ixy       - grid point
+            !   - SEIR(:)   - bulk stats
+            !   - nbites(:) - number/density of infective bites (human to vector)
 
-            ! Output: 
-            !   - V(ixy)
-            !   - L(ixy)
-            !   - ... (Control output with flags - we could integrate VECTRI into MOBILE
-            !          here. In the case of .no agents. and .no mobility. then MOBILE would
-            !          automatically fall back to classical VECTRI)
+            
             !
             ! 5.2) Health  (we need VECTRI integration for this one)
             ! call bulk_integrate_SEIR_Malaria(ixy,V,...)
