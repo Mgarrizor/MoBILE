@@ -50,9 +50,9 @@ fi
      #       pop_file='data/Italy/pop.nc'   # Italy
             rain_file='data/Italy/rain.nc'
 
-     #       pop_file='data/Yemen/pop.nc'    # Yemen
+            pop_file='../Yemen_exp/pop.nc'    # Yemen
 
-            pop_file='data/Haiti/pop.nc'    # Haiti
+     #       pop_file='data/Haiti/pop.nc'    # Haiti
 
             const='params.txt'
 

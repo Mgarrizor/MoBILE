@@ -50,7 +50,7 @@ MODULE mo_control
     character(len=100) ::  lon_names(3) = [character(len=20) :: "lon", "longitude", "X"]
     character(len=100) ::  lat_names(3) = [character(len=20) :: "lat", "latitude", "Y"]
     character(len=100) ::  pop_names(3) = [character(len=20) :: "pop", "population", "population density"]
-    character(len=100) ::  rain_names(4)= [character(len=20) :: "rain", "rainfall", "precipitation", "pt", "precip"]
+    character(len=100) ::  rain_names(5)= [character(len=20) :: "rain", "rainfall", "precipitation", "pt", "precip"]
 
     ! Attribute names
     character(len=100) ::  att_names(6) = [character(len=20) :: "standard_name", "long_name", "units", "calendar", "axis", "cell_methods"]
