@@ -9,7 +9,7 @@ MODULE mo_control
     ! Control flags *******************************************
     ! These are overwritten by the input command when running MOBILE (when namelist_inout is called)
     logical :: input    =.true.  ! (from flag) [Non-functional]
-    logical :: agents   =.false.  ! Use agents, if false the program falls back to classic SIARB
+    logical :: agents   =.true.  ! Use agents, if false the program falls back to classic SIARB
     logical :: vectri   =.false. ! Use VECTRI [Non-functional]
     logical :: radial   =.true.  ! If .true. build radial city, otherwise uniform 
     logical :: network  =.false. ! Empirical network flag [Non-functional]
