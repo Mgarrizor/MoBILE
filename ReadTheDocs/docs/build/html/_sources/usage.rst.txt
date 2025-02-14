@@ -12,7 +12,7 @@ Installation
 GitHub repository
 ^^^^^^^^^^^^^^^^^
 
-The program is hosted by `GitHub <https://github.com/>`_. To use MoBILE, first *git clone* it using the following link:
+The program is hosted by `GitHub <https://github.com/>`_. To use **MoBILE**, first *git clone* it using the following link:
 
 .. code-block:: console
 

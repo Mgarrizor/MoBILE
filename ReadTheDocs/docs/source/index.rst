@@ -14,7 +14,7 @@ The *Mobility-Based Integrated Landscape Epidemiology* (**MoBILE**) model is a F
    - Cyril Caminade (ICTP)
    - Miguel Garrido Zornoza (ICTP)
    
-
+For issues not included in this documentation, please reach out at *mobile@ictp.it*. 
 
 .. note::
 
@@ -27,12 +27,6 @@ Check out the :doc:`usage` section for further information, including how to
 
 
 
-.. toctree::
-   :maxdepth: 2
-   :caption: Contents:
-
-
-
 Indices and tables
 ==================
 
@@ -41,11 +35,11 @@ Indices and tables
 * :ref:`search`
 
 
-Contents
---------
-
 .. toctree::
-   
+   :numbered:
+   :caption: Contents
+   :maxdepth: 2
+
    requirements
    usage
    model
