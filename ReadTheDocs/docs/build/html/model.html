@@ -1,0 +1,160 @@
+
+
+<!DOCTYPE html>
+<html class="writer-html5" lang="en">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Model description &mdash; MoBILE 0.1 documentation</title>
+      <link rel="stylesheet" type="text/css" href="_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="_static/css/theme.css?v=e59714d7" />
+
+  
+      <script src="_static/jquery.js?v=5d32c60e"></script>
+      <script src="_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script data-url_root="./" id="documentation_options" src="_static/documentation_options.js?v=e031e9a9"></script>
+      <script src="_static/doctools.js?v=888ff710"></script>
+      <script src="_static/sphinx_highlight.js?v=4825356b"></script>
+      <script async="async" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script src="_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="Advanced usage" href="advanced.html" />
+    <link rel="prev" title="Usage" href="usage.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+          
+          
+          <a href="index.html" class="icon icon-home">
+            MoBILE
+          </a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="requirements.html">Requirements</a></li>
+<li class="toctree-l1"><a class="reference internal" href="usage.html">Usage</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Model description</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#people-representation">People representation</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#density">Density</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#agents">Agents</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#climatic-forcings">Climatic forcings</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#diseases">Diseases</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#cholera">Cholera</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#malaria-vectri">Malaria - VECTRI</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="advanced.html">Advanced usage</a></li>
+<li class="toctree-l1"><a class="reference internal" href="references.html">References</a></li>
+<li class="toctree-l1"><a class="reference internal" href="acknowledgements.html">Acknowledgements</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="index.html">MoBILE</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Model description</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="_sources/model.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="model-description">
+<h1>Model description<a class="headerlink" href="#model-description" title="Permalink to this heading"></a></h1>
+<section id="people-representation">
+<h2>People representation<a class="headerlink" href="#people-representation" title="Permalink to this heading"></a></h2>
+<section id="density">
+<h3>Density<a class="headerlink" href="#density" title="Permalink to this heading"></a></h3>
+</section>
+<section id="agents">
+<h3>Agents<a class="headerlink" href="#agents" title="Permalink to this heading"></a></h3>
+<p>Each agent describes a group of people, given by their age, sex, socio-economic characteristics, etc, which are set as <a class="reference internal" href="#attributes"><span class="std std-ref">attributes</span></a> of that agent. The number of agents in a given location, <span class="math notranslate nohighlight">\(N_i\)</span>, is the proportion of the total population present in that location, <span class="math notranslate nohighlight">\(\rho_i/\sum_j \rho_j\)</span>, times the total number of agents <span class="math notranslate nohighlight">\(N_{tot}\)</span> of a given simulation, this is,</p>
+<div class="math notranslate nohighlight">
+\[N_i = \frac{\rho_i}{\sum_j \rho_j} \cdot N_{tot} \ .\]</div>
+<p><span class="math notranslate nohighlight">\(N_{tot}\)</span> is a free parameter with the constraint</p>
+<div class="math notranslate nohighlight">
+\[N_{tot} \le \sum_j \rho_j \cdot A_j \ ,\]</div>
+<p>where <span class="math notranslate nohighlight">\(A_j\)</span> is the area of the grid cell. This is a way to ensure no more agents than actual people are simulated. In the limit where the number of agents matches the actual number of people in a region each agent then describes a single individual. The total number of agents is kept constant throughout the course of a simulation. To convert numbers back into densities, <em>e.g</em>., the number of infected people at a given location, <span class="math notranslate nohighlight">\(i_i\)</span>, we just apply the conversion backwards, <em>i.e</em>.,</p>
+<div class="math notranslate nohighlight">
+\[i_i = \frac{I_i}{N_{tot}} \cdot \sum_j \rho_j \ .\]</div>
+<p>At any given time, each agent can either be <em>dead</em> or <em>alive</em>. When <em>dead</em>, the agent is inactive until a growth event occurs, after which the agent becomes <em>alive</em>. When <em>alive</em>, agents area active and each time step might undergo a set of events, each with a given probability. The set depends on the agent’s infected status (<em>e.g</em>., for cholera, <em>S</em>: susceptible, <em>I</em>: infected, <em>A</em>: asymptomatic and <em>R</em>: recovered) and probabilities might change based on some of the agent’s attributes. An event based on mobility, for example, might be less likely if the agent is <em>old</em> and rarely moves.</p>
+<p id="attributes"><strong>Attributes</strong></p>
+</section>
+</section>
+<section id="climatic-forcings">
+<h2>Climatic forcings<a class="headerlink" href="#climatic-forcings" title="Permalink to this heading"></a></h2>
+</section>
+<section id="diseases">
+<h2>Diseases<a class="headerlink" href="#diseases" title="Permalink to this heading"></a></h2>
+<section id="cholera">
+<h3>Cholera<a class="headerlink" href="#cholera" title="Permalink to this heading"></a></h3>
+</section>
+<section id="malaria-vectri">
+<h3>Malaria - VECTRI<a class="headerlink" href="#malaria-vectri" title="Permalink to this heading"></a></h3>
+<p>A coupling with <a class="reference external" href="https://users.ictp.it/~tompkins/vectri/documentation/">VECTRI</a> is under active development and malaria is thus not yet functional.</p>
+</section>
+</section>
+</section>
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="usage.html" class="btn btn-neutral float-left" title="Usage" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="advanced.html" class="btn btn-neutral float-right" title="Advanced usage" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright 2025, Miguel Garrido Zornoza.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

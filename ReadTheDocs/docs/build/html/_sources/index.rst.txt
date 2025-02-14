@@ -8,12 +8,22 @@ Welcome to MoBILE's documentation!
 
 The *Mobility-Based Integrated Landscape Epidemiology* (**MoBILE**) model is a FORTRAN program developed at the `Earth System Physics <https://www.ictp.it/esp>`_ section of ICTP, Trieste (Italy).
 
+**Authors** in alphabetic order
+   
+   - Adrian M. Tompkins (ICTP)
+   - Cyril Caminade (ICTP)
+   - Miguel Garrido Zornoza (ICTP)
+   
+
+
 .. note::
 
-   This project is under active development.
+   This project is under active development. Current features in development are:
+
+   - Coupling with the VECtor-borne disease community model of ICTP, TRIeste (`VECTRI <https://users.ictp.it/~tompkins/vectri/documentation/>`_).
 
 Check out the :doc:`usage` section for further information, including how to
-:ref:`install <installation>` the project.
+:ref:`install <installation>` and :ref:`run <first_run>` the program as well as :ref:`post-process <post_process>` its output. For an in-depth model description try the :doc:`model` section. For an insight into advance tools and example case studies where **MoBILE** has been used try the :doc:`advanced` section.
 
 
 
@@ -35,5 +45,10 @@ Contents
 --------
 
 .. toctree::
-
+   
+   requirements
    usage
+   model
+   advanced
+   references
+   acknowledgements
