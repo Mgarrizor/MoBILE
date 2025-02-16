@@ -55,6 +55,7 @@ Diseases
 Cholera
 ^^^^^^^
 
+.. _mobile_vectri:
 
 Malaria - VECTRI
 ^^^^^^^^^^^^^^^^
