@@ -139,8 +139,8 @@ USE mo_control
                             ! Initialize main agent attributes
                             people(indx)%agent_ID%age=20        ! Fixed for now. To Do: pick based on distribution
                             people(indx)%agent_ID%name=indx     !
-                            people(indx)%agent_ID%sex=0         ! F = 0, M = 1
-                            people(indx)%agent_ID%wealth=0      ! L = 0, M = 1, H = 2
+                            people(indx)%agent_ID%sex=0         ! F = 0, M = 1 [Not in use]
+                            people(indx)%agent_ID%wealth=0      ! L = 0, M = 1, H = 2 [Not in use]
 
                             ! Initialize health attributes
                             if (random .and. (.not. rand_seed)) then

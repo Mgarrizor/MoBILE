@@ -5,8 +5,8 @@ PROGRAM MOBILE
 !                       MoBILE
 !                      (model) by
 !
-!          Miguel G. Zornoza  (mgarrizoraca@gmail.com)
 !          Adrian M. Tompkins (tompkins@ictp.it) 
+!          Miguel G. Zornoza  (mgarrizoraca@gmail.com)
 !          
 !                      (2024)
 !
@@ -263,11 +263,10 @@ PROGRAM MOBILE
         !
       end if  
       !
+      ! 4) Integrate source of disease --> dt_B/dt, dt_V/dt, ...
+      ! 5) Update health status --> No agents
       spatial_loop: do ixy=1,nxy 
         if (mask_pop(ixy)) then
-          !
-          ! 4) Source of disease --> dt_B/dt, dt_V/dt, ...
-          ! 5) Health (no agents)
           ! 
           ! No need for an accurate integration scheme,
           ! since greater sources of uncertainty are present.
@@ -284,25 +283,33 @@ PROGRAM MOBILE
             ! 5.1) Health
               if (.not. agents) then 
                 ! Densities S(t) --> S(t + dt), ...
-                call bulk_integrate_SIAR(ixy,S,I,A,R,pop_dens,F,dt,mu,rho,sigma,gamma,alpha,eps)
+                call bulk_integrate_SIAR_cholera(ixy,S,I,A,R,pop_dens,F,dt,mu,rho,sigma,gamma,alpha,eps)
                 !
               end if
               !
             case (1) ! Malaria [Non-functional]
-            ! NEED TO REORGANIZE THIS 
+            ! 
             ! 4.2) Source
-            ! call VECTRI(ixy,nbites,V,S,E,I,R)
-            ! Input
+            !
+            ! V(t) --> V(t +dt)
+            ! call source_integrate_VECTRI(ixy,nbites,V,S,E,I,R)
+            ! **Input**
             !   - ixy       - grid point
             !   - SEIR(:)   - bulk stats
-            !   - nbites(:) - number/density of infective bites (human to vector)
-            
+            !   - nbites(:) - number/density of infective bites (human to vector). 
+            !                 This is handled in the agent methods and thus benefits from agent attributes.
+            !                 We then feed it to VECTRI to inform sporogonic cycle information.
+            ! **Output**
+            !   - Updated vector density, V(t + dt)
             !
-            ! 5.2) Health  (we need VECTRI integration for this one)
-            ! call bulk_integrate_SEIR_Malaria(ixy,V,...)
-          
+            ! 5.2) Health 
+              if (.not. agents) then 
+                ! Densities S(t) --> S(t + dt), ...
+                !call bulk_integrate_SEIR_Malaria(ixy,V,...)
+              end if
+              !
             case default
-              print *, "Incorrect case, choose disID between: 0 (cholera)"
+              print *, "Incorrect case, choose disID between: 0 (cholera) and 1 (malaria)"
             STOP
             end SELECT
             !
@@ -310,7 +317,7 @@ PROGRAM MOBILE
         end if ! End mask_pop(ixy)
       end do spatial_loop
       !
-      ! 6) Agents
+      ! 6) Update health status --> Agents
       if ((agents)) then
         ! Reset base excretion array
         exc(:) = 0.
@@ -328,7 +335,7 @@ PROGRAM MOBILE
         !
           call agents_update(disID,iagent,itime,nattempt(:))
 
-          if (MOD(itime,365)==0) then
+          if (MOD(itime,365)==0) then ! Ignore calendar type
             !
             call agents_age(iagent)
             !

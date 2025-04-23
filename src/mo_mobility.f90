@@ -151,7 +151,7 @@ MODULE mo_mobility
                     !
                     if (mask_grav(ixy_2,ixy_1) .and. mask_pop(ixy_2)) then
                       !
-                      norm_dice = norm_dice + Q(ixy_1,ixy_2)   ! Include in normalzation factor
+                      norm_dice = norm_dice + Q(ixy_1,ixy_2)   ! Include in normalization factor
                       Q_cum(ixy_2,ixy_1) = norm_dice     ! By building the dice in this way we have a 
                                                    ! cummulative array only in the indexes where this condition is true
                                                    ! The rest of the indexes have zero value and when the dice is thrown

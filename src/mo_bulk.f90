@@ -32,7 +32,7 @@ MODULE mo_bulk
           !
           ! CDF for initial health status
           if (random) then
-              ! To Do: We should here use disID input to buld a disease-dependent dice
+              ! To Do: We should here use disID input to build a disease-dependent dice
               cdf_health(:) = cumsum([0.25,0.25,0.25,0.25])/sum([0.25,0.25,0.25,0.25])
               !
           !else ! Follow initial condition profile
@@ -102,7 +102,7 @@ MODULE mo_bulk
         !
         !--------------------------------------------------------------------------------------
         !
-        pure subroutine bulk_integrate_SIAR(ixy,S,I,A,R,pop_dens,F,dt,mu,rho,sigma,gamma,alpha,eps)
+        pure subroutine bulk_integrate_SIAR_cholera(ixy,S,I,A,R,pop_dens,F,dt,mu,rho,sigma,gamma,alpha,eps)
             !Integrate SIAR model 
             implicit none
 

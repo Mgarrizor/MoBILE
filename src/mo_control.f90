@@ -9,14 +9,17 @@ MODULE mo_control
     ! Control flags *******************************************
     ! These are overwritten by the input command when running MOBILE (when namelist_inout is called)
     logical :: input    =.true.  ! (from flag) [Non-functional]
-    logical :: agents   =.true.  ! Use agents, if false the program falls back to classic SIARB
+    logical :: agents   =.true.  ! Use agents, if false the program falls back to density
     logical :: vectri   =.false. ! Use VECTRI [Non-functional]
-    logical :: radial   =.true.  ! If .true. build radial city, otherwise uniform 
+    logical :: radial   =.false. ! If .true. build radial city, otherwise uniform 
     logical :: network  =.false. ! Empirical network flag [Non-functional]
     logical :: gravity  =.true.  ! Use gravity model
     logical :: radiation=.false. ! Use radiation model [Non-functional]
-    logical :: random   =.true.  ! Disease initialization - if .true. random S,I,A,R,B everywhere
-    logical :: rand_seed=.false. ! Disease initialization - if .true. random B at a seed and input S,I,A,R
+    logical :: diffusion=.false. ! Use diffusion model [Non-functional]
+    logical :: random   =.true.  ! Disease initialization - if .true. and rand_seed = .false. random S,I,A,R,B everywhere
+                                 !                        - if .true. and rand_seed = .true.  f0 SIAR and random seed for B
+                                 !                        - if .false. then f0 SIARB
+    logical :: rand_seed=.true.  ! Disease initialization - if .true. random B at a seed and input S,I,A,R
 
     ! Output --------------------------------------------------
     ! 2D (x,y) Fields
@@ -49,8 +52,8 @@ MODULE mo_control
     character(len=100) ::  time_names(1)= [character(len=20) :: "time"]
     character(len=100) ::  lon_names(3) = [character(len=20) :: "lon", "longitude", "X"]
     character(len=100) ::  lat_names(3) = [character(len=20) :: "lat", "latitude", "Y"]
-    character(len=100) ::  pop_names(3) = [character(len=20) :: "pop", "population", "population density"]
-    character(len=100) ::  rain_names(5)= [character(len=20) :: "rain", "rainfall", "precipitation", "pt", "precip"]
+    character(len=100) ::  pop_names(4) = [character(len=20) :: "pop", "population", "population density", "Band1"]
+    character(len=100) ::  rain_names(5)= [character(len=20) :: "rain", "rainfall", "precipitation", "tp", "precip"]
 
     ! Attribute names
     character(len=100) ::  att_names(6) = [character(len=20) :: "standard_name", "long_name", "units", "calendar", "axis", "cell_methods"]

@@ -23,15 +23,15 @@ MODULE mo_source
           real, allocatable, intent(in)  :: Q(:,:) ! Probability of visit matrix
           integer, intent(in) :: seed              !
           integer, intent(inout) :: xy_seed
-          logical, intent(in)    :: random, rand_seed         ! Initialization method
-          logical, intent(in)    :: out_rain       ! Rainfall flag
-          real, allocatable, intent(in)    :: pop_dens(:)
+          logical, intent(in)    :: random, rand_seed        ! Initialization method
+          logical, intent(in)    :: out_rain                 ! Rainfall flag
+          real, allocatable, intent(in)    :: pop_dens(:)    ! (nxy)
           logical, allocatable, intent(in) :: mask_pop(:)    ! (nxy)
-          real, allocatable, intent(out) :: exc(:) ! 1D long array for the excretion events
-          real, allocatable, intent(out) :: exc_clim(:)  ! 1D long array for clim-driven excretion events
-          real, allocatable, intent(out) :: B(:)   ! Array of bacterial density (len=nxy)
-          real, allocatable, intent(out) :: B_old(:)   ! Array of bacterial density (len=nxy)
-          real, allocatable, intent(out) :: F(:)   ! Force of infection
+          real, allocatable, intent(out) :: exc(:)       ! 1D long array for the excretion events
+          real, allocatable, intent(out) :: exc_clim(:)  ! 1D long array for climate-driven excretion events
+          real, allocatable, intent(out) :: B(:)         ! Array of bacterial density (len=nxy)
+          real, allocatable, intent(out) :: B_old(:)     ! Array of bacterial density (len=nxy)
+          real, allocatable, intent(out) :: F(:)         ! Force of infection (len=nxy)
           !
           ! Local use only
           integer :: ixy
@@ -39,20 +39,20 @@ MODULE mo_source
           real :: rand_B(nxy)
           !
           if (rand_seed) then
-              if ((.not. radial)) then
-                xy_seed = ceiling(nxy/2.)
-              else
-                call srand(seed)
-                do while (.not. land)
-                  xy_seed = ceiling(rand()*real(nxy))
-                  if (mask_pop(xy_seed)) then
-                    land=.true.
-                    print *, 'Initializing source of infection --> Found land!'
-                    print '("Population at source : ",f8.2," [km^-2]")', pop_dens(xy_seed)
-            
-                  end if
-                end do
+             ! if ((.not. radial)) then         - old code [potential deletion]
+             !   xy_seed = ceiling(nxy/2.)      - 
+             ! else                             - 
+            call srand(seed)
+            do while (.not. land)
+              xy_seed = ceiling(rand()*real(nxy))
+              if (mask_pop(xy_seed)) then
+                land=.true.
+                print *, 'Initializing source of infection --> Found land!'
+                print '("Population at source : ",f8.2," [km^-2]")', pop_dens(xy_seed)
+        
               end if
+            end do
+             ! end if                           - old code [potential deletion]
           end if ! random
           !
           allocate(B(nxy))

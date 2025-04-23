@@ -30,7 +30,7 @@ fi
 #           --------------------------------
             output_name='gravity'
             disID=0          # 0: Cholera
-            nstep=2500       # [day]
+            nstep=1000       # [day]
             seed=12345
 #          |
 #          |

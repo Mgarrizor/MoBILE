@@ -443,9 +443,9 @@ MODULE mo_netcdf
         real, allocatable, intent(out) :: grid(:,:)
         logical, allocatable, intent(out) :: mask_pop(:)
 
-        ! Rainfall --------------------------
+        ! Rainfall definitions --------------------------
         !character(len=100), intent(in) :: rain_file
-        !real, allocatable, intent(out) :: rainfall(:)
+        !real, allocatable, intent(out) :: rainfall(:,:)
 
         ! Local use only 
         integer :: TimeVarID, TimeDimID, RainVarID, indx_rain
@@ -544,11 +544,11 @@ MODULE mo_netcdf
         status = nf90_get_var(ncid=ncid_in, varid=PopVarID, values=grid)
 
         pop_dens = reshape(grid, (/nxy/))
-
+        print *, fill_pop
         where(pop_dens == fill_pop) pop_dens = 0.
         where(pop_dens < eps) pop_dens = 0.
 
-        where(pop_dens < 1.) pop_dens = 0.  ! Yemen 
+        !where(pop_dens < 1.) pop_dens = 0.  ! Yemen 
 
         where(pop_dens < eps) mask_pop = .false.
         where(pop_dens > eps) mask_pop = .true.
@@ -622,12 +622,13 @@ MODULE mo_netcdf
               deallocate(grid_clim)
 
         else  ! If not rainfall input set to zero 
+
           allocate(rainfall(nxy,nsteps))
           rainfall(:,:) = 0
 
 
         end if 
-
+    
         deallocate(grid)
         
 
