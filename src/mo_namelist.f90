@@ -93,17 +93,17 @@ MODULE mo_namelist
 
 
 
-        subroutine namelist_clima(rain_file)
+        subroutine namelist_clima(rain_file,t2m_file)
             implicit none
 
-            character(len=100), intent(out):: rain_file
+            character(len=100), intent(out):: rain_file, t2m_file
             
             ! Local use only
             character(len=1000) :: line
             integer:: file_unit, iostats
             
             ! Define namelist
-            namelist /CLIMA/ rain_file
+            namelist /CLIMA/ rain_file, t2m_file
 
             ! Does the file exist?
             inquire (file='namelist.nml', iostat=iostats)
@@ -131,6 +131,11 @@ MODULE mo_namelist
                 print *, 'No rainfall input'
                 out_rain = .false.
             end if 
+
+            if (len(trim(t2m_file)) == 0) then
+                print *, 'No temperature input'
+                out_t2m = .false.
+            end if
 
             
             close (file_unit)

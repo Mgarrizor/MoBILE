@@ -138,6 +138,15 @@ MODULE mo_netcdf
 
         end if 
 
+        if ((out_t2m)) then
+
+            status = nf90_put_var(ncid = ncid_out, varid = VarId(var_out), & 
+                                  values = reshape((t2m(:,itime)), shape = (/ nlon, nlat /)), &
+                                  start = (/ 1, 1, itime /))
+            var_out = var_out + 1
+
+        end if 
+
       end subroutine netcdf_3D_output
 
 
@@ -183,7 +192,8 @@ MODULE mo_netcdf
                                       +merge(1, 0, out_I)+merge(1, 0, out_R) &
                                       +merge(1, 0, out_B)+merge(1, 0, out_F) &
                                       +merge(1, 0, out_A)+merge(1, 0, out_Q) &
-                                      +merge(1, 0, out_D)+merge(1, 0, out_rain)
+                                      +merge(1, 0, out_D)+merge(1, 0, out_rain) &
+                                      +merge(1, 0, out_t2m)
 
         allocate(VarId(dim))
         ! returns a netCDF ID that can subsequently be used 
@@ -374,6 +384,26 @@ MODULE mo_netcdf
           var_out = var_out + 1
         end if
 
+        if ((out_t2m)) then
+
+
+          VarId(var_out)=var_out
+          status = nf90_def_var(ncid = ncid_out, name = "t2m", xtype = nf90_double, &
+                    dimids = (/ DimId(1), DimId(2) , DimId(3) /), varid = VarId(var_out))
+          
+          
+          ! Write temperature attributes
+          do indx=1,size(att_names)
+              !
+              if (len(trim(temp_att(indx))) /= 0) then 
+                status = nf90_put_att(ncid=ncid_out, varid = VarId(var_out), name=att_names(indx), values=temp_att(indx))
+              end if
+              !
+          end do
+            !
+          var_out = var_out + 1
+        end if
+
 
         ! Leave define mode to write variable values
 
@@ -448,7 +478,7 @@ MODULE mo_netcdf
         !real, allocatable, intent(out) :: rainfall(:,:)
 
         ! Local use only 
-        integer :: TimeVarID, TimeDimID, RainVarID, indx_rain
+        integer :: TimeVarID, TimeDimID, RainVarID, TempVarID, indx_rain
         ! -----------------------------------
 
         ! Local use only
@@ -533,7 +563,7 @@ MODULE mo_netcdf
             status = nf90_get_att(ncid=ncid_in, varid=LatVarID, name=att_names(indx), values=lat_att(indx))
         end do
 
-        status = nf90_get_att(ncid=ncid_in, varid=PopVarID, name="_FillValue", values=fill_pop) 
+        status = nf90_get_att(ncid=ncid_in, varid=PopVarID, name="_FillValue", values=FillValue) 
 
         ! Get variable values
         status = nf90_get_var(ncid=ncid_in, varid=LatVarID, values=lat_coord)
@@ -544,11 +574,10 @@ MODULE mo_netcdf
         status = nf90_get_var(ncid=ncid_in, varid=PopVarID, values=grid)
 
         pop_dens = reshape(grid, (/nxy/))
-        print *, fill_pop
-        where(pop_dens == fill_pop) pop_dens = 0.
-        where(pop_dens < eps) pop_dens = 0.
+        print *, FillValue
 
-        !where(pop_dens < 1.) pop_dens = 0.  ! Yemen 
+        where(pop_dens == FillValue) mask_pop = .false.
+        where(pop_dens < eps) pop_dens = 0.
 
         where(pop_dens < eps) mask_pop = .false.
         where(pop_dens > eps) mask_pop = .true.
@@ -582,7 +611,7 @@ MODULE mo_netcdf
                   allocate(grid_clim(nlon,nlat,ntime))
                   allocate(rainfall(nxy,ntime))
                   exit
-                elseif((indx == size(pop_names)) .and. (status /= nf90_noerr)) then
+                elseif((indx == size(time_names)) .and. (status /= nf90_noerr)) then
                   print *, 'NetCDF Status: time dimension not indentified'
                   STOP
                 end if
@@ -619,6 +648,11 @@ MODULE mo_netcdf
               !
               where(rainfall == FillValue_rain) rainfall = 0.
 
+              !where(pop_dens == fill_pop) pop_dens = 0.
+              !where(pop_dens < eps) pop_dens = 0.
+
+              !where(pop_dens < eps) mask_pop = .false.
+
               deallocate(grid_clim)
 
         else  ! If not rainfall input set to zero 
@@ -628,6 +662,86 @@ MODULE mo_netcdf
 
 
         end if 
+
+
+        if (out_t2m) then
+
+              ! We need to extract the dates of the forcing and its total length, ntime, so that
+              ! nsteps <= ntime.
+
+              ! Open file
+              status = nf90_open(path = t2m_file, mode = nf90_nowrite, ncid = ncid_in)
+
+              ! Inquire about time and get its DimID 
+              !
+              do indx=1,size(time_names)
+                !
+                status = nf90_inq_dimid(ncid=ncid_in, name=time_names(indx), dimid=TimeDimID)
+                !
+                ! If found we get the length and VarID out
+                if (status == nf90_noerr) then
+                  !
+                  status = nf90_inquire_dimension(ncid=ncid_in, dimid=TimeDimID, len=ntime)
+                  status = nf90_inq_varid(ncid=ncid_in, name=time_names(indx), varid=TimeVarID)
+                  !
+                  if (size(time_coord) .ne. ntime) then
+                    print *, 'Rainfall and temperature fields have different lenght --> Stop.' 
+                    STOP
+                  end if
+                  !
+                  status = nf90_get_var(ncid=ncid_in, varid=LonVarID, values=time_coord)
+                  !
+                  print *, 'NetCDF Status: found temperature forcing file of len --> ', ntime
+                  allocate(grid_clim(nlon,nlat,ntime))
+                  allocate(t2m(nxy,ntime))
+                  exit
+                elseif((indx == size(time_names)) .and. (status /= nf90_noerr)) then
+                  print *, 'NetCDF Status: time dimension not indentified'
+                  STOP
+                end if
+              end do
+        
+      
+              ! Inquire about temperature and get its VarID
+              do indx=1,size(temp_names)
+                  status = nf90_inq_varid(ncid=ncid_in, name=temp_names(indx), varid=TempVarID)
+                  
+                  ! If name is found exit do loop
+                  if (status == nf90_noerr) then
+                    print *, 'NetCDF Status: found temperature variable of name --> ', temp_names(indx)
+                    !
+                    exit
+                  else if((indx == size(temp_names)) .and. (status /= nf90_noerr)) then
+                    print *, 'NetCDF Status: temperature variable not indentified'
+                    STOP
+                  end if
+              end do
+              !
+              ! Get temperature values
+              status = nf90_get_var(ncid=ncid_in, varid=TempVarID, values=grid_clim)
+              !
+              t2m = reshape(grid_clim, (/nxy,ntime/))
+              !
+              ! Inquire attributes from "t2m" variable (time attributes are taken from rainfall file)
+              do indx=1,size(att_names)
+                  status = nf90_get_att(ncid=ncid_in, varid=TempVarID, name=att_names(indx), values=temp_att(indx))
+              end do
+              !
+              status = nf90_get_att(ncid=ncid_in, varid=TempVarID, name="_FillValue", values=FillValue_temp) 
+              !
+              where(t2m == FillValue_temp) t2m = 0.  ! Do not simulate over missing temperature points
+
+              
+
+              deallocate(grid_clim)
+
+        else  ! If not temperature input set to zero --> Needs to be changed
+
+          allocate(t2m(nxy,nsteps))
+          t2m(:,:) = 0
+
+
+        end if
     
         deallocate(grid)
         

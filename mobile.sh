@@ -20,6 +20,7 @@ usage() { echo "Usage:              \n
                 -o: Output filename [String]  \n
                 -p: Path to population file [String] (Optional) \n
                 -r: Path to rainfall file [String] (Optional) \n
+                -t: Path to temperature file [String] (Optional) \n
                 -d: Disease ID (0: Cholera) [Integer] \n
                 -n: Number of integration steps (days) [Integer <= length of forcing files] \n
                 -s: Seed [Integer]
@@ -30,7 +31,7 @@ usage() { echo "Usage:              \n
 # Resources
 # https://stackoverflow.com/questions/16483119/an-example-of-how-to-use-getopts-in-bash
 # https://serverfault.com/questions/266867/bash-getops-allow-but-not-require-arg
-while getopts ":ho:p:r:d:n:s:a:c:u:" flag; do
+while getopts ":ho:p:r:t:d:n:s:a:c:u:" flag; do
  case $flag in
    h) # Handle the -h flag
    # Display script help information
@@ -45,6 +46,9 @@ while getopts ":ho:p:r:d:n:s:a:c:u:" flag; do
    ;;
    r) # Handle the -r flag
    rain_file=$OPTARG
+   ;;
+   t) # Handle the -r flag
+   temp_file=$OPTARG
    ;;
    d) # Handle the -d flag
    disID=$OPTARG
@@ -134,6 +138,7 @@ spin_up=${spin_up}
 /
 &CLIMA
 rain_file='${rain_file}'
+t2m_file='${temp_file}'
 /
 &HUMAN
 pop_file='${pop_file}',

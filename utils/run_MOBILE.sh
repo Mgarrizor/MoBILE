@@ -78,7 +78,7 @@ var_7="-u ${spin_up}"
 
 # CLIMA
 var_8="-r ${rain_file}"
-#var_9="-t ${temp_file}"
+var_9="-t ${temp_file}"
 
 # HUMAN
 var_10="-p ${pop_file}"

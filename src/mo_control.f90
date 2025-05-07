@@ -43,13 +43,15 @@ MODULE mo_control
     logical :: out_L    =.false. ! Larval density
 
     ! Clima
-    logical :: out_rain =.true. ! Rainfall
+    logical :: out_rain =.true.  ! Rainfall
+    logical :: out_t2m  =.true. ! Air temperature
 
     !----------------------------------------------------------
     integer :: disID                 ! Disease ID (0: Cholera, 1: Malaria)
     character(len=100) :: run_name   ! Name of output files
     character(len=100) :: pop_file   ! Name of population file
     character(len=100) :: rain_file  ! Name of rain/precipitation file
+    character(len=100) :: t2m_file   ! Name of temperature file
     !----------------------------------------------------------
 
     ! https://fortran-lang.org/en/learn/quickstart/arrays_strings/#array-of-strings
@@ -58,14 +60,16 @@ MODULE mo_control
     character(len=100) ::  lat_names(3) = [character(len=20) :: "lat", "latitude", "Y"]
     character(len=100) ::  pop_names(4) = [character(len=20) :: "pop", "population", "population density", "Band1"]
     character(len=100) ::  rain_names(5)= [character(len=20) :: "rain", "rainfall", "precipitation", "tp", "precip"]
+    character(len=100) ::  temp_names(1)= [character(len=20) :: "temperature"]
 
     ! Attribute names
-    character(len=100) ::  att_names(6) = [character(len=20) :: "standard_name", "long_name", "units", "calendar", "axis", "cell_methods"]
+    character(len=100) ::  att_names(7) = [character(len=20) :: "standard_name", "long_name", "units", "calendar", "axis", "cell_methods", "_FillValue"]
     
-    character(len=100) :: lon_att(6)
-    character(len=100) :: lat_att(6)
-    character(len=100) :: time_att(6)
-    character(len=100) :: rain_att(6)
+    character(len=100) :: lon_att(7)
+    character(len=100) :: lat_att(7)
+    character(len=100) :: time_att(7)
+    character(len=100) :: rain_att(7)
+    character(len=100) :: temp_att(7)
     !----------------------------------------------------------
 
 

@@ -122,7 +122,7 @@ PROGRAM MOBILE
             call namelist_human(pop_file,nagent)
             !
             !--Climate input
-            call namelist_clima(rain_file)
+            call namelist_clima(rain_file,t2m_file)
             !
             !--Init namelist constants, overriding default --> New parameter values from input
             call namelist_const()
@@ -163,8 +163,8 @@ PROGRAM MOBILE
           !=
           !
         else
-          print *, 'Check point: Input --> Exit'
-          exit 
+          print *, 'Check point: Input --> STOP'
+          STOP 
         end if !----------------------------------------
         ! By now the following should be defined:
         ! - Disease parameters
