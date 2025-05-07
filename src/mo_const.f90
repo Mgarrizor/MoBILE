@@ -11,6 +11,8 @@ MODULE mo_const
 ! 1) Parameters
 ! 2) Cases
 !    0 - Cholera
+!    1 - Malaria (VECTRI) [non-functional]
+!    2 - ??
 
 
 ! 1) Parameters ----------------------------------
@@ -60,7 +62,7 @@ MODULE mo_const
 
     ! Conceptual case
     integer, parameter :: ncity=1  ! Number of radial cities in the grid
-    real, parameter :: L    =100.  ! Latice side length (km)
+    real, parameter ::      L=100. ! Latice side length (km)
     !--
 
     real, allocatable :: lon_coord(:)  !
@@ -82,6 +84,8 @@ MODULE mo_const
     real, allocatable :: I(:) ! 1D long array for Infected density
     real, allocatable :: A(:) ! 1D long array for Asymptomatic density
     real, allocatable :: R(:) ! 1D long array for Recovered density
+
+    !--- Cholera ---
     real, allocatable :: B(:) ! 1D long array for Bacterial density
     real, allocatable :: F(:) ! 1D long array for Force of infection
 
@@ -96,6 +100,14 @@ MODULE mo_const
     real :: mu_B, theta_e, theta_p, mu, rho, sigma, gamma, alpha, beta ! Disease
     real :: D_pop, H_0, D_grav, m       ! Pop. density and mobility
     real :: B_0, fS_0, fI_0, fA_0, fR_0 ! Initial conditions
+
+    !--- Malaria ---
+
+    ! mo_vectri.f90
+    real, allocatable    :: V(:)      ! 1D long array for Vector density
+    integer, allocatable :: nbites(:) ! 1D long array for number of infective bites
+                                      ! (number of vectors that were infected upon
+                                      ! bitting a human)
 
     !********** Clima **************************
     real, allocatable :: rainfall(:,:)    ! 2D long array for rainfall (nxy,t)
@@ -116,46 +128,62 @@ MODULE mo_const
     subroutine const_disease(idis)
       implicit none
 
+      !==================================
+      !
       ! Case 0: Cholera
       ! Case 1: Malaria [Non-functional]
+      ! Case 2: Dengue  [Non-functional] 
+      !
+      !==================================
+
       integer, intent(in) :: idis
       character(len=100) :: disease_name
       ! Disease-specific values 
       SELECT case(idis)
       case (0)
         disease_name="Cholera"
-        ! Default disease values ---------------------------------------------
-        ! from Lorenzo et al. (2014), Rinaldo et al. (2012)
-        ! and references therein (see Supp. Information in Rinaldo, table S2)
-        mu_B =0.2         ! Bacterial decay rate [day^-1]
+        !
+        ! Disease ---------------------------------------------------------------------
+        ! - Default disease values from Lorenzo et al. (2014), Rinaldo et al. (2012)
+        !   and references therein (see Supp. Information in Rinaldo, table S2)
+        !
+        mu_B =0.2         ! Bacterial decay rate                   [day^-1]
         theta_e=0.141     ! (normalized) Baseline excretion/contamination rate from infected population [day^-1]
-        theta_p=0.141     ! Effect of precipitation in the climate-driven excretion rate [mm^-1]
-        mu   =1./(61.*365)! Background human mortality rate [day^-1]
-        rho  =1./(3.*365) ! Lost of immunity rate [day^-1]
-        sigma=0.2         ! Symptomatic fraction
-        gamma=0.2         ! Recovery rate [day^-1]
+        theta_p=0.141     ! Effect of precipitation in the climate-driven excretion rate                [mm^-1]
+        mu   =1./(61.*365)! Background human mortality rate        [day^-1]
+        rho  =1./(3.*365) ! Lost of immunity rate                  [day^-1]
+        sigma=0.2         ! Proportion of symptomatics             [fraction]
+        gamma=0.2         ! Recovery rate                          [day^-1]
         alpha=0.004       ! Death rate (infection or other causes) [day^-1]
-        
-    
+        !    
         ! Mobility ---------------------------------------------------
-        m=0.6      ! Fraction of mobile population (could be an array to account for age, ... but is set to constant for now)
-        D_grav=100 ! e-folding decay in distance factor for gravity model [km] ; Rinaldo et al. (2012) gives 100km for Haiti's epidemic
+        m=0.6      ! Fraction of mobile population (could be an array to account for age, ... but is set to one constant for now)
+        D_grav=2   ! e-folding distance for gravity model [km] ; Rinaldo et al. (2012) gives 100km for Haiti's epidemic
         beta=1.    ! Contact rate [day^-1]
         
-        D_pop=10   ! e-folding decay for radial city
-        H_0=2000   ! Human population density at city centre
+        ! Idealized world parameters
+        D_pop=10   ! e-folding decay for radial city         [km]
+        H_0=2000   ! Human population density at city centre [km^2]
         
         ! Default initial conditions ---------------------------------
         B_0 =0.1  ! Initial bacterial concentration [dimensionless] (has been normalized by K --> See referenced model)
-        fS_0=1.   ! Susceptible [fraction]
-        fI_0=0.   ! Infected [fraction]
+        fS_0=1.   ! Susceptible  [fraction]
+        fI_0=0.   ! Infected     [fraction]
         fA_0=0.   ! Asymptomatic [fraction]
-        fR_0=0.   ! Recovered [fraction]
+        fR_0=0.   ! Recovered    [fraction]
 
-        !att_list = ['mu_B','theta_e', ]
+        ! Attribute list 
+        !att_list = ['mu_B','theta_e', 'theta_p', 'mu', 'rho', 'sigma', 'gamma', 'alpha', 'm', 'D_grav', 'beta']
+
+      case(1)
+        disease_name="Malaria"
+        !
+        ! Default disease values
+
+
 
       case default
-        print *, "Incorrect case, choose disID between: 0 (cholera)"
+        print *, "Incorrect case, choose disID between: 0 (cholera) and 1 (malaria)"
         STOP
       end SELECT
 

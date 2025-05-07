@@ -34,7 +34,7 @@ MODULE mo_grid
         allocate(R(nxy))
 
       case default
-        print *, "Incorrect case, choose disID between: 0 (cholera)"
+        print *, "Incorrect case, choose disID between: 0 (cholera) and 1 (malaria)"
         STOP
       end SELECT
       

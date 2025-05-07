@@ -1,14 +1,20 @@
 PROGRAM MOBILE
 !
 !
+! --------- ICTP's agent-based (AB) model --------
+!
 ! Mobility-Based Integrated Landscape Epidemiology
+!
 !                       MoBILE
+!
 !                      (model) by
 !
 !          Adrian M. Tompkins (tompkins@ictp.it) 
 !          Miguel G. Zornoza  (mgarrizoraca@gmail.com)
 !          
 !                      (2024)
+!
+! License: GNU General Public License v3.0
 !
 !
 ! Referenced sources in MoBILE
@@ -43,7 +49,7 @@ PROGRAM MOBILE
 !                                 |   /subroutines                   #        
 !                                 |                                  #
 ! 0) Initialization --------------|                                  #
-!     0.1 Grid                    |
+!     0.1 Grid & params           |
 !     0.1.1 Input                 |
 !     0.1.2 No input              |
 !                                 |
@@ -78,7 +84,7 @@ PROGRAM MOBILE
   ! Loop counters
   integer :: itime     ! Time    (nsteps)
   integer :: iagent    ! Agents  (nagents)
-  integer :: ixy       ! Spatial (nxy = nx*ny = nlon*nlat)
+  integer :: ixy       ! Space   (nxy = nx*ny = nlon*nlat)
   real :: conv1, conv2
   ! Get time 
   real :: t_start
@@ -100,52 +106,64 @@ PROGRAM MOBILE
       if((itime==1)) then
         print '("Pi = ",f6.4)', pi
       !=
-        ! 0.1 Grid -----------------------------------------
-        ! Get population density and grid characteristics
-        !
+        ! ************** 0.1 Grid & params **************
+        ! If .input.=true then read gridded fields (population density and forcings - rainfall, air temperature)
+        ! and new disease parameters from namelist. Otherwise fall back to idealized world 
         !
         ! init default constants for disease "disID"
         call const_disease(disID)
         !
-        ! init namelist constants, overriding default
-        !call namelist_const [Non-functional]
         !
         ! 0.1.1 Input
         if ((input)) then
-          !
-          ! Human input
-          call namelist_human(pop_file,nagent)
-          ! Climate input
-          call namelist_clima(rain_file)
-          !
-          ! New parameter values from input
-          !
-          call namelist_const()
-          !
-          ! Init grid, pop and forcing fields
-          call netcdf_read_grid(pop_file,grid,nlon,nlat,nxy,pop_dens,lon_coord,lat_coord,mask_pop)
+          ! Namelists
+          !=
+            !--Human input
+            call namelist_human(pop_file,nagent)
+            !
+            !--Climate input
+            call namelist_clima(rain_file)
+            !
+            !--Init namelist constants, overriding default --> New parameter values from input
+            call namelist_const()
+            !
+            !--Init grid, pop and forcing fields
+            call netcdf_read_grid(pop_file,grid,nlon,nlat,nxy,pop_dens,lon_coord,lat_coord,mask_pop)
+          !=
+          ! Safety check
           !=
             if ((nsteps >= ntime) .and. out_rain) then
               print *, 'Number of simulation steps exceeds length of forcing --> STOP'
               STOP
             end if
           !=
-          call grid_allocate(nxy,nlon,nlat,y_coord_1d,x_coord_1d)
+          ! 
+          !=
+            call grid_allocate(nxy,nlon,nlat,y_coord_1d,x_coord_1d)
+          !=
           !
         ! 0.1.2 No input
-        elseif ((.not. input)) then
-          !
+        elseif ((.not. input)) then !--> Idealized world
+          ! Namelists
+          !=
+            !--Init namelist constants, overriding default --> New parameter values from input
+            call namelist_const()
+            !
+          !=
           ! init grid and pop
-          nlon =51       ! Number of longitude points
-          nlat =51       ! Number of latitude points
-          nxy  =nlon*nlat
-          call grid_allocate(nxy,nlon,nlat,y_coord_1d,x_coord_1d)
-          call grid_no_input(nxy,dx,dy,ncity,seed,H_0,D_pop,pop_dens,D,x_coord_1d,y_coord_1d,radial &
-                              ,nlon,nlat,lat_coord,lon_coord,L)
-          allocate(mask_pop(nxy))
-          mask_pop(:)=.true.
+          !=
+            nlon =51       ! Number of longitude points
+            nlat =51       ! Number of latitude points
+            nxy  =nlon*nlat
+            call grid_allocate(nxy,nlon,nlat,y_coord_1d,x_coord_1d)
+            call grid_no_input(nxy,dx,dy,ncity,seed,H_0,D_pop,pop_dens,D,x_coord_1d,y_coord_1d,radial &
+                                ,nlon,nlat,lat_coord,lon_coord,L)
+            allocate(mask_pop(nxy))
+            mask_pop(:)=.true.
+          !=
+          !
         else
-          print *, 'Check point Input --> Exit'
+          print *, 'Check point: Input --> Exit'
           exit 
         end if !----------------------------------------
         ! By now the following should be defined:
@@ -153,7 +171,7 @@ PROGRAM MOBILE
         ! - Grid parameters : nxy,x_coord_1,y_coord_1d,dx,dy,pop_dens
         ! - Population density and forcing fields
         !
-        ! 0.2 Common information **************
+        ! ************** 0.2 Common information **************
         !
         ! Initialize distance matrix
         call mob_dist_init(nxy,x_coord_1d,y_coord_1d,lon_coord,lat_coord,dx,dy,input,Re,Pi,mask_pop,dist)
@@ -227,7 +245,7 @@ PROGRAM MOBILE
         ! 0.5 Disease source 
         !
         ! 0.5.1 Cholera
-        if ((.not. vectri)) then
+        if ((.not. coupling)) then
           !
           A_old = A
           call source_init(Q,B_0,beta,m,nxy,agents,seed,random,rand_seed,exc,out_rain,exc_clim,B,B_old,F,radial,pop_dens,mask_pop,xy_seed)
@@ -264,7 +282,7 @@ PROGRAM MOBILE
       end if  
       !
       ! 4) Integrate source of disease --> dt_B/dt, dt_V/dt, ...
-      ! 5) Update health status --> No agents
+      ! 5) Update health status --> .agents.=false
       spatial_loop: do ixy=1,nxy 
         if (mask_pop(ixy)) then
           ! 
@@ -291,21 +309,21 @@ PROGRAM MOBILE
             ! 
             ! 4.2) Source
             !
-            ! V(t) --> V(t +dt)
-            ! call source_integrate_VECTRI(ixy,nbites,V,S,E,I,R)
+            ! V(t, ixy, sporo_old) --> V(t + dt, ixy, sporo_new)
+            ! call source_integrate_VECTRI(x_coord_1d(ixy), y_coord_1d(ixy), nbites, V) --> Do we need the S,E,I,R bulk stats?
             ! **Input**
             !   - ixy       - grid point
-            !   - SEIR(:)   - bulk stats
+            !   - SEIR(:)   - bulk stats?
             !   - nbites(:) - number/density of infective bites (human to vector). 
-            !                 This is handled in the agent methods and thus benefits from agent attributes.
-            !                 We then feed it to VECTRI to inform sporogonic cycle information.
+            !                 This (nbites calculation) is handled in the agent methods and thus benefits from agent attributes.
+            !                 We then feed it to VECTRI to inform the sporogonic cycle routine.
             ! **Output**
-            !   - Updated vector density, V(t + dt)
+            !   - Updated vector density and sporogony state, V(t + dt, ixy, sporo)
             !
             ! 5.2) Health 
               if (.not. agents) then 
                 ! Densities S(t) --> S(t + dt), ...
-                !call bulk_integrate_SEIR_Malaria(ixy,V,...)
+                !call bulk_integrate_SEIR_Malaria(ixy,V,...) --> this is the way malaria is currently treated in VECTRI
               end if
               !
             case default

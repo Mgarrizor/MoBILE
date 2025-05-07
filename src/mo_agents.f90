@@ -609,7 +609,7 @@ USE mo_control
 
         function find_masked_face(i,r,cum_distr,sides,mask_grav,mask_pop) result(roll)
             ! r: uniformly distributed random number, [0,1)
-            ! cum_distr: cumulative distribution (not normalized) of probablities (the weights of each face of the dice)
+            ! cum_distr: cumulative distribution (not normalized) of probabilities (the weights of each face of the dice)
             ! sides: number of dice sides
             implicit none
             !

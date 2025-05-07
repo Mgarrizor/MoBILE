@@ -10,7 +10,7 @@ MODULE mo_control
     ! These are overwritten by the input command when running MOBILE (when namelist_inout is called)
     logical :: input    =.true.  ! (from flag) [Non-functional]
     logical :: agents   =.true.  ! Use agents, if false the program falls back to density
-    logical :: vectri   =.false. ! Use VECTRI [Non-functional]
+    logical :: coupling =.false. ! Use VECTRI [Non-functional]
     logical :: radial   =.false. ! If .true. build radial city, otherwise uniform 
     logical :: network  =.false. ! Empirical network flag [Non-functional]
     logical :: gravity  =.true.  ! Use gravity model
@@ -35,8 +35,12 @@ MODULE mo_control
     logical :: out_I    =.true.  ! Infected
     logical :: out_A    =.true.  ! Asymptomatic
     logical :: out_R    =.true.  ! Recovered
+    !--- Cholera ----
     logical :: out_B    =.true.  ! Bacterial density (could be changed to generic source of disease, e.g., B, V,...)
     logical :: out_F    =.true.  ! Force of infection
+    !--- Malaria ----
+    logical :: out_V    =.false. ! Vector density
+    logical :: out_L    =.false. ! Larval density
 
     ! Clima
     logical :: out_rain =.true. ! Rainfall

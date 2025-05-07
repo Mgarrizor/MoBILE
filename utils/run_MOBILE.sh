@@ -21,40 +21,43 @@ fi
 #--------------------------------
 # -h Help! [Non-functional]
 #          | 
-#          |
+#          |===============
 #          |Mandatory flags:
 #           -o Output file name
 #           -d Disease ID (Cholera: 0)
 #           -n Number of integrated days
 #           -s Seed for random number generator (reproducibility)
 #           --------------------------------
-            output_name='gravity'
-            disID=0          # 0: Cholera
-            nstep=1000       # [day]
-            seed=12345
+            output_name='gravity'           #  -o
+            disID=0          # 0: Cholera      -d
+                             # 1: Malaria [non-functional]
+                             # 2: Dengue  [non-functional]
+            nstep=500        # [days]       #  -n
+            seed=12345                      #  -s
 #          |
 #          |
-#          |
+#          |==============
 #          |Optional flags:
 #           -a Number of agents 
 #           -u Spin Up 
 #           -p Population file 
 #           -r Rainfall file 
-#           -c Constants/parameters file 
+#           -t Temperature file
+#           -c Constants/parameters file (example in params.txt)
 #           -m Mobility file   [Non-functional]
 #           -w Hydrology file  [Non-functional]
 
 #           --------------------------------
-            spin_up=0
-            nagent=1500000
-     #       pop_file='data/Italy/pop.nc'   # Italy
-            rain_file='data/Italy/rain.nc'
+            
+            nagent=500000                 #  -a
+            spin_up=0                     #  -u
 
-            pop_file='../Yemen_exp/pop.nc'    # Yemen
+            # Example path for test run (Senegal CHIRXS processed riving files 2012-2014)
+            rain_file=$MOBILE'/utils/test_run/rain.nc'  #  -p
+            pop_file=$MOBILE'/utils/test_run/pop.nc'    #  -r
+            temp_file=$MOBILE'/utils/test_run/t2m.nc'   #  -t
 
-     #       pop_file='data/Haiti/pop.nc'    # Haiti
-
-            const='params.txt'
+            const='params.txt'            #  -c
 
 # Environmental variables
 #--------------------------------
@@ -71,18 +74,18 @@ var_3="-o ${output_name}"
 var_4="-d ${disID}"
 var_5="-n ${nstep}"
 var_6="-s ${seed}"
-
-var_11="-u ${spin_up}"
+var_7="-u ${spin_up}"
 
 # CLIMA
-#var_7="-r ${rain_file}"
+var_8="-r ${rain_file}"
+#var_9="-t ${temp_file}"
 
 # HUMAN
-var_8="-p ${pop_file}"
-var_9="-a ${nagent}"
+var_10="-p ${pop_file}"
+var_11="-a ${nagent}"
 
 # CONST
-var_10="-c ${const}"
+var_12="-c ${const}"
 
 read -r -d '' command << EOM
 $var_1
@@ -96,6 +99,7 @@ $var_8
 $var_9
 $var_10
 $var_11
+$var_12
 EOM
 
 echo 'Command:' ${command} > ${output_name}.info

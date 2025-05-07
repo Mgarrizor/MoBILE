@@ -134,7 +134,7 @@ MODULE mo_bulk
                 R(ixy)=0.
             end if
                 
-        end subroutine bulk_integrate_SIAR
+        end subroutine bulk_integrate_SIAR_cholera
         !--------------------------------------------------------------------------------------
         !
 
