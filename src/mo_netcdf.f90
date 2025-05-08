@@ -28,19 +28,16 @@ MODULE mo_netcdf
         var_out = 4
         ! 2D Fields
         if ((out_pop)) then
-
-            status = nf90_put_var(ncid = ncid_out, varid = VarId(var_out), & 
-                                  values = reshape((pop_dens), shape = (/ nlon, nlat /)))
-            var_out = var_out + 1
-            if(status /= nf90_noerr) then
-              print *, 'NetCDF Status Pop'
-              STOP
-            end if
-
+            !
+            call write_check_2D(pop_dens,var_out,'NetCDF Status Population')
+            !
         end if 
 
         if ((out_Q)) then            
-            
+            !
+            !call write_check_2D(Q(xy_seed,:),var_out,'NetCDF Status Q')
+            !
+
             status = nf90_put_var(ncid = ncid_out, varid = VarId(var_out), & 
                                   values = reshape((Q(xy_seed,:)), shape = (/ nlon, nlat /)))
             var_out = var_out + 1
@@ -58,96 +55,117 @@ MODULE mo_netcdf
 
       end subroutine netcdf_2D_output
 
+      subroutine write_check_2D(var,var_out,err_mes)
+      ! Put variable into NetCDf file and check for the status
+      ! If error then stop simulation.
+      !
+      implicit none 
+      !
+      real, intent(in) :: var(nlon,nlat)
+      integer, intent(inout):: var_out
+      character(len=*) :: err_mes
+
+      ! Local use only
+      integer :: status
+
+      status = nf90_put_var(ncid = ncid_out, varid = VarId(var_out), & 
+                            values = reshape((var), shape = (/ nlon, nlat /)))
+      var_out = var_out + 1
+      if(status /= nf90_noerr) then
+        print *, err_mes
+        STOP
+      end if
+
+      end subroutine
+
       subroutine netcdf_3D_output(itime,Var3D)
         implicit none
         integer, intent(in) :: itime, Var3D
 
         ! Local use
-        integer :: var_out,status
+        integer :: var_out  !,status
 
         ! 3D Fields
         var_out = Var3D
-        if ((out_S)) then
-            
-            status = nf90_put_var(ncid = ncid_out, varid = VarId(var_out), & 
-                                  values = reshape((S), shape = (/ nlon, nlat /)), &
-                                  start = (/ 1, 1, itime /))
-            var_out = var_out + 1
-
-           if(status /= nf90_noerr) then
-            print *, 'NetCDF Status S'
-            print *, itime
-            STOP
-           end if
-
+      
+        if ((out_S)) then 
+          !
+          call write_check_3D(itime,S,var_out,'NetCDF Status S')
+          !
         end if 
+
         if ((out_I)) then
-            
-            status = nf90_put_var(ncid = ncid_out, varid = VarId(var_out), & 
-                                  values = reshape((I), shape = (/ nlon, nlat /)), &
-                                  start = (/ 1, 1, itime /))
-            var_out = var_out + 1
-
+            !
+            call write_check_3D(itime,I,var_out,'NetCDF Status I')
+            !
         end if
+
         if ((out_A)) then
-            
-            status = nf90_put_var(ncid = ncid_out, varid = VarId(var_out), & 
-                                  values = reshape((A), shape = (/ nlon, nlat /)), &
-                                  start = (/ 1, 1, itime /))
-            var_out = var_out + 1
-
+            !
+            call write_check_3D(itime,A,var_out,'NetCDF Status A')
+            !
         end if
+
         if ((out_R)) then
-            
-            status = nf90_put_var(ncid = ncid_out, varid = VarId(var_out), & 
-                                  values = reshape((R), shape = (/ nlon, nlat /)), &
-                                  start = (/ 1, 1, itime /))
-            var_out = var_out + 1
-
+            !
+            call write_check_3D(itime,R,var_out,'NetCDF Status R')
+            !
         end if
+
         if ((out_B)) then
-            
-            status = nf90_put_var(ncid = ncid_out, varid = VarId(var_out), & 
-                                  values = reshape((B), shape = (/ nlon, nlat /)), &
-                                  start = (/ 1, 1, itime /))
-            var_out = var_out + 1
-            if(status /= nf90_noerr) then
-              print *, 'NetCDF Status B'
-              STOP
-            end if
-
+            !
+            call write_check_3D(itime,B,var_out,'NetCDF Status B')
+            !
         end if
-        if ((out_F)) then
-            
-            status = nf90_put_var(ncid = ncid_out, varid = VarId(var_out), & 
-                                  values = reshape((F), shape = (/ nlon, nlat /)), &
-                                  start = (/ 1, 1, itime /))
-            var_out = var_out + 1
-            
 
+        if ((out_F)) then
+            !
+            call write_check_3D(itime,F,var_out,'NetCDF Status F')
+            !
         end if
 
         ! ============================== Climate ======================================
 
         if ((out_rain)) then
-
-            status = nf90_put_var(ncid = ncid_out, varid = VarId(var_out), & 
-                                  values = reshape((rainfall(:,itime)), shape = (/ nlon, nlat /)), &
-                                  start = (/ 1, 1, itime /))
-            var_out = var_out + 1
-
+            !
+            call write_check_3D(itime,rainfall(:,itime),var_out,'NetCDF Status Rainfall')
+            !
         end if 
 
         if ((out_t2m)) then
-
-            status = nf90_put_var(ncid = ncid_out, varid = VarId(var_out), & 
-                                  values = reshape((t2m(:,itime)), shape = (/ nlon, nlat /)), &
-                                  start = (/ 1, 1, itime /))
-            var_out = var_out + 1
-
+            !
+            call write_check_3D(itime,t2m(:,itime),var_out,'NetCDF Status Temperature')
+            !
         end if 
 
       end subroutine netcdf_3D_output
+
+      subroutine write_check_3D(itime,var,var_out,err_mes)
+      ! Put variable into NetCDf file and check for the status
+      ! If error then stop simulation.
+      !
+      implicit none 
+      !
+      real, intent(in) :: var(nlon,nlat)
+      integer, intent(in) :: itime
+      integer, intent(inout):: var_out
+      character(len=*) :: err_mes
+
+      ! Local use only
+      integer :: status
+
+      status = nf90_put_var(ncid = ncid_out, varid = VarId(var_out), & 
+                            values = reshape((var), shape = (/ nlon, nlat /)), &
+                            start = (/ 1, 1, itime /))
+      var_out = var_out + 1
+
+      if(status /= nf90_noerr) then
+       print *, err_mes
+       print *, itime
+       STOP
+      end if
+
+      end subroutine
 
 
       subroutine netcdf_init(nlon,nlat,nsteps,lon_coord,lat_coord,Var3D)
@@ -366,10 +384,6 @@ MODULE mo_netcdf
           VarId(var_out)=var_out
           status = nf90_def_var(ncid = ncid_out, name = "rain", xtype = nf90_double, &
                     dimids = (/ DimId(1), DimId(2) , DimId(3) /), varid = VarId(var_out))
-          !status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "_FillValue", values = FillValue_rain)
-          !status = nf90_def_var_fill(ncid_out, VarId(var_out), 0, FillValue_rain)
-
-          !print *, FillValue_rain
           
           
           ! Write rainfall attributes
@@ -395,9 +409,23 @@ MODULE mo_netcdf
           ! Write temperature attributes
           do indx=1,size(att_names)
               !
-              if (len(trim(temp_att(indx))) /= 0) then 
-                status = nf90_put_att(ncid=ncid_out, varid = VarId(var_out), name=att_names(indx), values=temp_att(indx))
+              if (len(trim(temp_att(indx)%str_value)) /= 0) then 
+
+                if (temp_att(indx)%is_numeric) then
+                  print*, att_names(indx)
+                  print*, temp_att(indx)%num_value
+                  status = nf90_put_att(ncid=ncid_out, varid = VarId(var_out), name=att_names(indx), values=temp_att(indx)%num_value)
+                else 
+                  print*, att_names(indx)
+                  print*, temp_att(indx)%str_value
+                  status = nf90_put_att(ncid=ncid_out, varid = VarId(var_out), name=att_names(indx), values=temp_att(indx)%str_value)
+                end if 
               end if
+              !
+              !
+              !if (len(trim(temp_att(indx))) /= 0) then 
+              !  status = nf90_put_att(ncid=ncid_out, varid = VarId(var_out), name=att_names(indx), values=temp_att(indx))
+              !end if
               !
           end do
             !
@@ -465,7 +493,7 @@ MODULE mo_netcdf
       !----------------------------------------------------------------
         implicit none
         character(len=100), intent(in):: pop_file
-        character(len=100) :: long_lat
+       ! character(len=100) :: long_lat
         integer, intent(out) :: nlon, nlat, nxy
         real, allocatable, intent(out) :: pop_dens(:)
         real, allocatable, intent(out) :: lon_coord(:)
@@ -478,12 +506,14 @@ MODULE mo_netcdf
         !real, allocatable, intent(out) :: rainfall(:,:)
 
         ! Local use only 
-        integer :: TimeVarID, TimeDimID, RainVarID, TempVarID, indx_rain
+        integer :: TimeVarID, TimeDimID, RainVarID, TempVarID
         ! -----------------------------------
 
         ! Local use only
         integer :: status, LatDimID, LonDimID, LatVarID, LonVarID, PopVarID
-        integer :: numdims, indx_lat, indx_lon, indx_pop, indx
+        integer :: numdims, indx_lat=1, indx_lon=1, indx    !indx_pop, indx_rain
+
+
 
         FillValue = nf90_fill_double
 
@@ -574,7 +604,6 @@ MODULE mo_netcdf
         status = nf90_get_var(ncid=ncid_in, varid=PopVarID, values=grid)
 
         pop_dens = reshape(grid, (/nxy/))
-        print *, FillValue
 
         where(pop_dens == FillValue) mask_pop = .false.
         where(pop_dens < eps) pop_dens = 0.
@@ -646,21 +675,16 @@ MODULE mo_netcdf
               !
               status = nf90_get_att(ncid=ncid_in, varid=RainVarID, name="_FillValue", values=FillValue_rain) 
               !
-              where(rainfall == FillValue_rain) rainfall = 0.
-
-              !where(pop_dens == fill_pop) pop_dens = 0.
-              !where(pop_dens < eps) pop_dens = 0.
-
-              !where(pop_dens < eps) mask_pop = .false.
-
+              !
+              where(rainfall(:,1) == FillValue_rain) mask_pop = .false.  ! Do not simulate over missing rainfall points
+              !
               deallocate(grid_clim)
 
         else  ! If not rainfall input set to zero 
-
+          !
           allocate(rainfall(nxy,nsteps))
           rainfall(:,:) = 0
-
-
+          !
         end if 
 
 
@@ -724,15 +748,32 @@ MODULE mo_netcdf
               !
               ! Inquire attributes from "t2m" variable (time attributes are taken from rainfall file)
               do indx=1,size(att_names)
-                  status = nf90_get_att(ncid=ncid_in, varid=TempVarID, name=att_names(indx), values=temp_att(indx))
+
+                  if (temp_att(indx)%is_numeric) then
+                   !
+                    status = nf90_get_att(ncid=ncid_in, varid=TempVarID, name=att_names(indx), values=temp_att(indx)%num_value)
+                   !
+                    if (status == nf90_noerr) then    ! If there is a numerical value extend the string so that it is latter saved in the NetCDF file
+                      temp_att(indx)%str_value = ""
+                    end if
+                   !
+                  else
+                   !
+                    status = nf90_get_att(ncid=ncid_in, varid=TempVarID, name=att_names(indx), values=temp_att(indx)%str_value)
+                   !
+                  end if 
+                 !
+                 ! Option to print if attribute not found
+                 ! if (status /= nf90_noerr) then
+                 !   print *, att_names(indx)
+                 ! end if
+
               end do
               !
               status = nf90_get_att(ncid=ncid_in, varid=TempVarID, name="_FillValue", values=FillValue_temp) 
               !
-              where(t2m == FillValue_temp) t2m = 0.  ! Do not simulate over missing temperature points
-
-              
-
+              where(t2m(:,1) == FillValue_temp) mask_pop = .false.  ! Do not simulate over missing temperature points
+              !
               deallocate(grid_clim)
 
         else  ! If not temperature input set to zero --> Needs to be changed

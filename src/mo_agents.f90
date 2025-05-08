@@ -332,7 +332,7 @@ USE mo_control
             i      =  people(iagent)%location_status%currloc
 
 
-            if (mask_pop(i)) then ! Check if location is populated
+            if (mask_pop(i)) then ! Check if location is populated and driving fields are not missing
                 if (active) then  ! If agent is alive
                     !
                     if (stat == 1) then ! If susceptible (S) *****************************

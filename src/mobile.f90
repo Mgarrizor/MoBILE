@@ -337,14 +337,18 @@ PROGRAM MOBILE
       !
       ! 6) Update health status --> Agents
       if ((agents)) then
-        ! Reset base excretion array
-        exc(:) = 0.
-        !
-        ! Reset rainfall-driven excretion array
-        if (out_rain) then
-          exc_clim(:) = 0.
+
+
+        if (disID == 0) then  
+          ! Reset base excretion array
+          exc(:) = 0.
+          !
+          ! Reset rainfall-driven excretion array
+          if (out_rain) then
+            exc_clim(:) = 0.
+          end if
+          !
         end if
-        !
         ! Reset growth array
         nattempt(:) = 0.
         !
@@ -360,11 +364,15 @@ PROGRAM MOBILE
           end if
         !
         end do agent_loop
-        ! Scale excretion events to density
-        exc(:) = scale*exc(:)
-        !
-        if (out_rain) then
-          exc_clim(:) = scale*exc_clim(:)
+
+        if (disID == 0) then
+          ! Scale excretion events to density
+          exc(:) = scale*exc(:)
+          !
+          if (out_rain) then
+            exc_clim(:) = scale*exc_clim(:)
+          end if
+          !
         end if
         !
         call agents_diagnostics(disID,scale,nalive)  ! Compute bulk stats

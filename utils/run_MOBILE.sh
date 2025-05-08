@@ -46,7 +46,7 @@ fi
 #           -c Constants/parameters file (example in params.txt)
 #           -m Mobility file   [Non-functional]
 #           -w Hydrology file  [Non-functional]
-
+#           -v Verbose         [Non-functional]
 #           --------------------------------
             
             nagent=500000                 #  -a

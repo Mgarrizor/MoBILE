@@ -25,7 +25,7 @@ MODULE mo_control
     ! 2D (x,y) Fields
     logical :: out_pop  =.true.   ! Output the steady-state human population density
     logical :: out_Q    =.true.   ! Output connectivity matrix for a given point ixy
-    logical :: out_D    =.false.  ! Output distance matrix for source
+    logical :: out_D    =.true.  ! Output distance matrix for source
 
     ! 3D (x,y,t) Fields
     !
@@ -63,13 +63,36 @@ MODULE mo_control
     character(len=100) ::  temp_names(1)= [character(len=20) :: "temperature"]
 
     ! Attribute names
-    character(len=100) ::  att_names(7) = [character(len=20) :: "standard_name", "long_name", "units", "calendar", "axis", "cell_methods", "_FillValue"]
+    integer, parameter :: att_len = 7
+    character(len=100) ::  att_names(att_len) = [character(len=50) :: "standard_name", "long_name", "units", "calendar", "axis", "cell_methods", "_FillValue"]
+
     
-    character(len=100) :: lon_att(7)
-    character(len=100) :: lat_att(7)
-    character(len=100) :: time_att(7)
-    character(len=100) :: rain_att(7)
-    character(len=100) :: temp_att(7)
+    ! Define a derived type to hold either a string or a numeric value.
+    type attribute_type
+      character(len=50) :: str_value  ! Store the string representation
+      logical :: is_numeric            ! Flag to indicate if it's numeric
+      real :: num_value                ! Store the numeric value, if applicable
+    end type attribute_type
+
+
+
+    character(len=100) :: lon_att(att_len)
+    character(len=100) :: lat_att(att_len)
+    character(len=100) :: time_att(att_len)
+    character(len=100) :: rain_att(att_len)
+
+
+    ! Declare array of this derived type and initialize.
+    type(attribute_type), dimension(att_len) :: temp_att =[ &
+             attribute_type(str_value="", is_numeric=.false., num_value=0.0), &
+             attribute_type(str_value="", is_numeric=.false., num_value=0.0), &
+             attribute_type(str_value="", is_numeric=.false., num_value=0.0), &
+             attribute_type(str_value="", is_numeric=.false., num_value=0.0), &
+             attribute_type(str_value="", is_numeric=.false., num_value=0.0), &
+             attribute_type(str_value="", is_numeric=.false., num_value=0.0), &
+             attribute_type(str_value="", is_numeric=.true.,  num_value=0.0)   ]
+
+   ! character(len=100) :: temp_att(7)
     !----------------------------------------------------------
 
 
