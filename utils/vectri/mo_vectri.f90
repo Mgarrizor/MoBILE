@@ -5,6 +5,8 @@ MODULE mo_vectri
 USE mo_constants  !--VECTRI--
 USE mo_methods    !--VECTRI--
 
+USE mo_const      !--AB--
+
 implicit none
 !----------------------------------------------------------------------------------------------
 ! Check list:
@@ -102,8 +104,21 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
        !
        !-------------------------------------------------
        !
-        subroutine init_vectri()
+        subroutine init_vectri(pop_dens,mask_pop,nlon,nlat)
            implicit none
+
+           integer, intent(in) :: nlon, nlat
+           real, allocatable, intent(in) :: pop_dens(:) !(nxy)     ! Reshaped human population density
+           logical, allocatable, intent(in) :: mask_pop(:) !(nxy)  ! Reshaped mask_pop from AB (nxy --> nx, ny)
+           
+           ! Local use only
+           integer :: ix, iy, i, is
+           real :: rpopdensity(nlon,nlat) !(nlon, nlat)     ! Reshaped human population density
+           logical :: pop_mask(nlon,nlat) !(nlon, nlat)     ! Reshaped mask_pop from AB (nxy --> nx, ny)
+
+           
+           rpopdensity = reshape(pop_dens(:), (/nlon,nlat/))
+           pop_mask    = reshape(mask_pop(:), (/nlon,nlat/))
            
            !----- Larva biomass -------------------
            !=
@@ -145,19 +160,30 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
             rwaterperm(:,:) = wperm_default
             rwaterurbn(:,:) = 0.0
 
-            forall(iy=1:nlat,ix=1:nlon,mask_pop(ix,iy))
-                rwaterurbn(ix,iy)=log(pop_dens(ix,iy)/wurbn_tau+1.0)*wurbn_sf   
-            end forall
+           ! forall(iy=1:nlat,ix=1:nlon,pop_mask(ix,iy))
+           !     rwaterurbn(ix,iy)=log(rpopdens(ix,iy)/wurbn_tau+1.0)*wurbn_sf   
+           ! end forall
+
+            do iy=1,nlat
+                do ix=1,nlon
+                    if (pop_mask(ix,iy)) then
+                        rwaterurbn(ix,iy)=log(rpopdensity(ix,iy)/wurbn_tau+1.0)*wurbn_sf   
+                    end if 
+                end do 
+            end do 
             
             rwaterpond = 0.
             rwaterperm=max(rwaterperm,wperm_default)
           !=
           !---- Soil --------------
           !=
+            do is=1,SIZE(soil)   
+               allocate(soil(is)%vals(nlon,nlat))
+            end do
+
             do i=1,SIZE(soil)
                 soil(i)%vals(:,:)=1./3.
             end do   
-            
             
             ! initialize infiltration rates 
             DO is=1,SIZE(soil)
@@ -186,10 +212,10 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
         !
         !
         !
-        subroutine source_integrate_VECTRI(ix, iy,nbites,rvect,dt)
+        subroutine source_integrate_VECTRI(ix, iy,nbites,rvect,rlarv,rtemp,rrain,rpopdensity,dt)
 
                !
-               ! This subroutine ...
+               ! This subroutine wraps VECTRI's vector methods
                !
 
                ! Input from used modules
@@ -202,19 +228,44 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
 
                 real, intent(in) :: dt                          ! Time step
                 integer, intent(in) :: ix, iy                   ! Grid point
-                integer, allocatable, intent(in) :: nbites(:,:) ! (nx, ny) Number of infective bites
+
+                ! Disease
+                integer, allocatable, intent(in) :: nbites(:,:) ! (nlon, nlat) Number of infective bites
                 
-                real, allocatable, intent(in) :: rvect(:,:,:)    ! V(1:ninfv, nx, nxy) Adult vector density
-               ! real, allocatable, intent(in) :: rlarv(:,:,:)    ! L(0:nlarv,nlon,nlat)
+                ! Vectors
+                real, allocatable, intent(inout) :: rvect(:,:,:)    ! (0:ninfv,nlon,nlat) Adult vector density
+                real, allocatable, intent(inout) :: rlarv(:,:,:)    ! (0:nlarv,nlon,nlat)
+
+               ! Climate 
+                real, allocatable, intent(in) :: rrain(:,:), rtemp(:,:)     ! (:, :, t=it) --> (nlat,nlon)
+
+                ! Host
+                real, allocatable, intent(in) :: rpopdensity(:,:) !(nlon, nlat)
 
                 ! Local use only
 
+                ! "z" variables
+
+                ! == Vector
+                real :: sum_egg, zdel, zfac, zgonof, zlarvmaturef, zmasslarv, zsurvp_vec
+                real, allocatable :: zvect_density(:,:), zvect_one_d_density(:,:) !(nlon, nlat)
+
+                ! == Climate
+                real :: zrain         ! Day rainfall at given grid point = rrain(ix,iy) with safety limits 
+                real :: ztemp         ! Day temperature (mix of indoor and outdoor) at given grid point ~ rtemp(ix,iy) 
+                real :: ztempindoor   ! Parameter 
+                real :: ztempwater    ! Temperature of water at given grid point ~ t2m(ix,iy) + offsetztempwater
+                
+                ! == Disease
+                real :: zprobhost2vect, zsporof
+                real, allocatable :: zvecinfc(:,:)
 
                 !=========================================================
                     ! Safety check and temporary diagnostics
                     !
                     call safe_diag(zvect_density,zvect_one_d_density,zvecinfc,rlarv,rvect,rvect_min,ninfv,&
                                     rpopdensity,rbitezoo,rzoophilic,dt) 
+
                     !
                     !--------------------------------------------------
                     ! Meteorological data
@@ -252,7 +303,7 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
                     ! Larvae maturation - larvae progression
                     !
                     !
-                    call larv_dev(ix,iy,dt,iounit,ztempwater,zlarvmaturef,rlarv,nlarv,nnumeric) ! --AB--
+                    call larv_dev(ix,iy,dt,iounit,ztempwater,zlarvmaturef,rlarv,nlarv,nnumeric) 
                     !
                     !--------------------------------------------------------------------------
                     ! Larvae mortality

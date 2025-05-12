@@ -137,6 +137,10 @@ PROGRAM MOBILE
             !
             !--Init grid, pop and forcing fields
             call netcdf_read_grid(pop_file,grid,nlon,nlat,nxy,pop_dens,lon_coord,lat_coord,mask_pop)
+
+            if ((.true.)) then
+              call init_vectri(pop_dens, mask_pop, nlon,nlat)
+            end if
           !=
           ! Safety check
           !=
