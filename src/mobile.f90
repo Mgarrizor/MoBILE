@@ -38,7 +38,7 @@ PROGRAM MOBILE
   USE mo_grid
   USE mo_namelist
 
-  USE, INTRINSIC :: ISO_C_BINDING
+  !USE, INTRINSIC :: ISO_C_BINDING
   
 !----- VECTRI
 #ifdef COUPLED
@@ -140,11 +140,18 @@ PROGRAM MOBILE
             !--Init grid, pop and forcing fields
             call netcdf_read_grid(pop_file,grid,nlon,nlat,nxy,pop_dens,lon_coord,lat_coord,mask_pop)
 
-            if ((.false.)) then
-              !
-              call init_vectri(pop_dens,pop_dens_2d,mask_pop,nlon,nlat)
-              !
-            end if
+#ifdef COUPLED
+  ! Declarations or interfaces related to the coupled mode
+  if ((.true.)) then
+    !
+    call init_constants() ! VECTRI-specific constants
+    call init_vectri(pop_dens,pop_dens_2d,mask_pop,nlon,nlat, &
+                               t2m,rainfall)
+    !
+  end if
+  !
+#endif
+            
           !=
           ! Safety check
           !=
@@ -270,6 +277,7 @@ PROGRAM MOBILE
               print '("Number of neighbours connected to source: ",i6," ")', sum(merge(1,0,(mask_grav(xy_seed,:))))
           end if
           !     
+
 
         ! 0.5.2 Malaria
         else ![Non-functional]

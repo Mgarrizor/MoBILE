@@ -108,7 +108,7 @@ $(EXE): ./build/mobile.o
 $(MOD2): ./build/%.o : ./src/%.f90 
 	@echo '0.- Compile module' $<
 	@mkdir -p $(BUILD_DIR)
-	@$(FC) -cpp -c $< -J $(BUILD_DIR) -o $@ $(INC_FLAGS) $(DEBUG) $(FAST)
+	@$(FC) -cpp -c $< -J $(BUILD_DIR) -o $@ $(INC_FLAGS) $(DEBUG) $(FAST) $(COUPLING_FLAG)
 # To generate dependency files add the flag -MD to the above command 
 # ... -cpp -MD -c ...
 

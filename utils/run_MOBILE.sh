@@ -58,7 +58,7 @@ fi
             temp_file=$MOBILE'/utils/test_run/t2m.nc'   #  -t
 
             const='params.txt'            #  -c
-            vectri=1
+            vectri=0
 
 # Environmental variables
 #--------------------------------

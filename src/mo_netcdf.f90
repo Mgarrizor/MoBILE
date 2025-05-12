@@ -9,6 +9,14 @@ MODULE mo_netcdf
     use netcdf
     use mo_control
     use mo_const
+
+!----- VECTRI
+#ifdef COUPLED
+  ! Declarations or interfaces related to the coupled mode
+  USE mo_vectri
+  !
+#endif
+
     implicit none
 
     CONTAINS
@@ -50,6 +58,27 @@ MODULE mo_netcdf
                                  values = reshape((dist(xy_seed,:)), shape = (/ nlon, nlat /)))
             var_out = var_out + 1
         end if 
+
+
+#ifdef COUPLED
+  ! Declarations or interfaces related to the coupled mode
+  !
+  if ((out_wurbn)) then
+      !
+      status = nf90_put_var(ncid = ncid_out, varid = VarId(var_out), & 
+                           values = rwaterurbn)
+      var_out = var_out + 1!
+  end if 
+  !
+  if ((out_wperm)) then
+      !
+      status = nf90_put_var(ncid = ncid_out, varid = VarId(var_out), & 
+                           values = rwaterperm)
+      var_out = var_out + 1!
+  end if 
+  !
+#endif
+        
 
         status = nf90_close(ncid_out)
 
@@ -212,12 +241,21 @@ MODULE mo_netcdf
                                       +merge(1, 0, out_A)+merge(1, 0, out_Q) &
                                       +merge(1, 0, out_D)+merge(1, 0, out_rain) &
                                       +merge(1, 0, out_t2m)
+                                      
+
+#ifdef COUPLED
+  ! Declarations or interfaces related to the coupled mode
+  dim = dim +merge(1, 0, out_wurbn) +merge(1, 0, out_wperm)
+  !
+#endif
 
         allocate(VarId(dim))
-        ! returns a netCDF ID that can subsequently be used 
-        ! to refer to the netCDF dataset in other netCDF function calls
 
-        ! Create new dataset and assign main spatial dimensions
+
+        !=== Create 
+        ! - Returns a netCDF ID that can subsequently be used 
+        !   to refer to the netCDF dataset in other netCDF function calls
+        ! - Create new dataset and assign main spatial dimensions
         status = nf90_create(path=trim(run_name)//".nc", cmode = 0, ncid = ncid_out)
         
         status = nf90_def_dim(ncid = ncid_out, name = "lon", len = nlon,   dimid = DimId(1))
@@ -306,10 +344,35 @@ MODULE mo_netcdf
         end if
 
 
+#ifdef COUPLED
+  ! Declarations or interfaces related to the coupled mode
+  if ((out_wurbn)) then
+      !
+      VarId(var_out)=var_out
+      status = nf90_def_var(ncid = ncid_out, name = "w_urbn", xtype = nf90_double, &
+                dimids = (/ DimId(1), DimId(2) /), varid = VarId(var_out))
+      status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "units", values = "[fraction]")
+      var_out = var_out + 1
+      !
+  end if
+  !
+  if ((out_wperm)) then
+      !
+      VarId(var_out)=var_out
+      status = nf90_def_var(ncid = ncid_out, name = "w_perm", xtype = nf90_double, &
+                dimids = (/ DimId(1), DimId(2) /), varid = VarId(var_out))
+      status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "units", values = "[fraction]")
+      var_out = var_out + 1
+      !
+  end if
+  !
+#endif
+        
+
         ! 3D Fields (x,y,t)
         Var3D = var_out
 
-        ! ============================== Human ======================================
+        ! ============================== Disease ======================================
         if ((out_S)) then
 
             VarId(var_out)=var_out

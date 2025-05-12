@@ -104,7 +104,9 @@ ln -sf ${MOBILE}/src ${path}
 # These files will then be found and compiled by the Makefile
 
 if [[ ${vectri} == 1 ]]; then
-  echo 'VECTRI active'
+  echo '================= VECTRI active =================='
+
+  touch "${path}/src/mo_netcdf.f90" # Touch file so that it is recompiled WITH the VECTRI lines
 
   ln -sf ${VECTRI}/source/mo_methods.f90 ${path}/src           # These are the necessary VECTRI source files to
   ln -sf ${VECTRI}/source/mo_constants.f90 ${path}/src         # couple it to the AB model.
@@ -129,6 +131,9 @@ elif  [[ ${vectri} == 0 ]]; then
 
     rm "${path}/src/deps/mo_vectri.d"
     rm "${path}/src/deps/mo_methods.d"
+
+    touch "${path}/src/mo_netcdf.f90"    # Touch file so that it is recompiled withOUT the VECTRI lines
+
   fi
 else
   echo '<<vectri>> flag should be either 0 or 1! --> Stopping simulation'

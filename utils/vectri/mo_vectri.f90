@@ -129,7 +129,8 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
        !
        !-------------------------------------------------
        !
-        subroutine init_vectri(pop_dens,pop_dens_2d,mask_pop,nlon,nlat)
+        subroutine init_vectri(pop_dens,pop_dens_2d,mask_pop,nlon,nlat, &
+                               t2m,rainfall)
            implicit none
 
            integer, intent(in) :: nlon, nlat
@@ -137,17 +138,36 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
            logical, allocatable, intent(in) :: mask_pop(:) !(nxy)  ! Reshaped mask_pop from AB (nxy --> nx, ny)
            real, allocatable, intent(inout) :: pop_dens_2d(:,:) !(nlon, nlat)
 
+           real, allocatable, intent(inout) :: t2m, rainfall
+
+           ! Dummy
+           real :: t2m_2d, rainfall_2d
+
            ! Local use only
            integer :: ix, iy, i, is
            logical :: pop_mask(nlon,nlat) !(nlon, nlat)     ! Reshaped mask_pop from AB (nxy --> nx, ny)
 
-           
            allocate(pop_dens_2d(nlon,nlat))
            allocate(nbites(nlon,nlat))
 
+           nbites(:,:) = 0.
+
            pop_dens_2d = reshape(pop_dens(:), (/nlon,nlat/))
            pop_mask    = reshape(mask_pop(:), (/nlon,nlat/))
-           
+
+        ! - Reallocate driving data to 2D grid.
+        ! - Alternative could be to directly read it into 
+        !   this grid in the netcdf module. 
+
+        !   t2m_2d = reshape(t2m, (/nlon,nlat/))
+        !   rainfall_2d = reshape(rainfall, (/nlon,nlat/))
+
+        !   reallocate(t2m(nlon,nlat))
+        !   reallocate(rainfall(nlon,nlat))
+
+        !   t2m = t2m_2d
+        !   rainfall = rainfall_2d
+
            !----- Larva biomass -------------------
            !=
              allocate(rmasslarv(0:nlarv))
