@@ -29,7 +29,7 @@ MODULE mo_control
 
     ! 3D (x,y,t) Fields
     !
-    ! Disease
+    !======= Disease
     logical :: out_S    =.true.  ! Susceptible
     logical :: out_E    =.false. ! Exposed [Non-functional]
     logical :: out_I    =.true.  ! Infected
@@ -39,10 +39,10 @@ MODULE mo_control
     logical :: out_B    =.true.  ! Bacterial density (could be changed to generic source of disease, e.g., B, V,...)
     logical :: out_F    =.true.  ! Force of infection
     !--- Malaria ----
-    logical :: out_V    =.false. ! Vector density
-    logical :: out_L    =.false. ! Larval density
-
-    ! Clima
+    !
+    ! Defined in mo_vectri.f90
+    !
+    !======= Clima
     logical :: out_rain =.true.  ! Rainfall
     logical :: out_t2m  =.true. ! Air temperature
 

@@ -37,6 +37,8 @@ PROGRAM MOBILE
   USE mo_bulk
   USE mo_grid
   USE mo_namelist
+
+  USE, INTRINSIC :: ISO_C_BINDING
   
 !----- VECTRI
 #ifdef COUPLED
@@ -138,8 +140,10 @@ PROGRAM MOBILE
             !--Init grid, pop and forcing fields
             call netcdf_read_grid(pop_file,grid,nlon,nlat,nxy,pop_dens,lon_coord,lat_coord,mask_pop)
 
-            if ((.true.)) then
-              call init_vectri(pop_dens, mask_pop, nlon,nlat)
+            if ((.false.)) then
+              !
+              call init_vectri(pop_dens,pop_dens_2d,mask_pop,nlon,nlat)
+              !
             end if
           !=
           ! Safety check
@@ -188,7 +192,7 @@ PROGRAM MOBILE
         ! Initialize distance matrix
         call mob_dist_init(nxy,x_coord_1d,y_coord_1d,lon_coord,lat_coord,dx,dy,input,Re,Pi,mask_pop,dist)
         !
-        ! Allocate arrays of disease "disID"
+        ! Allocate arrays of disease "disID" (SEIAR)
         call grid_dis(disID,nxy,S,E,I,A,A_old,R)
         !
         !**********************************
@@ -269,7 +273,7 @@ PROGRAM MOBILE
 
         ! 0.5.2 Malaria
         else ![Non-functional]
-          !
+          ! Do nothing as source of disease (Vector density) has been initialized in the call to init_vectri
         end if
         !
         if (agents) then
@@ -322,7 +326,8 @@ PROGRAM MOBILE
             ! 4.2) Source
             !
             ! V(t, ixy, sporo_old) --> V(t + dt, ixy, sporo_new)
-            ! call source_integrate_VECTRI(x_coord_1d(ixy), y_coord_1d(ixy), nbites, V) --> Do we need the S,E,I,R bulk stats?
+            !  call source_integrate_VECTRI(x_coord_1d(ixy), y_coord_1d(ixy), nbites, V)
+            !
             ! **Input**
             !   - ixy       - grid point
             !   - SEIR(:)   - bulk stats?

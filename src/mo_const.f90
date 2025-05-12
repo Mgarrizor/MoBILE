@@ -105,10 +105,6 @@ MODULE mo_const
     !--- Malaria ---
 
     ! mo_vectri.f90
-    real, allocatable    :: V(:)      ! 1D long array for Vector density
-    integer, allocatable :: nbites(:) ! 1D long array for number of infective bites
-                                      ! (number of vectors that were infected upon
-                                      ! bitting a human)
 
     !********** Clima **************************
     real, allocatable :: rainfall(:,:)    ! 2D long array for rainfall (nxy,t)

@@ -22,6 +22,9 @@ implicit none
 ! rbitezoo(nlon,nlat)           Y                Y            Y                       mo_vectri.f90      mo_interface.f90      mo_interface.f90
 ! zsurvp_larv(0:nlarv)          Y                Y            Y(=1.)                  mo_vectri.f90      mo_vectri.f90                N
 
+! zvect_density(nlon,nlat)                                                            mo_vectri.f90      mo_vectri.f90
+! zvect_one_d_density(nlon,nlat)                                                      mo_vectri.f90      mo_vectri.f90
+
 ! == Hydrology ==
 
 ! rwaterpond(nlon,nlat)         Y                 Y            Y                      mo_vectri.f90      mo_interface.f90      mo_interface.f90
@@ -38,10 +41,10 @@ implicit none
 
 ! Default output if VECTRI is active
 
-logical :: out_V  =.true.            ! Vector density
-logical :: out_L  =.true.            ! Larval density
+logical :: out_vect   =.true.        ! Vector density
+logical :: out_larv   =.true.        ! Larval density
 logical :: out_wpond  =.true.        ! Pond fraction
-logical :: out_wpurbn =.true.        ! Urban fraction
+logical :: out_wurbn  =.true.        ! Urban fraction
 logical :: out_wperm  =.true.        ! Permanent fraction
 
 !=============================================
@@ -62,6 +65,7 @@ integer, parameter :: ninfv=25                   ! mo_control.f90
 real :: rvect_min=1.e-4                          ! mo_control.f90
 !
 !
+! Vector ================================================
 real, allocatable :: rlarv(:,:,:) ! (0:nlarv,nlon,nlat)
 real, allocatable :: rvect(:,:,:) ! (0:ninfv,nlon,nlat)
 
@@ -70,14 +74,35 @@ real, allocatable :: rmasslarv(:)     ! mass of larvae (0:nlarv)
 real, allocatable :: rbitezoo(:,:)      ! (nlon,nlat)
 real, allocatable :: rzoophilic(:,:)    ! (nlon,nlat)
 
-real, allocatable :: zsurvp_larv(:)
+
+! 2d arrays =======================================
+real, allocatable :: pop_dens_2d(:,:)         ! (nlon,nlat)
+real, allocatable :: rain_2d(:,:,:)           ! (nlon,nlat,nstep)
+real, allocatable :: t2m_2d(:,:,:)            ! (nlon,nlat,nstep)
+integer, allocatable :: nbites(:,:) ! (nlon,nlat) Infective bites
+                                      ! (vectors that were infected upon
+                                      ! bitting a human)
+
+!
+real, allocatable :: zsurvp_larv(:)           ! (0:nlarv)
+
+real, allocatable :: zvecinfc(:,:)            ! (nlon,nlat)
+ 
+real, allocatable :: zvect_density(:,:)       ! (nlon,nlat)
+real, allocatable :: zvect_one_d_density(:,:) ! (nlon,nlat)
+!===========================================================
 
 
+! Hydrology ================================================
 real, allocatable :: rwaterpond(:,:)  ! nlat,nlon  ! temporary ponds        
 real, allocatable :: rwaterperm(:,:)  ! nlat,nlon  ! permanent features, lakes rivers etc        
 real, allocatable :: rwaterurbn(:,:)  ! nlat,nlon  ! urban water availiability (gutters, tires, cans etc)
 real, allocatable :: rsoilinfil(:,:)  ! nlat,nlon       
 
+
+! == Pointers
+
+!real, dimension(:,:), pointer :: pop_dens_ptr
 
 
 
@@ -104,20 +129,23 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
        !
        !-------------------------------------------------
        !
-        subroutine init_vectri(pop_dens,mask_pop,nlon,nlat)
+        subroutine init_vectri(pop_dens,pop_dens_2d,mask_pop,nlon,nlat)
            implicit none
 
            integer, intent(in) :: nlon, nlat
            real, allocatable, intent(in) :: pop_dens(:) !(nxy)     ! Reshaped human population density
            logical, allocatable, intent(in) :: mask_pop(:) !(nxy)  ! Reshaped mask_pop from AB (nxy --> nx, ny)
-           
+           real, allocatable, intent(inout) :: pop_dens_2d(:,:) !(nlon, nlat)
+
            ! Local use only
            integer :: ix, iy, i, is
-           real :: rpopdensity(nlon,nlat) !(nlon, nlat)     ! Reshaped human population density
            logical :: pop_mask(nlon,nlat) !(nlon, nlat)     ! Reshaped mask_pop from AB (nxy --> nx, ny)
 
            
-           rpopdensity = reshape(pop_dens(:), (/nlon,nlat/))
+           allocate(pop_dens_2d(nlon,nlat))
+           allocate(nbites(nlon,nlat))
+
+           pop_dens_2d = reshape(pop_dens(:), (/nlon,nlat/))
            pop_mask    = reshape(mask_pop(:), (/nlon,nlat/))
            
            !----- Larva biomass -------------------
@@ -138,6 +166,11 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
              rvect(0,:,:)=100*rhost_infect_init*rvect_min             ! fixed density of vectors
              rvect(ninfv,:,:)=10*rhost_infect_init*rvect_min          ! fixed density of vectors
              rlarv(:,:,:) = 0.
+
+             ! allocate the 2d local arrays
+
+             allocate(zvect_density(nlon,nlat))
+             allocate(zvect_one_d_density(nlon,nlat))
              
              allocate(zsurvp_larv(0:nlarv))
              
@@ -167,7 +200,7 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
             do iy=1,nlat
                 do ix=1,nlon
                     if (pop_mask(ix,iy)) then
-                        rwaterurbn(ix,iy)=log(rpopdensity(ix,iy)/wurbn_tau+1.0)*wurbn_sf   
+                        rwaterurbn(ix,iy)=log(pop_dens_2d(ix,iy)/wurbn_tau+1.0)*wurbn_sf   
                     end if 
                 end do 
             end do 
@@ -230,7 +263,7 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
                 integer, intent(in) :: ix, iy                   ! Grid point
 
                 ! Disease
-                integer, allocatable, intent(in) :: nbites(:,:) ! (nlon, nlat) Number of infective bites
+                integer, allocatable, intent(in) :: nbites(:,:) ! (nlon,nlat) Number of infective bites
                 
                 ! Vectors
                 real, allocatable, intent(inout) :: rvect(:,:,:)    ! (0:ninfv,nlon,nlat) Adult vector density
@@ -258,7 +291,7 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
                 
                 ! == Disease
                 real :: zprobhost2vect, zsporof
-                real, allocatable :: zvecinfc(:,:)
+                real, allocatable :: zvecinfc(:,:)   !(nlon, nlat)
 
                 !=========================================================
                     ! Safety check and temporary diagnostics
