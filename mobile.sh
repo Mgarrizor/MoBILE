@@ -26,12 +26,13 @@ usage() { echo "Usage:              \n
                 -s: Seed [Integer]
                 -a: Number of agents [Integer]
                 -u: Spin up length [days]
+                -v: VECTRI coupling [0: No, 1: Yes]
 
                  "; }
 # Resources
 # https://stackoverflow.com/questions/16483119/an-example-of-how-to-use-getopts-in-bash
 # https://serverfault.com/questions/266867/bash-getops-allow-but-not-require-arg
-while getopts ":ho:p:r:t:d:n:s:a:c:u:" flag; do
+while getopts ":ho:p:r:t:d:n:s:a:c:u:v:" flag; do
  case $flag in
    h) # Handle the -h flag
    # Display script help information
@@ -68,6 +69,9 @@ while getopts ":ho:p:r:t:d:n:s:a:c:u:" flag; do
    u) # Handle the -c flag
    spin_up=$OPTARG
    ;;
+   v) # Handle the -c flag
+   vectri=$OPTARG
+   ;;
    \?) # Handle invalid options
    usage
    exit 1
@@ -94,10 +98,46 @@ mkdir -p $path
 # https://www.man7.org/linux/man-pages/man1/ln.1.html
 ln -sf ${MOBILE}/Makefile ${path}
 ln -sf ${MOBILE}/src ${path}
+
+# If VECTRI is coupled then create symbolic links 
+# pointing to the necessary files from VECTRI.
+# These files will then be found and compiled by the Makefile
+
+if [[ ${vectri} == 1 ]]; then
+  echo 'VECTRI active'
+
+  ln -sf ${VECTRI}/source/mo_methods.f90 ${path}/src           # These are the necessary VECTRI source files to
+  ln -sf ${VECTRI}/source/mo_constants.f90 ${path}/src         # couple it to the AB model.
+  ln -sf ${VECTRI}/source/mo_advect.f90 ${path}/src
+
+  ln -sf ${MOBILE}/utils/vectri/mo_vectri.f90 ${path}/src      # This is the file that declares, allocates and 
+                                                               # initializes VECTRI's fields and wraps all subroutines 
+                                                               # necessary for integrating the vector density.
+
+  ln -sf ${MOBILE}/utils/vectri/mo_vectri.d ${path}/src/deps   # Dependency files to ensure right compilation order.
+  ln -sf ${MOBILE}/utils/vectri/mo_methods.d ${path}/src/deps  
+
+elif  [[ ${vectri} == 0 ]]; then
+  echo '================= VECTRI inactive ================'
+
+  # Remove symbolic links (present if running a second simulation in the same folder)
+  if [[ -f "${path}/src/mo_vectri.f90" ]]; then
+    rm "${path}/src/mo_vectri.f90"
+    rm "${path}/src/mo_methods.f90"
+    rm "${path}/src/mo_constants.f90"
+    rm "${path}/src/mo_advect.f90"
+
+    rm "${path}/src/deps/mo_vectri.d"
+    rm "${path}/src/deps/mo_methods.d"
+  fi
+else
+  echo '<<vectri>> flag should be either 0 or 1! --> Stopping simulation'
+  exit 1
+fi
 #-------------------------------
 
 # 2) Compile program
-(cd $path && make)
+(cd $path && make ENABLE_COUPLING=${vectri})
 exit=$? # Save exit status of 'make'.
 
 # $? = Exit status of last executed command 

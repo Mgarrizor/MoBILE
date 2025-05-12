@@ -46,7 +46,7 @@ fi
 #           -c Constants/parameters file (example in params.txt)
 #           -m Mobility file   [Non-functional]
 #           -w Hydrology file  [Non-functional]
-#           -v Verbose         [Non-functional]
+#           -v VECTRI          0: Inactive 1: Coupled [Non-functional]
 #           --------------------------------
             
             nagent=500000                 #  -a
@@ -58,6 +58,7 @@ fi
             temp_file=$MOBILE'/utils/test_run/t2m.nc'   #  -t
 
             const='params.txt'            #  -c
+            vectri=1
 
 # Environmental variables
 #--------------------------------
@@ -87,6 +88,10 @@ var_11="-a ${nagent}"
 # CONST
 var_12="-c ${const}"
 
+# VECTRI
+var_13="-v ${vectri}"
+
+
 read -r -d '' command << EOM
 $var_1
 $var_2
@@ -100,6 +105,7 @@ $var_9
 $var_10
 $var_11
 $var_12
+$var_13
 EOM
 
 echo 'Command:' ${command} > ${output_name}.info

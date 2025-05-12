@@ -279,7 +279,7 @@ MODULE mo_netcdf
             status = nf90_def_var(ncid = ncid_out, name = "pop", xtype = nf90_double, &
                       dimids = (/ DimId(1), DimId(2) /), varid = VarId(var_out))
             status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "units", values = "km^-2")
-            status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "_FillValue", values = FillValue)
+         !   status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "_FillValue", values = FillValue)
             status = nf90_def_var_fill(ncid_out, VarId(var_out), 0, FillValue)
             var_out = var_out + 1
 
@@ -384,12 +384,14 @@ MODULE mo_netcdf
           VarId(var_out)=var_out
           status = nf90_def_var(ncid = ncid_out, name = "rain", xtype = nf90_double, &
                     dimids = (/ DimId(1), DimId(2) , DimId(3) /), varid = VarId(var_out))
-          
-          
+
+          status = nf90_def_var_fill(ncid_out, VarId(var_out), 0, FillValue_rain)
+      
           ! Write rainfall attributes
           do indx=1,size(att_names)
               !
               if (len(trim(rain_att(indx))) /= 0) then 
+                !
                 status = nf90_put_att(ncid=ncid_out, varid = VarId(var_out), name=att_names(indx), values=rain_att(indx))
               end if
               !
@@ -405,27 +407,15 @@ MODULE mo_netcdf
           status = nf90_def_var(ncid = ncid_out, name = "t2m", xtype = nf90_double, &
                     dimids = (/ DimId(1), DimId(2) , DimId(3) /), varid = VarId(var_out))
           
+          status = nf90_def_var_fill(ncid_out, VarId(var_out), 0, FillValue_temp)
           
           ! Write temperature attributes
           do indx=1,size(att_names)
               !
-              if (len(trim(temp_att(indx)%str_value)) /= 0) then 
-
-                if (temp_att(indx)%is_numeric) then
-                  print*, att_names(indx)
-                  print*, temp_att(indx)%num_value
-                  status = nf90_put_att(ncid=ncid_out, varid = VarId(var_out), name=att_names(indx), values=temp_att(indx)%num_value)
-                else 
-                  print*, att_names(indx)
-                  print*, temp_att(indx)%str_value
-                  status = nf90_put_att(ncid=ncid_out, varid = VarId(var_out), name=att_names(indx), values=temp_att(indx)%str_value)
-                end if 
+              if (len(trim(temp_att(indx))) /= 0) then 
+                !
+                status = nf90_put_att(ncid=ncid_out, varid = VarId(var_out), name=att_names(indx), values=temp_att(indx))
               end if
-              !
-              !
-              !if (len(trim(temp_att(indx))) /= 0) then 
-              !  status = nf90_put_att(ncid=ncid_out, varid = VarId(var_out), name=att_names(indx), values=temp_att(indx))
-              !end if
               !
           end do
             !
@@ -613,6 +603,8 @@ MODULE mo_netcdf
 
         where(pop_dens > eps) D = 1/log(pop_dens+1)
 
+        
+
         if (out_rain) then
 
               ! We need to extract the dates of the forcing and its total length, ntime, so that
@@ -679,6 +671,7 @@ MODULE mo_netcdf
               where(rainfall(:,1) == FillValue_rain) mask_pop = .false.  ! Do not simulate over missing rainfall points
               !
               deallocate(grid_clim)
+              
 
         else  ! If not rainfall input set to zero 
           !
@@ -748,26 +741,7 @@ MODULE mo_netcdf
               !
               ! Inquire attributes from "t2m" variable (time attributes are taken from rainfall file)
               do indx=1,size(att_names)
-
-                  if (temp_att(indx)%is_numeric) then
-                   !
-                    status = nf90_get_att(ncid=ncid_in, varid=TempVarID, name=att_names(indx), values=temp_att(indx)%num_value)
-                   !
-                    if (status == nf90_noerr) then    ! If there is a numerical value extend the string so that it is latter saved in the NetCDF file
-                      temp_att(indx)%str_value = ""
-                    end if
-                   !
-                  else
-                   !
-                    status = nf90_get_att(ncid=ncid_in, varid=TempVarID, name=att_names(indx), values=temp_att(indx)%str_value)
-                   !
-                  end if 
-                 !
-                 ! Option to print if attribute not found
-                 ! if (status /= nf90_noerr) then
-                 !   print *, att_names(indx)
-                 ! end if
-
+                  status = nf90_get_att(ncid=ncid_in, varid=TempVarID, name=att_names(indx), values=temp_att(indx))
               end do
               !
               status = nf90_get_att(ncid=ncid_in, varid=TempVarID, name="_FillValue", values=FillValue_temp) 

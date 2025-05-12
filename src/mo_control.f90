@@ -63,8 +63,8 @@ MODULE mo_control
     character(len=100) ::  temp_names(1)= [character(len=20) :: "temperature"]
 
     ! Attribute names
-    integer, parameter :: att_len = 7
-    character(len=100) ::  att_names(att_len) = [character(len=50) :: "standard_name", "long_name", "units", "calendar", "axis", "cell_methods", "_FillValue"]
+    integer, parameter :: att_len = 6
+    character(len=100) ::  att_names(att_len) = [character(len=50) :: "standard_name", "long_name", "units", "calendar", "axis", "cell_methods"]
 
     
     ! Define a derived type to hold either a string or a numeric value.
@@ -83,16 +83,16 @@ MODULE mo_control
 
 
     ! Declare array of this derived type and initialize.
-    type(attribute_type), dimension(att_len) :: temp_att =[ &
-             attribute_type(str_value="", is_numeric=.false., num_value=0.0), &
-             attribute_type(str_value="", is_numeric=.false., num_value=0.0), &
-             attribute_type(str_value="", is_numeric=.false., num_value=0.0), &
-             attribute_type(str_value="", is_numeric=.false., num_value=0.0), &
-             attribute_type(str_value="", is_numeric=.false., num_value=0.0), &
-             attribute_type(str_value="", is_numeric=.false., num_value=0.0), &
-             attribute_type(str_value="", is_numeric=.true.,  num_value=0.0)   ]
+    !type(attribute_type), dimension(7) :: temp_att =[ &
+    !         attribute_type(str_value="", is_numeric=.false., num_value=0.0), &
+    !         attribute_type(str_value="", is_numeric=.false., num_value=0.0), &
+    !         attribute_type(str_value="", is_numeric=.false., num_value=0.0), &
+    !         attribute_type(str_value="", is_numeric=.false., num_value=0.0), &
+    !         attribute_type(str_value="", is_numeric=.false., num_value=0.0), &
+    !         attribute_type(str_value="", is_numeric=.false., num_value=0.0), &
+    !         attribute_type(str_value="", is_numeric=.true.,  num_value=0.0)   ]
 
-   ! character(len=100) :: temp_att(7)
+    character(len=100) :: temp_att(att_len)
     !----------------------------------------------------------
 
 

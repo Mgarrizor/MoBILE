@@ -37,8 +37,16 @@ PROGRAM MOBILE
   USE mo_bulk
   USE mo_grid
   USE mo_namelist
+  
+!----- VECTRI
+#ifdef COUPLED
+  ! Declarations or interfaces related to the coupled mode
+  USE mo_vectri
+  !
+#endif
+!----------------------
 
-  USE omp_lib ! Not in use
+!  USE omp_lib ! Not in use
 
 
   implicit none

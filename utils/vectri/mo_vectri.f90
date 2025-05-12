@@ -1,11 +1,11 @@
 MODULE mo_vectri
-
 !
-! Adrian M. Tompkins (tompkins@ictp.it)           2025
 ! Miguel Garrido Zornoza (mgarrizoraca@gmail.com) 2025
 !
+USE mo_constants  !--VECTRI--
+USE mo_methods    !--VECTRI--
 
-
+implicit none
 !----------------------------------------------------------------------------------------------
 ! Check list:
 !                           !--------------- mo_vectri.f90 (AB) --------------!
@@ -34,6 +34,17 @@ MODULE mo_vectri
 !
 !-----------------------------------------------------------------------------------------------
 
+! Default output if VECTRI is active
+
+logical :: out_V  =.true.            ! Vector density
+logical :: out_L  =.true.            ! Larval density
+logical :: out_wpond  =.true.        ! Pond fraction
+logical :: out_wpurbn =.true.        ! Urban fraction
+logical :: out_wperm  =.true.        ! Permanent fraction
+
+!=============================================
+
+INTEGER, PARAMETER :: slen=100                   ! mo_vectri.f90
 
 ! Advection scheme 
 integer :: nnumeric = 2                          ! mo_control.f90
@@ -65,42 +76,7 @@ real, allocatable :: rwaterperm(:,:)  ! nlat,nlon  ! permanent features, lakes r
 real, allocatable :: rwaterurbn(:,:)  ! nlat,nlon  ! urban water availiability (gutters, tires, cans etc)
 real, allocatable :: rsoilinfil(:,:)  ! nlat,nlon       
 
-!===========================================================
-allocate(rmasslarv(0:nlarv))
-! mass relationship of larvae - we assume a stage 4 size as Bomblies and 
-! we will assume a linear mass increase with age unless find other reference 
-! this linear growth rate is very close to that assumed by Bomblies.   
-do ix=0,nlarv
-   rmasslarv(ix)=float(ix)*rmasslarv_stage4/float(nlarv)
-end do
-!===========================================================
 
-allocate(rvect(0:ninfv,nlon,nlat))
-allocate(rlarv(0:nlarv,nlon,nlat))
-
-rvect(0,:,:)=100*rhost_infect_init*rvect_min             ! fixed density of vectors
-rvect(ninfv,:,:)=10*rhost_infect_init*rvect_min          ! fixed density of vectors
-rlarv(:,:,:) = 0.
-
-allocate(zsurvp_larv(0:nlarv))
-
-rsurvp_larv(:) = 1.
-
-allocate(rbitezoo(nlon,nlat))
-allocate(rzoophilic(nlon,nlat))
-
-rbitezoo(:,:)   = 0.
-rzoophilic(:,:) = 0.
-
-allocate(rwaterpond(nlon,nlat))   ! diagnostic 
-allocate(rwaterperm(nlon,nlat))   ! diagnostic
-allocate(rwaterurbn(nlon,nlat))   ! diagnostic
-allocate(rsoilinfil(nlon,nlat))   ! diagnostic --> Needed for the pond scheme
-
-
-rwaterpond(:,:) = wpond_min
-rwaterperm(:,:) = wperm_default
-rwaterurbn(:,:  = 0.0
 
 
 ! data structure for climate data, soil and hydrological data
@@ -120,64 +96,97 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
 &   datafld(-99,"silt","GLDAS_soilfraction_silt",-999), &
 &   datafld(-99,"sand","GLDAS_soilfraction_sand",-999)  ]
 
-do i=1,SIZE(soil)
-    soil(i)%vals(:,:)=1./3.
-end do   
-
-
-! initialize infiltration rates 
-DO is=1,SIZE(soil)
-   SELECT CASE(soil(is)%varname)
-   CASE("clay")
-      soil(is)%infil=wpond_infil_clay
-   CASE("silt")
-      soil(is)%infil=wpond_infil_silt
-   CASE("sand")
-      soil(is)%infil=wpond_infil_sand
-   END SELECT
-ENDDO
-rsoilinfil(:,:)=0.0
-DO is=1,SIZE(soil)
-   DO iy=1,nlat
-      DO ix=1,nlon
-         rsoilinfil(ix,iy)=rsoilinfil(ix,iy)+ &
-           & soil(is)%vals(ix,iy)*soil(is)%infil
-         !   soil frac           *infil val
-      ENDDO
-   ENDDO
-ENDDO
-! ============================================
-forall(iy=1:nlat,ix=1:nlon,mask_pop(ix,iy))
-    rwaterurbn(ix,iy)=log(pop_dens(ix,iy)/wurbn_tau+1.0)*wurbn_sf   
-end forall
-
-rwaterpond = 0.
-rwaterperm=max(rwaterperm,wperm_default)
-! ============================================
-
-
-
-
 !==
-   implicit none
    !
    CONTAINS
        !
        !-------------------------------------------------
        !
         subroutine init_vectri()
+           implicit none
+           
+           !----- Larva biomass -------------------
+           !=
+             allocate(rmasslarv(0:nlarv))
+             ! mass relationship of larvae - we assume a stage 4 size as Bomblies and 
+             ! we will assume a linear mass increase with age unless find other reference 
+             ! this linear growth rate is very close to that assumed by Bomblies.   
+             do ix=0,nlarv
+                rmasslarv(ix)=float(ix)*rmasslarv_stage4/float(nlarv)
+             end do
+           !=
+           !------ Vector arrays ------------------
+           !=
+             allocate(rvect(0:ninfv,nlon,nlat))
+             allocate(rlarv(0:nlarv,nlon,nlat))
+             
+             rvect(0,:,:)=100*rhost_infect_init*rvect_min             ! fixed density of vectors
+             rvect(ninfv,:,:)=10*rhost_infect_init*rvect_min          ! fixed density of vectors
+             rlarv(:,:,:) = 0.
+             
+             allocate(zsurvp_larv(0:nlarv))
+             
+             zsurvp_larv(:) = 1.
+             
+             allocate(rbitezoo(nlon,nlat))
+             allocate(rzoophilic(nlon,nlat))
+             
+             rbitezoo(:,:)   = 0.
+             rzoophilic(:,:) = 0.
+            
+            allocate(rwaterpond(nlon,nlat))   ! diagnostic 
+            allocate(rwaterperm(nlon,nlat))   ! diagnostic
+            allocate(rwaterurbn(nlon,nlat))   ! diagnostic
+            allocate(rsoilinfil(nlon,nlat))   ! diagnostic --> Needed for the pond scheme
+          !=
+          !------ Carrying capacity ---------
+          !=
+            rwaterpond(:,:) = wpond_min
+            rwaterperm(:,:) = wperm_default
+            rwaterurbn(:,:) = 0.0
 
-           ! call allocate_vectri_fields()
-
-           ! call init_vectri_field()
-
-
-
+            forall(iy=1:nlat,ix=1:nlon,mask_pop(ix,iy))
+                rwaterurbn(ix,iy)=log(pop_dens(ix,iy)/wurbn_tau+1.0)*wurbn_sf   
+            end forall
+            
+            rwaterpond = 0.
+            rwaterperm=max(rwaterperm,wperm_default)
+          !=
+          !---- Soil --------------
+          !=
+            do i=1,SIZE(soil)
+                soil(i)%vals(:,:)=1./3.
+            end do   
+            
+            
+            ! initialize infiltration rates 
+            DO is=1,SIZE(soil)
+               SELECT CASE(soil(is)%varname)
+               CASE("clay")
+                  soil(is)%infil=wpond_infil_clay
+               CASE("silt")
+                  soil(is)%infil=wpond_infil_silt
+               CASE("sand")
+                  soil(is)%infil=wpond_infil_sand
+               END SELECT
+            ENDDO
+            rsoilinfil(:,:)=0.0
+            DO is=1,SIZE(soil)
+               DO iy=1,nlat
+                  DO ix=1,nlon
+                     rsoilinfil(ix,iy)=rsoilinfil(ix,iy)+ &
+                       & soil(is)%vals(ix,iy)*soil(is)%infil
+                     !   soil frac           *infil val
+                  ENDDO
+               ENDDO
+            ENDDO
+         !=
+         !
         end subroutine init_vectri
         !
         !
         !
-        subroutine source_integrate_VECTRI(ix, iy,nbites,V,L)
+        subroutine source_integrate_VECTRI(ix, iy,nbites,rvect,dt)
 
                !
                ! This subroutine ...
@@ -191,14 +200,17 @@ rwaterperm=max(rwaterperm,wperm_default)
                !
                 implicit none
 
+                real, intent(in) :: dt                          ! Time step
                 integer, intent(in) :: ix, iy                   ! Grid point
                 integer, allocatable, intent(in) :: nbites(:,:) ! (nx, ny) Number of infective bites
                 
                 real, allocatable, intent(in) :: rvect(:,:,:)    ! V(1:ninfv, nx, nxy) Adult vector density
-                real, allocatable, intent(in) :: rlarv(:,:,:)    ! L(0:nlarv,nlon,nlat)
-                real, allocatable, intent(in) :: rmasslarv(:)    ! M_L(0:nlarv)  
+               ! real, allocatable, intent(in) :: rlarv(:,:,:)    ! L(0:nlarv,nlon,nlat)
+
+                ! Local use only
 
 
+                !=========================================================
                     ! Safety check and temporary diagnostics
                     !
                     call safe_diag(zvect_density,zvect_one_d_density,zvecinfc,rlarv,rvect,rvect_min,ninfv,&

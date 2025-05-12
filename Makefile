@@ -14,6 +14,7 @@ DEPS_DIR  := ./src/deps # Location of dependency files
 OBJ_DIR   := ./obj      # Location of objects (not in use right now)
 BUILD_DIR := ./build    # Location to build the program
 #-----------------------------------------
+# Touch these lines if the nf-config shell command does not work for your system
 INC_FLAGS := $(shell nf-config --fflags)  # Flags needed to compile a FORTRAN program (NetCDF)
 #INC_LIBS  := $(shell nf-config --flibs)  # Libraries needed to link a FORTRAN program (NetCDF)
 INC_LIBS  := -L/opt/homebrew/Cellar/netcdf_both/lib -lnetcdff -lnetcdf -lnetcdf # For my weird Mac set up
@@ -28,7 +29,14 @@ FAST      := #-O3 -ffast-math -ffixed-line-length-none \
              -march=native #-fopenmp #    # Optimization flag (https://gcc.gnu.org/onlinedocs/gcc/Optimize-Options.html)
              #-ftree-parallelize-loops=$(NPROC)
 EXE       := mobile.out # Name of executable file
-
+#=========
+# Coupling flag
+# Conditional definition of COUPLING_FLAG
+ifeq ($(ENABLE_COUPLING),1)
+  COUPLING_FLAG := -cpp -DCOUPLED
+else
+  COUPLING_FLAG := -cpp
+endif
 #===== Will create the following hierarchy in the folder were is run
 #
 #         |-src (source code)
@@ -40,7 +48,7 @@ EXE       := mobile.out # Name of executable file
 #=================================================
 
 # Declare SOURCE files =======================
-# Find all the F90 (and C?) files we want to compile
+# Find all the f90 files we want to compile
 # Note the single quotes around the * expressions. 
 # The shell will incorrectly expand these otherwise, 
 # but we want to send the * directly to the find command.
@@ -66,34 +74,37 @@ DEPENDS := $(shell find -L $(DEPS_DIR) -name '*.d')
 OBJS := $(addprefix $(strip $(BUILD_DIR))/,$(SRCS:./src/%.f90=%.o))
 
 # Runs last ------------------------------------
-# Does "nothing" but it actually generates the 
-# executable (.out) file by triggering the chain 
-# of rules written below
+# - Does "nothing" but it actually generates the 
+#   executable (.out) file by triggering the chain 
+#   of rules written below
 # Look for $(EXE)!
 all: $(EXE)
 	@echo 'Successful compilation'
 
 # Runs third -----------------------------------
 # Linking step
-# Requires object file of main
-# source file (mobile.f90), mobile.o
+# - Requires object file of main
+#   source file (mobile.f90), mobile.o
 $(EXE): ./build/mobile.o
 	@echo '2.- Link step'
 	@$(FC) $(OBJS) -o $(EXE) $(INC_LIBS) $(PROF_LIB) $(DEBUG) $(FAST) 
 
 # Runs second ----------------------------------
-# Generate main object file only if module object files or
-# main source file are newer than main object.
-# Look for module source files and module objects
+# - Generate main object file only if module object files or
+#   main source file are newer than main object.
+# - Look for module source files and module objects
 ./build/mobile.o: $(MOD2) $(MAIN)
 	@echo '1.- Compile main' $(MAIN)
-	@$(FC) -c $(MAIN) -I $(BUILD_DIR) -o $@ $(INC_FLAGS) $(DEBUG) $(FAST)
+	@$(FC) -c $(MAIN) -I $(BUILD_DIR) -o $@ $(INC_FLAGS) $(DEBUG) $(FAST) $(COUPLING_FLAG)
 
 # Runs first -----------------------------------
 -include $(DEPENDS)
-# Compile module only if its .f90 source
-# file is newer than the corresponding
-# object file, $(MOD2). 
+# - Compile module only if its .f90 source
+#   file is newer than the corresponding
+#   object file, $(MOD2). 
+# - By including the above dependencies the module will 
+#   also be recompiled if any dependency source file
+#   is newer.
 $(MOD2): ./build/%.o : ./src/%.f90 
 	@echo '0.- Compile module' $<
 	@mkdir -p $(BUILD_DIR)
@@ -102,7 +113,7 @@ $(MOD2): ./build/%.o : ./src/%.f90
 # ... -cpp -MD -c ...
 
 
-.PHONY: clean   # Reconfigure hw prerequisite for 'clean' target is treated
+.PHONY: clean   # Reconfigure how prerequisite for 'clean' target is treated
 	            # i.e., always run 'make clean' even if a 'clean' file exists
 clean:
 	rm -rf ${DIR} *.o *.out
