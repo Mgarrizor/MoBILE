@@ -29,7 +29,7 @@ fi
 #           -s Seed for random number generator (reproducibility)
 #           --------------------------------
             output_name='gravity'           #  -o
-            disID=0          # 0: Cholera      -d
+            disID=1          # 0: Cholera      -d
                              # 1: Malaria [non-functional]
                              # 2: Dengue  [non-functional]
             nstep=500        # [days]       #  -n
@@ -58,7 +58,7 @@ fi
             temp_file=$MOBILE'/utils/test_run/t2m.nc'   #  -t
 
             const='params.txt'            #  -c
-            vectri=0
+            vectri=$disID
 
 # Environmental variables
 #--------------------------------

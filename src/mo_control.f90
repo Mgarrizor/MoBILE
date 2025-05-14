@@ -10,16 +10,19 @@ MODULE mo_control
     ! These are overwritten by the input command when running MOBILE (when namelist_inout is called)
     logical :: input    =.true.  ! (from flag) [Non-functional]
     logical :: agents   =.true.  ! Use agents, if false the program falls back to density
-    logical :: coupling =.false. ! Use VECTRI [Non-functional]
-    logical :: radial   =.false. ! If .true. build radial city, otherwise uniform 
-    logical :: network  =.false. ! Empirical network flag [Non-functional]
+    logical :: coupling =.true. ! Use VECTRI [Non-functional]
     logical :: gravity  =.true.  ! Use gravity model
-    logical :: radiation=.false. ! Use radiation model [Non-functional]
-    logical :: diffusion=.false. ! Use diffusion model [Non-functional]
+    logical :: radial   =.false. ! If .true. build radial city, otherwise uniform 
     logical :: random   =.true.  ! Disease initialization - if .true. and rand_seed = .false. random S,I,A,R,B everywhere
                                  !                        - if .true. and rand_seed = .true.  f0 SIAR and random seed for B
                                  !                        - if .false. then f0 SIARB
     logical :: rand_seed=.true.  ! Disease initialization - if .true. random B at a seed and input S,I,A,R
+
+    ! [Non-functional flags]
+    logical :: network  =.false. ! Empirical network flag
+    logical :: radiation=.false. ! Use radiation model
+    logical :: diffusion=.false. ! Use diffusion model
+
 
     ! Output --------------------------------------------------
     ! 2D (x,y) Fields
@@ -31,7 +34,7 @@ MODULE mo_control
     !
     !======= Disease
     logical :: out_S    =.true.  ! Susceptible
-    logical :: out_E    =.false. ! Exposed [Non-functional]
+    logical :: out_E    =.true.  ! Exposed [Non-functional]
     logical :: out_I    =.true.  ! Infected
     logical :: out_A    =.true.  ! Asymptomatic
     logical :: out_R    =.true.  ! Recovered

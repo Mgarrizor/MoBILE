@@ -25,6 +25,11 @@ MODULE mo_const
     real    :: dt = 1.      ! Time step (fixed)
     integer :: ncid_out     ! ID of output NetCDF file
     integer :: ncid_in      ! ID of input NetCDF files
+
+    integer :: TempVarID, ncTempID
+    integer :: RainVarID, ncRainID
+
+
     real    :: eps = 1e-15  ! Numerical tolerance 
     real    :: FillValue    ! Population density FillValue
     real    :: FillValue_rain ! Rainfall Fill Value
@@ -109,6 +114,8 @@ MODULE mo_const
     !********** Clima **************************
     real, allocatable :: rainfall(:,:)    ! 2D long array for rainfall (nxy,t)
     real, allocatable :: t2m(:,:)         ! 2D long array for temperature (nxy,t)
+
+    real :: point_rain, point_temp
 
     !********** NetCDF **************************
     real                 :: fill_pop       !

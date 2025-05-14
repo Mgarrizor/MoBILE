@@ -141,15 +141,12 @@ PROGRAM MOBILE
             call netcdf_read_grid(pop_file,grid,nlon,nlat,nxy,pop_dens,lon_coord,lat_coord,mask_pop)
 
 #ifdef COUPLED
-  ! Declarations or interfaces related to the coupled mode
-  if ((.true.)) then
-    !
-    call init_constants() ! VECTRI-specific constants
-    call init_vectri(pop_dens,pop_dens_2d,mask_pop,nlon,nlat, &
-                               t2m,rainfall)
-    !
-  end if
-  !
+            ! Declarations or interfaces related to the coupled mode
+            !=
+              call init_constants() ! VECTRI-specific constants
+              call init_vectri(pop_dens,mask_pop,nlon,nlat)
+            !=
+            !
 #endif
             
           !=
@@ -195,6 +192,18 @@ PROGRAM MOBILE
         ! - Population density and forcing fields
         !
         ! ************** 0.2 Common information **************
+! Safety ===============
+#ifdef COUPLED     
+        out_D    =.false.
+        out_Q    =.false.
+        out_B    =.false.
+        out_F    =.false.
+        out_A    =.false.
+        coupling =.true.
+#else 
+        coupling =.false.
+#endif
+!=======!
         !
         ! Initialize distance matrix
         call mob_dist_init(nxy,x_coord_1d,y_coord_1d,lon_coord,lat_coord,dx,dy,input,Re,Pi,mask_pop,dist)
@@ -281,7 +290,7 @@ PROGRAM MOBILE
 
         ! 0.5.2 Malaria
         else ![Non-functional]
-          ! Do nothing as source of disease (Vector density) has been initialized in the call to init_vectri
+          ! Do nothing as source of disease (vector density) has been initialized in the above call to init_vectri
         end if
         !
         if (agents) then
@@ -299,6 +308,7 @@ PROGRAM MOBILE
       !
       if(itime==(spin_up+1)) then
         ! Write initial conditions 
+        !call read_slice(itime)
         call netcdf_3D_output(itime-spin_up,Var3D)
         !
         write(*,*) ' '
@@ -334,23 +344,37 @@ PROGRAM MOBILE
             ! 4.2) Source
             !
             ! V(t, ixy, sporo_old) --> V(t + dt, ixy, sporo_new)
-            !  call source_integrate_VECTRI(x_coord_1d(ixy), y_coord_1d(ixy), nbites, V)
             !
-            ! **Input**
-            !   - ixy       - grid point
-            !   - SEIR(:)   - bulk stats?
-            !   - nbites(:) - number/density of infective bites (human to vector). 
-            !                 This (nbites calculation) is handled in the agent methods and thus benefits from agent attributes.
-            !                 We then feed it to VECTRI to inform the sporogonic cycle routine.
-            ! **Output**
-            !   - Updated vector density and sporogony state, V(t + dt, ixy, sporo)
+! Declarations or interfaces related to the coupled mode
+#ifdef COUPLED
+          
+            ! Update point meteo drivers
             !
+             point_rain = rainfall(ixy,itime)
+             point_temp = t2m(ixy,itime)
+            !
+            !==
+               ! Take a VECTRI time step
+               call source_integrate_VECTRI(ixy,nbites,rvect,rlarv,point_rain,point_temp,pop_dens,mask_pop, &
+                                          dt,zvecinfc,zvect_density,zvect_one_d_density)
+               !                            
+   
+               ! **Input from agent methods**
+     
+               !   - nbites(:) - Number/density of infective bites (human to vector). 
+               !                 This (nbites calculation) is handled in the agent methods and thus benefits from agent attributes.
+               !                 We then feed it to VECTRI to inform the sporogonic cycle routine.
+               ! **Output from VECTRI**
+               !   - Updated vector and larval densities as well as sporogony state, V(t + dt, ixy, sporo_new)
+               !
+            !==
             ! 5.2) Health 
               if (.not. agents) then 
                 ! Densities S(t) --> S(t + dt), ...
                 !call bulk_integrate_SEIR_Malaria(ixy,V,...) --> this is the way malaria is currently treated in VECTRI
               end if
               !
+#endif  
             case default
               print *, "Incorrect case, choose disID between: 0 (cholera) and 1 (malaria)"
             STOP
@@ -404,8 +428,10 @@ PROGRAM MOBILE
         !
       end if
       !
-      B_old = B
-      A_old = A
+      if (disID == 0) then
+        B_old = B
+        A_old = A
+      end if
       !
       ! Check for demographic convergence
       conv1 = 0.
@@ -413,8 +439,8 @@ PROGRAM MOBILE
       do ixy = 1,nxy
         if (mask_pop(ixy)) then
             !
-            conv1 = conv1 + (scale*npeop(ixy) - alpha/mu * I(ixy))
-            conv2 = conv2 + (1+ gamma/(rho+mu))*(I(ixy)+ A(ixy)) + S(ixy)  
+           ! conv1 = conv1 + (scale*npeop(ixy) - alpha/mu * I(ixy))
+           ! conv2 = conv2 + (1+ gamma/(rho+mu))*(I(ixy)+ A(ixy)) + S(ixy)  
             !
         end if
       end do

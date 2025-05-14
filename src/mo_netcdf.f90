@@ -12,9 +12,9 @@ MODULE mo_netcdf
 
 !----- VECTRI
 #ifdef COUPLED
-  ! Declarations or interfaces related to the coupled mode
-  USE mo_vectri
-  !
+    ! Declarations or interfaces related to the coupled mode
+    use mo_vectri
+    !
 #endif
 
     implicit none
@@ -61,22 +61,22 @@ MODULE mo_netcdf
 
 
 #ifdef COUPLED
-  ! Declarations or interfaces related to the coupled mode
-  !
-  if ((out_wurbn)) then
-      !
-      status = nf90_put_var(ncid = ncid_out, varid = VarId(var_out), & 
-                           values = rwaterurbn)
-      var_out = var_out + 1!
-  end if 
-  !
-  if ((out_wperm)) then
-      !
-      status = nf90_put_var(ncid = ncid_out, varid = VarId(var_out), & 
-                           values = rwaterperm)
-      var_out = var_out + 1!
-  end if 
-  !
+        ! Declarations or interfaces related to the coupled mode
+        !
+        if ((out_wurbn)) then
+            !
+            status = nf90_put_var(ncid = ncid_out, varid = VarId(var_out), & 
+                                 values = reshape((rwaterurbn), shape = (/ nlon, nlat /)))
+            var_out = var_out + 1!
+        end if 
+        !
+        if ((out_wperm)) then
+            !
+            status = nf90_put_var(ncid = ncid_out, varid = VarId(var_out), & 
+                                 values = reshape((rwaterperm), shape = (/ nlon, nlat /)))
+            var_out = var_out + 1!
+        end if 
+        !
 #endif
         
 
@@ -157,15 +157,27 @@ MODULE mo_netcdf
 
         if ((out_rain)) then
             !
+            !call write_check_3D(itime,rainfall(:,itime),var_out,'NetCDF Status Rainfall')
             call write_check_3D(itime,rainfall(:,itime),var_out,'NetCDF Status Rainfall')
             !
         end if 
 
         if ((out_t2m)) then
             !
+            !call write_check_3D(itime,t2m(:,itime),var_out,'NetCDF Status Temperature')
             call write_check_3D(itime,t2m(:,itime),var_out,'NetCDF Status Temperature')
             !
         end if 
+
+        ! ============================== VECTRI ======================================
+#ifdef COUPLED
+        if ((out_vect)) then
+            !
+            call write_check_3D(itime,zvect_density,var_out,'NetCDF Status Vector density')
+            !
+        end if
+#endif
+
 
       end subroutine netcdf_3D_output
 
@@ -196,6 +208,21 @@ MODULE mo_netcdf
 
       end subroutine
 
+
+      subroutine read_slice(itime)
+        implicit none 
+
+        integer, intent(in) :: itime
+
+        integer :: status
+
+      !  status = nf90_get_var(ncTempID, TempVarID, point_t2m, start=(/1,1,itime/),count=(/nlon,nlat,1/))
+      !  status = nf90_get_var(ncRainID, RainVarID, rain_2d, start=(/1,1,itime/),count=(/nlon,nlat,1/))
+
+      !  point_rain = reshape(rain_2d, (/nxy/))
+
+
+      end subroutine read_slice
 
       subroutine netcdf_init(nlon,nlat,nsteps,lon_coord,lat_coord,Var3D)
         implicit none
@@ -244,9 +271,9 @@ MODULE mo_netcdf
                                       
 
 #ifdef COUPLED
-  ! Declarations or interfaces related to the coupled mode
-  dim = dim +merge(1, 0, out_wurbn) +merge(1, 0, out_wperm)
-  !
+        ! Declarations or interfaces related to the coupled mode
+        dim = dim +merge(1, 0, out_wurbn) +merge(1, 0, out_wperm) +merge(1, 0, out_vect)
+        !
 #endif
 
         allocate(VarId(dim))
@@ -345,27 +372,27 @@ MODULE mo_netcdf
 
 
 #ifdef COUPLED
-  ! Declarations or interfaces related to the coupled mode
-  if ((out_wurbn)) then
-      !
-      VarId(var_out)=var_out
-      status = nf90_def_var(ncid = ncid_out, name = "w_urbn", xtype = nf90_double, &
-                dimids = (/ DimId(1), DimId(2) /), varid = VarId(var_out))
-      status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "units", values = "[fraction]")
-      var_out = var_out + 1
-      !
-  end if
-  !
-  if ((out_wperm)) then
-      !
-      VarId(var_out)=var_out
-      status = nf90_def_var(ncid = ncid_out, name = "w_perm", xtype = nf90_double, &
-                dimids = (/ DimId(1), DimId(2) /), varid = VarId(var_out))
-      status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "units", values = "[fraction]")
-      var_out = var_out + 1
-      !
-  end if
-  !
+        ! Declarations or interfaces related to the coupled mode
+        if ((out_wurbn)) then
+            !
+            VarId(var_out)=var_out
+            status = nf90_def_var(ncid = ncid_out, name = "w_urbn", xtype = nf90_double, &
+                      dimids = (/ DimId(1), DimId(2) /), varid = VarId(var_out))
+            status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "units", values = "[fraction]")
+            var_out = var_out + 1
+            !
+        end if
+        !
+        if ((out_wperm)) then
+            !
+            VarId(var_out)=var_out
+            status = nf90_def_var(ncid = ncid_out, name = "w_perm", xtype = nf90_double, &
+                      dimids = (/ DimId(1), DimId(2) /), varid = VarId(var_out))
+            status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "units", values = "[fraction]")
+            var_out = var_out + 1
+            !
+        end if
+        !
 #endif
         
 
@@ -486,7 +513,20 @@ MODULE mo_netcdf
         end if
 
 
-        ! ============= Hydrology ==================
+        ! ============= Vector ==================
+
+#ifdef COUPLED
+        if (out_vect) then
+          !
+          VarId(var_out)=var_out
+          status = nf90_def_var(ncid = ncid_out, name = "vect", xtype = nf90_double, &
+                    dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
+          status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "units", values = "m^-2")
+          status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "long_name", values = "Vector density")
+          var_out = var_out + 1
+          !
+        end if
+#endif
 
 
         ! Leave define mode to write variable values
@@ -562,7 +602,7 @@ MODULE mo_netcdf
         !real, allocatable, intent(out) :: rainfall(:,:)
 
         ! Local use only 
-        integer :: TimeVarID, TimeDimID, RainVarID, TempVarID
+        integer :: TimeVarID, TimeDimID
         ! -----------------------------------
 
         ! Local use only
@@ -677,22 +717,22 @@ MODULE mo_netcdf
               ! nsteps <= ntime.
 
               ! Open file
-              status = nf90_open(path = rain_file, mode = nf90_nowrite, ncid = ncid_in)
+              status = nf90_open(path = rain_file, mode = nf90_nowrite, ncid = ncRainID)
 
               ! Inquire about time and get its DimID 
               !
               do indx=1,size(time_names)
                 !
-                status = nf90_inq_dimid(ncid=ncid_in, name=time_names(indx), dimid=TimeDimID)
+                status = nf90_inq_dimid(ncid=ncRainID, name=time_names(indx), dimid=TimeDimID)
                 !
                 ! If found we get the length and VarID out
                 if (status == nf90_noerr) then
                   !
-                  status = nf90_inquire_dimension(ncid=ncid_in, dimid=TimeDimID, len=ntime)
-                  status = nf90_inq_varid(ncid=ncid_in, name=time_names(indx), varid=TimeVarID)
+                  status = nf90_inquire_dimension(ncid=ncRainID, dimid=TimeDimID, len=ntime)
+                  status = nf90_inq_varid(ncid=ncRainID, name=time_names(indx), varid=TimeVarID)
                   !
                   allocate(time_coord(ntime))
-                  status = nf90_get_var(ncid=ncid_in, varid=LonVarID, values=time_coord)
+                  status = nf90_get_var(ncid=ncRainID, varid=LonVarID, values=time_coord)
                   !
                   print *, 'NetCDF Status: found rainfall forcing file of len --> ', ntime
                   allocate(grid_clim(nlon,nlat,ntime))
@@ -707,7 +747,7 @@ MODULE mo_netcdf
       
               ! Inquire about rainfall and get its VarID
               do indx=1,size(rain_names)
-                  status = nf90_inq_varid(ncid=ncid_in, name=rain_names(indx), varid=RainVarID)
+                  status = nf90_inq_varid(ncid=ncRainID, name=rain_names(indx), varid=RainVarID)
                   
                   ! If name is found exit do loop
                   if (status == nf90_noerr) then
@@ -721,17 +761,17 @@ MODULE mo_netcdf
               end do
               !
               ! Get rainfall values
-              status = nf90_get_var(ncid=ncid_in, varid=RainVarID, values=grid_clim)
+              status = nf90_get_var(ncid=ncRainID, varid=RainVarID, values=grid_clim)
               !
               rainfall = reshape(grid_clim, (/nxy,ntime/))
               !
               ! Inquire attributes from "time" dimension and "rainfall" variable
               do indx=1,size(att_names)
-                  status = nf90_get_att(ncid=ncid_in, varid=RainVarID, name=att_names(indx), values=rain_att(indx))
-                  status = nf90_get_att(ncid=ncid_in, varid=TimeVarID, name=att_names(indx) , values=time_att(indx))
+                  status = nf90_get_att(ncid=ncRainID, varid=RainVarID, name=att_names(indx), values=rain_att(indx))
+                  status = nf90_get_att(ncid=ncRainID, varid=TimeVarID, name=att_names(indx) , values=time_att(indx))
               end do
               !
-              status = nf90_get_att(ncid=ncid_in, varid=RainVarID, name="_FillValue", values=FillValue_rain) 
+              status = nf90_get_att(ncid=ncRainID, varid=RainVarID, name="_FillValue", values=FillValue_rain) 
               !
               !
               where(rainfall(:,1) == FillValue_rain) mask_pop = .false.  ! Do not simulate over missing rainfall points
@@ -753,26 +793,26 @@ MODULE mo_netcdf
               ! nsteps <= ntime.
 
               ! Open file
-              status = nf90_open(path = t2m_file, mode = nf90_nowrite, ncid = ncid_in)
+              status = nf90_open(path = t2m_file, mode = nf90_nowrite, ncid = ncTempID)
 
               ! Inquire about time and get its DimID 
               !
               do indx=1,size(time_names)
                 !
-                status = nf90_inq_dimid(ncid=ncid_in, name=time_names(indx), dimid=TimeDimID)
+                status = nf90_inq_dimid(ncid=ncTempID, name=time_names(indx), dimid=TimeDimID)
                 !
                 ! If found we get the length and VarID out
                 if (status == nf90_noerr) then
                   !
-                  status = nf90_inquire_dimension(ncid=ncid_in, dimid=TimeDimID, len=ntime)
-                  status = nf90_inq_varid(ncid=ncid_in, name=time_names(indx), varid=TimeVarID)
+                  status = nf90_inquire_dimension(ncid=ncTempID, dimid=TimeDimID, len=ntime)
+                  status = nf90_inq_varid(ncid=ncTempID, name=time_names(indx), varid=TimeVarID)
                   !
                   if (size(time_coord) .ne. ntime) then
                     print *, 'Rainfall and temperature fields have different lenght --> Stop.' 
                     STOP
                   end if
                   !
-                  status = nf90_get_var(ncid=ncid_in, varid=LonVarID, values=time_coord)
+                  status = nf90_get_var(ncid=ncTempID, varid=LonVarID, values=time_coord)
                   !
                   print *, 'NetCDF Status: found temperature forcing file of len --> ', ntime
                   allocate(grid_clim(nlon,nlat,ntime))
@@ -787,7 +827,7 @@ MODULE mo_netcdf
       
               ! Inquire about temperature and get its VarID
               do indx=1,size(temp_names)
-                  status = nf90_inq_varid(ncid=ncid_in, name=temp_names(indx), varid=TempVarID)
+                  status = nf90_inq_varid(ncid=ncTempID, name=temp_names(indx), varid=TempVarID)
                   
                   ! If name is found exit do loop
                   if (status == nf90_noerr) then
@@ -801,16 +841,16 @@ MODULE mo_netcdf
               end do
               !
               ! Get temperature values
-              status = nf90_get_var(ncid=ncid_in, varid=TempVarID, values=grid_clim)
+              status = nf90_get_var(ncid=ncTempID, varid=TempVarID, values=grid_clim)
               !
               t2m = reshape(grid_clim, (/nxy,ntime/))
               !
               ! Inquire attributes from "t2m" variable (time attributes are taken from rainfall file)
               do indx=1,size(att_names)
-                  status = nf90_get_att(ncid=ncid_in, varid=TempVarID, name=att_names(indx), values=temp_att(indx))
+                  status = nf90_get_att(ncid=ncTempID, varid=TempVarID, name=att_names(indx), values=temp_att(indx))
               end do
               !
-              status = nf90_get_att(ncid=ncid_in, varid=TempVarID, name="_FillValue", values=FillValue_temp) 
+              status = nf90_get_att(ncid=ncTempID, varid=TempVarID, name="_FillValue", values=FillValue_temp) 
               !
               where(t2m(:,1) == FillValue_temp) mask_pop = .false.  ! Do not simulate over missing temperature points
               !
