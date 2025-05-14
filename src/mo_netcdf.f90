@@ -66,14 +66,14 @@ MODULE mo_netcdf
         if ((out_wurbn)) then
             !
             status = nf90_put_var(ncid = ncid_out, varid = VarId(var_out), & 
-                                 values = reshape((rwaterurbn), shape = (/ nlon, nlat /)))
+                                 values = reshape((rwaterurbn*wurbn_ratio), shape = (/ nlon, nlat /)))
             var_out = var_out + 1!
         end if 
         !
         if ((out_wperm)) then
             !
             status = nf90_put_var(ncid = ncid_out, varid = VarId(var_out), & 
-                                 values = reshape((rwaterperm), shape = (/ nlon, nlat /)))
+                                 values = reshape((rwaterperm*wperm_ratio), shape = (/ nlon, nlat /)))
             var_out = var_out + 1!
         end if 
         !
@@ -176,6 +176,12 @@ MODULE mo_netcdf
             call write_check_3D(itime,zvect_density,var_out,'NetCDF Status Vector density')
             !
         end if
+        !
+        if ((out_wpond)) then
+            !
+            call write_check_3D(itime,rwaterpond*wpond_ratio,var_out,'NetCDF Status waterpond')
+            !
+        end if
 #endif
 
 
@@ -272,7 +278,8 @@ MODULE mo_netcdf
 
 #ifdef COUPLED
         ! Declarations or interfaces related to the coupled mode
-        dim = dim +merge(1, 0, out_wurbn) +merge(1, 0, out_wperm) +merge(1, 0, out_vect)
+        dim = dim +merge(1, 0, out_wurbn) +merge(1, 0, out_wperm) +merge(1, 0, out_wpond) &
+                  +merge(1, 0, out_vect)
         !
 #endif
 
@@ -376,7 +383,7 @@ MODULE mo_netcdf
         if ((out_wurbn)) then
             !
             VarId(var_out)=var_out
-            status = nf90_def_var(ncid = ncid_out, name = "w_urbn", xtype = nf90_double, &
+            status = nf90_def_var(ncid = ncid_out, name = "wurbn", xtype = nf90_double, &
                       dimids = (/ DimId(1), DimId(2) /), varid = VarId(var_out))
             status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "units", values = "[fraction]")
             var_out = var_out + 1
@@ -386,7 +393,7 @@ MODULE mo_netcdf
         if ((out_wperm)) then
             !
             VarId(var_out)=var_out
-            status = nf90_def_var(ncid = ncid_out, name = "w_perm", xtype = nf90_double, &
+            status = nf90_def_var(ncid = ncid_out, name = "wperm", xtype = nf90_double, &
                       dimids = (/ DimId(1), DimId(2) /), varid = VarId(var_out))
             status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "units", values = "[fraction]")
             var_out = var_out + 1
@@ -513,16 +520,27 @@ MODULE mo_netcdf
         end if
 
 
-        ! ============= Vector ==================
+        ! ============= VECTRI ==================
 
 #ifdef COUPLED
         if (out_vect) then
           !
           VarId(var_out)=var_out
-          status = nf90_def_var(ncid = ncid_out, name = "vect", xtype = nf90_double, &
+          status = nf90_def_var(ncid = ncid_out, name = "vector", xtype = nf90_double, &
                     dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
           status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "units", values = "m^-2")
           status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "long_name", values = "Vector density")
+          var_out = var_out + 1
+          !
+        end if
+        !
+        if (out_wpond) then
+          !
+          VarId(var_out)=var_out
+          status = nf90_def_var(ncid = ncid_out, name = "wpond", xtype = nf90_double, &
+                    dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
+          status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "units", values = "[fraction]")
+          status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "long_name", values = "Fraction of temporary rain-driven ponds")
           var_out = var_out + 1
           !
         end if

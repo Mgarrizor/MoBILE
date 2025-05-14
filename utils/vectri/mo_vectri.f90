@@ -45,7 +45,7 @@ logical :: out_vect   =.true.        ! Vector density
 logical :: out_larv   =.false.       ! Larval density
 logical :: out_wpond  =.true.        ! Pond fraction
 logical :: out_wurbn  =.true.        ! Urban fraction
-logical :: out_wperm  =.false.       ! Permanent fraction
+logical :: out_wperm  =.true.       ! Permanent fraction
 
 !=============================================
 
@@ -139,6 +139,8 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
            ! Local use only
            integer :: ixy, i, is
 
+           npud_scheme=npud_scheme_default
+
         !   allocate(point_t2m(nlon*nlat))
         !   allocate(point_rain(nlon*nlat))
            allocate(nbites(nlon*nlat))
@@ -173,7 +175,6 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
              rlarv(:,:) = 0.
              
              allocate(zsurvp_larv(0:nlarv))
-             
              zsurvp_larv(:) = 1.
             !------------------------------
 
@@ -183,25 +184,24 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
              rbitezoo(:)   = 0.
              rzoophilic(:) = 0.
             
+          !=
+          !------ Hydro/Carrying capacity ---------
+          !=
             allocate(rwaterpond(nlon*nlat))   ! diagnostic 
             allocate(rwaterperm(nlon*nlat))   ! diagnostic
             allocate(rwaterurbn(nlon*nlat))   ! diagnostic
             allocate(rsoilinfil(nlon*nlat))   ! diagnostic --> Needed for the pond scheme
-          !=
-          !------ Carrying capacity ---------
-          !=
-            rwaterpond(:) = wpond_min
-            rwaterperm(:) = wperm_default
-            rwaterurbn(:) = 0.0
 
-            do ixy=1,nlon*nlat
-                if (mask_pop(ixy)) then
-                    rwaterurbn(ixy)=log(pop_dens(ixy)/wurbn_tau+1.0)*wurbn_sf   
-                end if  
-            end do 
+            rwaterpond(:) = 0.
+            rwaterurbn(:) = 0.
+            rwaterperm(:) = 0.
+
+            where(mask_pop) rwaterpond(:) = wpond_min
+            where(mask_pop) rwaterperm(:) = wperm_default
+            where(mask_pop) rwaterurbn(:) = log(pop_dens(:)/wurbn_tau+1.0)*wurbn_sf   
             
-            rwaterpond = 0.
-            rwaterperm=max(rwaterperm,wperm_default)
+           ! rwaterpond = 0.
+           ! rwaterperm=max(rwaterperm,wperm_default)
           !=
           !---- Soil --------------
           !=
@@ -253,7 +253,7 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
                !
                 implicit none
 
-                real, intent(in) :: dt                          ! Time step
+                real, intent(in) :: dt                       ! Time step
                 integer, intent(in) :: ixy                   ! Grid point
 
                 ! Disease
@@ -265,7 +265,7 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
 
                ! Climate 
                 real, intent(in) :: rrain, rtemp     ! (:, t=it) --> (nlat*nlon)
-
+                
                 ! Host
                 real, allocatable, intent(in) :: rpopdensity(:) !(nlon*nlat)
                 logical, allocatable, intent(in) :: mask_pop(:)      ! (nlon*nlat)
@@ -293,6 +293,7 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
                     call safe_diag(zvect_density,zvect_one_d_density,zvecinfc,rlarv,rvect,rvect_min,ninfv,&
                                     rpopdensity,mask_pop,rbitezoo,rzoophilic,dt,ixy) 
 
+                    zmasslarv=SUM(rlarv(:,ixy)*rmasslarv(:))
                     !
                     !--------------------------------------------------
                     ! Meteorological data
