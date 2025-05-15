@@ -304,7 +304,7 @@ PROGRAM MOBILE
       !
       !=  
       endif ! End If time==1 *******************
-      !
+      
       !
       if(itime==(spin_up+1)) then
         ! Write initial conditions 

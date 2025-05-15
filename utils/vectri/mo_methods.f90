@@ -99,16 +99,17 @@ USE mo_constants
           zvect_one_d_density(ixy)=1.0/MAX(zvect_density(ixy),reps)
        !   
           zvecinfc(ixy)=rvect(ninfv,ixy)*zvect_one_d_density(ixy) ! CSPR for malaria
-      !
-       !   ! zoophilic rates - well actually is anthropophilic rate.
+       !        !   ! zoophilic rates - well actually is anthropophilic rate.
        !   WHERE (rpopdensity(:)>=0.0) &
        !        & rzoophilic=1.0-(1.0-rzoophilic_min)*EXP(-rpopdensity(:)/rzoophilic_tau)
        !   rbitezoo(:)=1.0-(1.0-rbiteratio*rzoophilic(:))*dt ! product useful 
        
            if (mask_pop(ixy)) then
+              ! zoophilic rates - well actually is anthropophilic rate.
               rzoophilic(ixy)=1.0-(1.0-rzoophilic_min*EXP(-rpopdensity(ixy)/rzoophilic_tau))
-
+              !
               rvect(0,ixy)=MAX(rvect(0,ixy),rvect_min)
+              !
            end if
 
            rbitezoo(ixy)=1.0-(1.0-rbiteratio*rzoophilic(ixy))*dt ! product useful 
@@ -149,8 +150,8 @@ USE mo_constants
           ! temperature experience by vector is mix of indoor and outdoor 
           ! temperature on a daily timestep
           ztemp=rbeta_indoor*ztempindoor+(1.0-rbeta_indoor)*rtemp
-
-
+        !=
+        !
         end subroutine meteo_point
         !
         !
@@ -679,7 +680,7 @@ USE mo_constants
 
                   ! The previous parameterization linearly reduces survival rate as a function of food limitation
                   ! 
-               !   zmasslarv=SUM(rlarv(:,ixy)*rmasslarv(:))
+                 ! zmasslarv=SUM(rlarv(:,ixy)*rmasslarv(:))
                   zcapacity=MIN(MAX((zbiolimit-zmasslarv)/zbiolimit,0.01),1.0)
                   zsurvp_larv=zsurvp_larv*zcapacity ! Bomblies type capacity limitation
 
