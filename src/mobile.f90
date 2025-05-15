@@ -50,45 +50,70 @@ PROGRAM MOBILE
 
 !  USE omp_lib ! Not in use
 
-
   implicit none
 
 !************************************************
-!=====================================================================
-! Index                           |- mo_dules                        #        
-!                                 |   /subroutines                   #        
-!                                 |                                  #
-! 0) Initialization --------------|                                  #
-!     0.1 Grid & params           |
-!     0.1.1 Input                 |
-!     0.1.2 No input              |
-!                                 |
-!     0.2 Common information      |   
-!                                 |           
-!     0.3 Mobility scheme         |   
-!     0.3.1 Empirical network     |
-!     0.3.2 Gravity model         |
-!     0.3.3 Radiation model       | 
-!                                 |                     
-!     0.4 People representation   |
-!     0.4.1 Agents                |
-!     0.4.2 Density               |
-!                                 |
-!     0.5 Disease source          |
-!     0.5.1 Cholera               |   
-!     0.5.2 Malaria               |                                  #
-!                                 |                                  #
-! 1) Replenishment ---------------|- mo_growth.f90 ------------------#
-!       - Population growth       |                                  #
-! 2) Human mobility --------------|- mo_migration.f90                #
-! 3) Disease ---------------------|- mo_disease.f90                  #
-!       - Cholera                 |                                  #
-!       - Malaria (non-func.)     |                                  #
-! 4) Source of disease -----------|- mo_source.f90                   #
-!       - Bacteria                |                                  #
-!        - Vector (non-func.)     |                                  #
-!                                 |                                  #
-!=====================================================================
+!=======================================================================
+! Index                           |- mo_dules                          #        
+!                                 |   /<<subroutines>>                 #        
+!                                 |                                    #
+! 0) Initialization --------------|                                    #                                   
+!     0.1 Grid & params           |                                    #
+!     0.1.1 Input                 |                                    #
+!     0.1.2 No input              |                                    #
+!                                 |                                    #
+!     0.2 Common information      |                                    #
+!                                 |                                    #
+!     0.3 Mobility scheme         |                                    #
+!     0.3.1 Empirical network     |                                    #
+!     0.3.2 Gravity model         |                                    #
+!     0.3.3 Radiation model       |                                    #
+!                                 |                                    #
+!     0.4 People representation   |                                    #
+!     0.4.1 Agents                |                                    #
+!     0.4.2 Density               |                                    #
+!                                 |                                    #
+!     0.5 Disease source          |                                    #
+!     0.5.1 Cholera               |                                    #
+!     0.5.2 Malaria               |                                    #
+!                                 |                                    #
+!====== Spatial loop =============|                                    #
+! 1) Integrate source of disease  |                                    #
+!                                 |                                    #
+!                                 |- mo_source.f90                     #
+!    1.1) Bacteria (cholera)      |   /<<source_integrate_B>>          #
+!                                 |                                    #
+!                                 |- mo_vectri.f90                     #
+!    1.2) Vectors (malaria,VECTRI)|   /<<source_integrate_VECTRI>>     #
+!                                 |                                    #
+! 2) Update health status (bulk)  |                                    #
+! --> agents=.false.              |                                    #
+!                                 |                                    #
+!                                 |- mo_bulk.f90                       #
+!    2.1) Cholera                 |   /<<bulk_integrate_SIAR_cholera>> #
+!                                 |                                    # 
+!                                 |- mo_????.f90                       #
+!    2.2) Malaria                 |   /<<bulk_integrate_SEIR_Malaria>>  [Non-functional]
+!                                 |                                    #
+!====== Agent loop ===============|                                    #
+! --> agents=.true.               |                                    #
+!                                 |                                    #
+! 3) Disease ---------------------|                                    #
+!                                 |                                    #
+!                                 |-mo_agents.f90                      #
+!    3.1) Update health status    |   /<<agents_update>>               #
+!       - Cholera                 |   disID=0                          #
+!       - Malaria (non-func.)     |   disID=1                          #
+!                                 |                                    #
+!                                 |-mo_agents.f90                      #
+!    3.2) Update population age   |   /<<agents_age>>                  #            
+!                                 |                                    # 
+!                                 |-mo_agents.f90                      #
+!    3.3) Calculate bulk SEIAR    |   /<<agents_diagnostics>>          #
+!       - Cholera                 |   disID=0                          #
+!       - Malaria                 |   disID=1                          #
+!                                 |                                    #
+!=======================================================================
 
   !******************************************************************
   ! Loop counters
@@ -315,8 +340,8 @@ PROGRAM MOBILE
         !
       end if  
       !
-      ! 4) Integrate source of disease --> dt_B/dt, dt_V/dt, ...
-      ! 5) Update health status --> .agents.=false
+      ! 1) Integrate source of disease --> dt_B/dt, dt_V/dt, ...  ==================================================================================
+      ! 2) Update health status --> .agents.=false
       spatial_loop: do ixy=1,nxy 
         if (mask_pop(ixy)) then
           ! 
@@ -327,12 +352,12 @@ PROGRAM MOBILE
             !
             SELECT case(disID)
             case (0) ! Cholera
-            ! 4.1) Source
+            ! 1.1) Source
             !
             ! B(t) --> B(t + dt)
               call source_integrate_B(ixy,itime,nxy,agents,exc,out_rain,exc_clim,rainfall,I,D,Q,mask_grav,B_old,A_old,dt,mu_b,theta_e,theta_p,beta,m,eps,B,F)
             !
-            ! 5.1) Health
+            ! 2.1) Update health status (bulk)
               if (.not. agents) then 
                 ! Densities S(t) --> S(t + dt), ...
                 call bulk_integrate_SIAR_cholera(ixy,S,I,A,R,pop_dens,F,dt,mu,rho,sigma,gamma,alpha,eps)
@@ -341,7 +366,7 @@ PROGRAM MOBILE
               !
             case (1) ! Malaria [Non-functional]
             ! 
-            ! 4.2) Source
+            ! 1.2) Source
             !
             ! V(t, ixy, sporo_old) --> V(t + dt, ixy, sporo_new)
             !
@@ -364,14 +389,18 @@ PROGRAM MOBILE
                !   - nbites(:) - Number/density of infective bites (human to vector). 
                !                 This (nbites calculation) is handled in the agent methods and thus benefits from agent attributes.
                !                 We then feed it to VECTRI to inform the sporogonic cycle routine.
+               
                ! **Output from VECTRI**
+
                !   - Updated vector and larval densities as well as sporogony state, V(t + dt, ixy, sporo_new)
                !
             !==
-            ! 5.2) Health 
-              if (.not. agents) then 
+            ! 2.2) Update health status (bulk)
+              if (.not. agents) then ! [Non-functional]
                 ! Densities S(t) --> S(t + dt), ...
                 !call bulk_integrate_SEIR_Malaria(ixy,V,...) --> this is the way malaria is currently treated in VECTRI
+                print*, "Bulk malaria subroputine is non-functional yet --> Stop"
+                STOP
               end if
               !
 #endif  
@@ -384,7 +413,7 @@ PROGRAM MOBILE
         end if ! End mask_pop(ixy)
       end do spatial_loop
       !
-      ! 6) Update health status --> Agents
+      ! 3) Disease --> Agents ==================================================================================
       if ((agents)) then
 
 
@@ -404,10 +433,12 @@ PROGRAM MOBILE
         call random_seed()
         agent_loop: do iagent=1,nagent   
         !
+        ! 3.1) Update health status
           call agents_update(disID,iagent,itime,nattempt(:))
 
           if (MOD(itime,365)==0) then ! Ignore calendar type
             !
+            ! 3.2) Update population age
             call agents_age(iagent)
             !
           end if
@@ -424,29 +455,32 @@ PROGRAM MOBILE
           !
         end if
         !
+        ! 3.3) Calculate bulk SEIAR
         call agents_diagnostics(disID,scale,nalive)  ! Compute bulk stats
         !
       end if
       !
       if (disID == 0) then
+        !
         B_old = B
         A_old = A
+        !
+        ! Check for demographic convergence (cholera model)
+        conv1 = 0.
+        conv2 = 0.
+        do ixy = 1,nxy
+          if (mask_pop(ixy)) then
+              !
+              conv1 = conv1 + (scale*npeop(ixy) - alpha/mu * I(ixy))
+              conv2 = conv2 + (1+ gamma/(rho+mu))*(I(ixy)+ A(ixy)) + S(ixy)  
+              !
+          end if
+        end do
+        !
       end if
       !
-      ! Check for demographic convergence
-      conv1 = 0.
-      conv2 = 0.
-      do ixy = 1,nxy
-        if (mask_pop(ixy)) then
-            !
-           ! conv1 = conv1 + (scale*npeop(ixy) - alpha/mu * I(ixy))
-           ! conv2 = conv2 + (1+ gamma/(rho+mu))*(I(ixy)+ A(ixy)) + S(ixy)  
-            !
-        end if
-      end do
-      !
-      ! Write 3D fields (x,y,t) here
       if (itime > spin_up) then
+      !=
         !
         if (agents) then
             WRITE(*,'(1a1,A11,F6.1,A2, A16, F6.2, A2, A4, F6.2, A4, F6.2)', advance='no') char(13),'Integrating',(real(itime-spin_up)/(nsteps)*100.),' %', &
@@ -457,8 +491,11 @@ PROGRAM MOBILE
             WRITE(*,'(1a1,A11,F6.1,A2)', advance='no') char(13),'Integrating',(real(itime-spin_up)/(nsteps)*100.),' %'
 
         end if 
+        !
+        ! Write 3D fields (x,y,t) here
         call netcdf_3D_output(itime+1-spin_up,Var3D)
-        
+        !
+      !=
       else
         !
         if (agents) then
