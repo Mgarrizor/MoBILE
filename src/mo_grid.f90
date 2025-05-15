@@ -33,6 +33,8 @@ MODULE mo_grid
         allocate(I(nxy))
         allocate(R(nxy))
 
+      case (2) ! Dengue [Non-functional]
+
       case default
         print *, "Incorrect case, choose disID between: 0 (cholera) and 1 (malaria)"
         STOP

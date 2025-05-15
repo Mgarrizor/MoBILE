@@ -216,11 +216,14 @@ MODULE mo_netcdf
 
 
       subroutine read_slice(itime)
+        ! Test subroutine for better performance (read drivers each time-step)
         implicit none 
 
         integer, intent(in) :: itime
 
         integer :: status
+
+        print*, "You're using a subroutine that does nothing!"
 
       !  status = nf90_get_var(ncTempID, TempVarID, point_t2m, start=(/1,1,itime/),count=(/nlon,nlat,1/))
       !  status = nf90_get_var(ncRainID, RainVarID, rain_2d, start=(/1,1,itime/),count=(/nlon,nlat,1/))

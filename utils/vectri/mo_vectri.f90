@@ -101,8 +101,6 @@ real, allocatable :: rsoilinfil(:)  ! nlat*nlon
 
 ! == Pointers
 
-!real, dimension(:,:), pointer :: pop_dens_ptr
-
 
 
 ! data structure for climate data, soil and hydrological data
@@ -141,8 +139,6 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
 
            npud_scheme=npud_scheme_default
 
-        !   allocate(point_t2m(nlon*nlat))
-        !   allocate(point_rain(nlon*nlat))
            allocate(nbites(nlon*nlat))
            nbites(:) = 0.
 
@@ -293,7 +289,7 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
                     call safe_diag(zvect_density,zvect_one_d_density,zvecinfc,rlarv,rvect,rvect_min,ninfv,&
                                     rpopdensity,mask_pop,rbitezoo,rzoophilic,dt,ixy) 
 
-                    zmasslarv=SUM(rlarv(:,ixy)*rmasslarv(:))
+                    zmasslarv=SUM(rlarv(:,ixy)*rmasslarv(:))  ! Should we move this to where it is actually used?
                     !
                     !--------------------------------------------------
                     ! Meteorological data

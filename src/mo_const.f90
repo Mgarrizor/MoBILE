@@ -107,8 +107,7 @@ MODULE mo_const
     real :: D_pop, H_0, D_grav, m       ! Pop. density and mobility
     real :: B_0, fS_0, fI_0, fA_0, fR_0 ! Initial conditions
 
-    !--- Malaria ---
-
+    !--- VECTRI/Malaria ---
     ! mo_vectri.f90
 
     !********** Clima **************************

@@ -55,9 +55,9 @@ PROGRAM MOBILE
 !************************************************
 !=======================================================================
 ! Index                           |- mo_dules                          #        
-!                                 |   /<<subroutines>>                 #        
+!                                 |   /<<subroutine>>                  #        
 !                                 |                                    #
-! 0) Initialization --------------|                                    #                                   
+! 0) Initialization --------------|------------------------------------#                                   
 !     0.1 Grid & params           |                                    #
 !     0.1.1 Input                 |                                    #
 !     0.1.2 No input              |                                    #
@@ -77,8 +77,8 @@ PROGRAM MOBILE
 !     0.5.1 Cholera               |                                    #
 !     0.5.2 Malaria               |                                    #
 !                                 |                                    #
-!====== Spatial loop =============|                                    #
-! 1) Integrate source of disease  |                                    #
+!====== Spatial loop =============|====================================#
+! 1) Integrate source of disease -|------------------------------------#
 !                                 |                                    #
 !                                 |- mo_source.f90                     #
 !    1.1) Bacteria (cholera)      |   /<<source_integrate_B>>          #
@@ -86,7 +86,7 @@ PROGRAM MOBILE
 !                                 |- mo_vectri.f90                     #
 !    1.2) Vectors (malaria,VECTRI)|   /<<source_integrate_VECTRI>>     #
 !                                 |                                    #
-! 2) Update health status (bulk)  |                                    #
+! 2) Update health status (bulk) -|------------------------------------#
 ! --> agents=.false.              |                                    #
 !                                 |                                    #
 !                                 |- mo_bulk.f90                       #
@@ -95,23 +95,23 @@ PROGRAM MOBILE
 !                                 |- mo_????.f90                       #
 !    2.2) Malaria                 |   /<<bulk_integrate_SEIR_Malaria>>  [Non-functional]
 !                                 |                                    #
-!====== Agent loop ===============|                                    #
+!====== Agent loop ===============|====================================#
 ! --> agents=.true.               |                                    #
 !                                 |                                    #
-! 3) Disease ---------------------|                                    #
+! 3) Disease ---------------------|------------------------------------#
 !                                 |                                    #
 !                                 |-mo_agents.f90                      #
 !    3.1) Update health status    |   /<<agents_update>>               #
-!       - Cholera                 |   disID=0                          #
-!       - Malaria (non-func.)     |   disID=1                          #
+!       - Cholera                 |   disID=0 (SIAR)                   #
+!       - Malaria (non-func.)     |   disID=1 (SEIR)                   #
 !                                 |                                    #
 !                                 |-mo_agents.f90                      #
 !    3.2) Update population age   |   /<<agents_age>>                  #            
 !                                 |                                    # 
 !                                 |-mo_agents.f90                      #
-!    3.3) Calculate bulk SEIAR    |   /<<agents_diagnostics>>          #
-!       - Cholera                 |   disID=0                          #
-!       - Malaria                 |   disID=1                          #
+!    3.3) Calculate bulk stats    |   /<<agents_diagnostics>>          #
+!       - Cholera                 |   disID=0 (SIAR)                   #
+!       - Malaria                 |   disID=1 (SEIR)                   #
 !                                 |                                    #
 !=======================================================================
 
@@ -333,7 +333,6 @@ PROGRAM MOBILE
       !
       if(itime==(spin_up+1)) then
         ! Write initial conditions 
-        !call read_slice(itime)
         call netcdf_3D_output(itime-spin_up,Var3D)
         !
         write(*,*) ' '

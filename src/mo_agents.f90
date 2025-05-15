@@ -1,8 +1,8 @@
 MODULE mo_agents
 ! This module contains methods on agents
 !
-! Slightly modified from 
-! Adrian M. Tompkins 2014 
+! 
+! Adrian M. Tompkins 2014,2024 
 ! tompkins@ictp.it
 
 ! Miguel Garrido Zornoza 2024
@@ -39,8 +39,8 @@ USE mo_control
     type location
         integer :: homeloc ! xy Default/"home" location
         integer :: currloc ! xy Current location
-        integer :: shortloc! xy Fast/short trip location (for now 1)
-        !integer :: longloc ! xy Long trip location [Non-functional]
+        integer :: shortloc! xy Fast/short trip location (for now 1)  Models daily contact rates
+        !integer :: longloc ! xy Long trip location [Non-functional]  Models overnight/long trips, relevant for malaria 
     end type location
 
     type agentID
@@ -146,11 +146,11 @@ USE mo_control
                             if (random .and. (.not. rand_seed)) then
                                 !
                                 call random_number(rand)
-                                stat_health = find_face(rand,cdf_health(:),4)
+                                stat_health = find_face(rand,cdf_health(:),4) ! Random initial status
                                 !
                             else 
                                 !
-                                stat_health = 1
+                                stat_health = 1 !(Susceptible)
                                 !
                             end if
                             people(indx)%health_status%cholera_status%status=stat_health !(S:1, I:2, A:3, R:4)
@@ -205,10 +205,10 @@ USE mo_control
                        call random_number(rand)
                        stat_health = find_face(rand,cdf_health(:),4)
                    else 
-                       stat_health = 1
+                       stat_health = 1 !(Susceptible)
                    end if
-                   people(indx)%health_status%cholera_status%status=stat_health !(Susceptible)
-                   people(indx)%health_status%malaria_status%status=stat_health !(Susceptible)
+                   people(indx)%health_status%cholera_status%status=stat_health 
+                   people(indx)%health_status%malaria_status%status=stat_health 
                    !
                    people(indx)%health_status%active_status%status=.true.       ! All agents are initially alive
                    !
@@ -237,6 +237,7 @@ USE mo_control
         end subroutine agents_init
 
         subroutine agents_diagnostics(idis,scale,counter)
+        !===
             ! Calculate bulk statistics to feed into the disease source integration
             !
             integer, intent(in) :: idis ! 0 = Cholera: SIAR  ; 1 = Malaria: SEIR [Non-functional]
@@ -279,34 +280,53 @@ USE mo_control
             I(:) = scale*I(:)
             A(:) = scale*A(:)
             R(:) = scale*R(:)
-
             !
             case (1) ! Malaria [Non-functional]
+            !
+            S(:) = 0.
+            E(:) = 0.
+            I(:) = 0.
+            R(:) = 0.
+            do iagent = 1,nagent
+                stat =  people(iagent)%health_status%cholera_status%status
+                active  =  people(iagent)%health_status%active_status%status
+                if (stat == 1 .and. active) then
+                    S(people(iagent)%location_status%currloc) = S(people(iagent)%location_status%currloc) + 1.
+                elseif (stat == 2 .and. active) then
+                    E(people(iagent)%location_status%currloc) = E(people(iagent)%location_status%currloc) + 1.
+                elseif (stat == 3 .and. active) then
+                    I(people(iagent)%location_status%currloc) = I(people(iagent)%location_status%currloc) + 1.
+                elseif (stat == 4 .and. active) then
+                    R(people(iagent)%location_status%currloc) = R(people(iagent)%location_status%currloc) + 1.
+                end if 
+
+                if (active) then
+                    counter = counter + 1
+                end if
+
+            end do 
+            S(:) = scale*S(:)
+            E(:) = scale*E(:)
+            I(:) = scale*I(:)
+            R(:) = scale*R(:)
+            !
+            case (2) ! Dengue [Non-functional]
             !
             case default
                 print *, "Incorrect case, choose disID between: 0 (cholera)"
                 STOP
             end SELECT
-
             !
-
+        !===
         end subroutine agents_diagnostics
 
         subroutine agents_update(idis,iagent,itime,n_attempt)
+        !===
             ! This subroutine takes one time step with agent method
             implicit none
             integer, intent(in) :: idis, iagent            ! Disease ID (0: Cholera) and Agent ID (integer number)
             integer, intent(in) :: itime                   ! Time step
             integer, intent(inout) :: n_attempt(:)         ! (nxy) Number of growth attempts at location of iagent at time itime
-
-            ! Local use only
-            real :: rand    ! Uniformly distributed random number to throw dices
-            integer :: stat ! Agent health status
-            integer :: i    ! Agent location
-            integer :: j    ! Location where agent moves
-            logical :: active ! Is the agent alive?
-            logical :: cyc    ! Cycle flag for growth event
-
 
             ! "Implicit" input (from mo_const):
 
@@ -326,13 +346,57 @@ USE mo_control
             SELECT case(idis)
             case (0) ! Cholera
             !
-            ! Events depend on health status and physical location. 
-            active =  people(iagent)%health_status%active_status%status
-            stat   =  people(iagent)%health_status%cholera_status%status
-            i      =  people(iagent)%location_status%currloc
+            call agents_cholera(iagent,itime,n_attempt)
+            !
+            case (1) ! Malaria [Non-functional]
+            ! 
+            call agents_malaria() 
+            !
+            case (2) ! Dengue [Non-functional]
+            !
+            call agents_dengue()
+            !
+            case default
+                print *, "Incorrect case, choose disID between: 0 (cholera), 1 (malaria)"
+                STOP
+            end SELECT
+        !===
+        end subroutine agents_update
+        !
+        !
+        subroutine agents_age(iagent)
+        !===
+            ! This subroutine updates age of agent "iagent" by one year
+            implicit none
+            integer, intent(in) :: iagent ! Agent ID
+            !
+            people(iagent)%agent_ID%age = people(iagent)%agent_ID%age + 1
+            !
+        !===
+        end subroutine agents_age
+        !
+        !
+        subroutine agents_cholera(iagent,itime,n_attempt)
 
+            implicit none
+            integer, intent(in) :: iagent            ! Agent ID (integer number)
+            integer, intent(in) :: itime                   ! Time step
+            integer, intent(inout) :: n_attempt(:)         ! (nxy) Number of growth attempts at location of iagent at time itime
 
-            if (mask_pop(i)) then ! Check if location is populated and driving fields are not missing
+            ! Local use only
+            real :: rand    ! Uniformly distributed random number to throw dices
+            integer :: stat ! Agent health status
+            integer :: i    ! Agent location
+            integer :: j    ! Location where agent moves
+            logical :: active ! Is the agent alive?
+            logical :: cyc    ! Cycle flag for growth event
+
+        ! Events depend on health status and physical location. 
+        active =  people(iagent)%health_status%active_status%status
+        stat   =  people(iagent)%health_status%cholera_status%status
+        i      =  people(iagent)%location_status%currloc
+
+        if (mask_pop(i)) then ! Check if location is populated and driving fields are not missing
                 if (active) then  ! If agent is alive
                     !
                     if (stat == 1) then ! If susceptible (S) *****************************
@@ -543,33 +607,24 @@ USE mo_control
                              n_attempt(i) = n_attempt(i) + 1
                         end if 
                     end do
-                end if ! If active
-            end if ! mask_pop
-            !
-            case (1) ! Malaria [Non-functional]
-            ! 
-            !
-            case default
-                print *, "Incorrect case, choose disID between: 0 (cholera)"
-                STOP
-            end SELECT
-
-
-
-        end subroutine agents_update
-
-
-        subroutine agents_age(iagent)
+                end if ! If (active)
+            end if ! If (mask_pop(currloc))
+        !==
+        end subroutine agents_cholera
         !
-        ! Update age of agent
-            implicit none
-            integer, intent(in) :: iagent ! Agent
-            !
-            people(iagent)%agent_ID%age = people(iagent)%agent_ID%age + 1
-            !
-        end subroutine agents_age
+        !
+        subroutine agents_malaria()
 
 
+        end subroutine agents_malaria
+        !
+        !
+        subroutine agents_dengue()
+
+
+        end subroutine agents_dengue
+        !
+        !
         !============ Functions ===============
         !
         function cumsum(a) result(r)

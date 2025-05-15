@@ -27,6 +27,7 @@ usage() { echo "Usage:              \n
                 -a: Number of agents [Integer]
                 -u: Spin up length [days]
                 -v: VECTRI coupling [0: No, 1: Yes]
+                -i: Vector ID [0: gambiae, ...]
 
                  "; }
 # Resources

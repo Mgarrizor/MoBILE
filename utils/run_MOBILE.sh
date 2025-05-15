@@ -33,7 +33,7 @@ fi
                              # 1: Malaria [non-functional]
                              # 2: Dengue  [non-functional]
             nstep=1095        # [days]       #  -n
-            seed=12345                      #  -s
+            seed=12345                       #  -s
 #          |
 #          |
 #          |==============
@@ -46,7 +46,12 @@ fi
 #           -c Constants/parameters file (example in params.txt)
 #           -m Mobility file   [Non-functional]
 #           -w Hydrology file  [Non-functional]
-#           -v VECTRI          0: Inactive 1: Coupled [Non-functional]
+#           -v VECTRI          0: Inactive 1: Coupled
+#           -i vectorID        0: Anopheles gambiae s. s. [Non-functional]
+#                              1: An. funestus
+#                              2: An. sacharovi     
+#                             10: Aedes albopictus [Dengue non-functional]
+#                             11: Ae. aegypti      [In development]
 #           --------------------------------
             
             nagent=500000                 #  -a
@@ -59,6 +64,7 @@ fi
 
             const='params.txt'            #  -c
             vectri=$disID
+            vectorID=10
 
 # Environmental variables
 #--------------------------------
@@ -90,6 +96,7 @@ var_12="-c ${const}"
 
 # VECTRI
 var_13="-v ${vectri}"
+var_14="-i ${vectorID}"
 
 
 read -r -d '' command << EOM
