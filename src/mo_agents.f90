@@ -19,10 +19,12 @@ USE mo_control
 
     type cholera
         integer :: status ! S=1, I=2, A=3, R=4
+        integer :: infc_dur ! Counter for non-exponentially distributed process
     end type cholera
 
     type malaria
         integer :: status ! S=1, E= 2, I=3, R=4
+        integer :: infc_dur ! Counter for non-exponentially distributed process
     end type malaria
 
     type active
@@ -40,7 +42,8 @@ USE mo_control
         integer :: homeloc ! xy Default/"home" location
         integer :: currloc ! xy Current location
         integer :: shortloc! xy Fast/short trip location (for now 1)  Models daily contact rates
-        !integer :: longloc ! xy Long trip location [Non-functional]  Models overnight/long trips, relevant for malaria 
+        integer :: longloc ! xy Long trip location                    Models overnight/long trips, relevant for malaria 
+        integer :: longdur ! Number of days the agent has been outside (when moved to longloc)
     end type location
 
     type agentID
@@ -153,8 +156,12 @@ USE mo_control
                                 stat_health = 1 !(Susceptible)
                                 !
                             end if
+                            ! Cholera
                             people(indx)%health_status%cholera_status%status=stat_health !(S:1, I:2, A:3, R:4)
+                            people(indx)%health_status%cholera_status%infc_dur=0
+                            ! Malaria
                             people(indx)%health_status%malaria_status%status=stat_health !(S:1, E:2, I:3, R:4)
+                            people(indx)%health_status%malaria_status%infc_dur=0
 
                             people(indx)%health_status%active_status%status=.true.       ! All agents are initially alive
 
@@ -162,11 +169,18 @@ USE mo_control
                             people(indx)%location_status%homeloc=ixy
                             people(indx)%location_status%currloc=ixy
                             !
+                            ! Short/daily contact rates
                             call random_number(rand) ! Asign visiting location based on mobility scheme
-                            j = find_masked_face(ixy,rand,Q_cum(:,ixy),nxy,mask_grav(:,ixy),mask_pop(:)) ! If agent is mobile j /= 0
+                            j = find_masked_face(ixy,rand,Q_short(:,ixy),nxy,mask_grav(:,ixy),mask_pop(:)) ! If agent is mobile j /= 0
                             !
                             people(indx)%location_status%shortloc=j
                             !
+                            ! Long overnight trips
+                            call random_number(rand) ! Asign long term trips based on mobility scheme
+                            j = find_masked_face_2(ixy,rand,Q_long(:,ixy),nxy,mask_pop(:)) ! If agent is mobile j /= 0
+
+                            people(indx)%location_status%longloc=j
+                            people(indx)%location_status%longdur=0
                             indx = indx + 1
                             !
                         end do
@@ -207,8 +221,13 @@ USE mo_control
                    else 
                        stat_health = 1 !(Susceptible)
                    end if
-                   people(indx)%health_status%cholera_status%status=stat_health 
-                   people(indx)%health_status%malaria_status%status=stat_health 
+                   ! Cholera
+                   people(indx)%health_status%cholera_status%status=stat_health !(S:1, I:2, A:3, R:4)
+                   people(indx)%health_status%cholera_status%infc_dur=0
+                   ! Malaria
+                   people(indx)%health_status%malaria_status%status=stat_health !(S:1, E:2, I:3, R:4)
+                   people(indx)%health_status%malaria_status%infc_dur=0
+
                    !
                    people(indx)%health_status%active_status%status=.true.       ! All agents are initially alive
                    !
@@ -216,9 +235,18 @@ USE mo_control
                    people(indx)%location_status%homeloc=loc
                    people(indx)%location_status%currloc=loc
                    !
-                   j = find_masked_face(loc,rand,Q_cum(:,loc),nxy,mask_grav(:,loc),mask_pop(:)) ! If agent is mobile j /= 0
+                   !
+                   ! Short/daily contact rates
+                   j = find_masked_face(loc,rand,Q_short(:,loc),nxy,mask_grav(:,loc),mask_pop(:)) ! If agent is mobile j /= 0
                    !
                    people(indx)%location_status%shortloc=j   
+                   !
+                   ! Long overnight trips
+                   call random_number(rand) ! Asign long term trips based on mobility scheme
+                   j = find_masked_face_2(loc,rand,Q_long(:,loc),nxy,mask_pop(:)) ! If agent is mobile j /= 0
+   
+                   people(indx)%location_status%longloc=j
+                   people(indx)%location_status%longdur=0
                    !
                    indx = indx + 1
                end if
@@ -350,7 +378,7 @@ USE mo_control
             !
             case (1) ! Malaria [Non-functional]
             ! 
-            call agents_malaria() 
+            call agents_malaria(iagent,itime,n_attempt) 
             !
             case (2) ! Dengue [Non-functional]
             !
@@ -380,8 +408,8 @@ USE mo_control
 
             implicit none
             integer, intent(in) :: iagent            ! Agent ID (integer number)
-            integer, intent(in) :: itime                   ! Time step
-            integer, intent(inout) :: n_attempt(:)         ! (nxy) Number of growth attempts at location of iagent at time itime
+            integer, intent(in) :: itime             ! Time step
+            integer, intent(inout) :: n_attempt(:)   ! (nxy) Number of growth attempts at location of iagent at time itime
 
             ! Local use only
             real :: rand    ! Uniformly distributed random number to throw dices
@@ -600,6 +628,8 @@ USE mo_control
                              !
                              if (generate_random() <= 0.51) then ! Sex
                                  people(iagent)%agent_ID%sex=0   ! Female = 0
+                             else  
+                                 people(iagent)%agent_ID%sex=1   ! Male = 1
                              end if
                              cyc=.true.
                              n_attempt(i) = n_attempt(i) + 1
@@ -613,9 +643,112 @@ USE mo_control
         end subroutine agents_cholera
         !
         !
-        subroutine agents_malaria()
+        subroutine agents_malaria(iagent,itime,n_attempt)
+
+            implicit none
+            integer, intent(in) :: iagent            ! Agent ID (integer number)
+            integer, intent(in) :: itime             ! Time step
+            integer, intent(inout) :: n_attempt(:)   ! (nxy) Number of growth attempts at location of iagent at time itime
+
+            ! Local use only
+            ! Local use only
+            real :: rand    ! Uniformly distributed random number to throw dices
+            integer :: stat ! Agent health status
+            integer :: i    ! Agent location
+            integer :: j    ! Location where agent moves
+            logical :: active ! Is the agent alive?
+            logical :: cyc    ! Cycle flag for growth event
+
+        ! Events depend on health status and physical location. 
+        active =  people(iagent)%health_status%active_status%status
+        stat   =  people(iagent)%health_status%cholera_status%status
+        i      =  people(iagent)%location_status%currloc
+
+        if (mask_pop(i)) then ! Check if location is populated and driving fields are not missing
+                if (active) then  ! If agent is alive
+                    !
+                    if (stat == 1) then ! If susceptible (S) *****************************
+                    !
+                    !===
+                        ! Mobility -------------
+                        ! If agent makes a short trip
+                        if ((generate_random() <= m_short)) then ! probability to move = m_short
 
 
+                        ! Mobility -------------
+                        ! If agent makes a long trip
+                        elseif ((generate_random() <= m_long)) then ! probability to move = m_long
+
+
+                        ! Mobility -------------
+                        ! If agent does not move
+                        else 
+
+
+                        end if
+
+                    !==    
+                    !
+                    elseif (stat == 2) then ! If exposed (E) *****************************
+                    !
+                    !===
+                        ! Mobility -------------
+                        ! If agent makes a short trip
+                        if ((generate_random() <= m_short)) then ! probability to move = m_short
+                        
+
+                        ! Mobility -------------
+                        ! If agent makes a long trip
+                        elseif ((generate_random() <= m_long)) then ! probability to move = m_long
+
+
+                        ! Mobility -------------
+                        ! If agent does not move
+                        else 
+
+
+                        end if
+
+                    !==    
+                    !
+                    elseif (stat == 3) then ! If infected (I) *****************************
+                    !
+                    !===
+
+                    !===                  
+                    !
+                    elseif (stat == 4) then ! If recovered (R) *****************************
+                    !
+                    !===
+
+                    end if
+                else ! If agent is dead
+                   !
+                   ! We try to activate agent "iagent" a maximum number of (npeop(i) - nattempt(i)) times
+                   ! If successful then cycle (cyc=.true.) to next agent
+                   cyc=.false.
+                   do while ((n_attempt(i) .le. npeop(i)) .and. (.not. cyc))
+                        if (generate_random() <= mu) then ! Growth event
+                             !
+                             people(iagent)%health_status%active_status%status=.true. ! You are now alive,
+                             people(iagent)%health_status%malaria_status%status=1     ! born susceptible
+                             people(iagent)%agent_ID%age=0                            ! and as a baby
+                             !
+                             if (generate_random() <= 0.51) then ! Sex
+                                 people(iagent)%agent_ID%sex=0   ! Female = 0
+                             else 
+                                 people(iagent)%agent_ID%sex=1   ! Male = 0
+                             end if
+                             cyc=.true.
+                             n_attempt(i) = n_attempt(i) + 1
+                        else
+                             n_attempt(i) = n_attempt(i) + 1
+                        end if 
+                    end do
+                end if ! If (active)
+            end if ! If (mask_pop(currloc))
+        !==
+        !
         end subroutine agents_malaria
         !
         !
@@ -692,6 +825,36 @@ USE mo_control
             end do
             !
         end function find_masked_face
+
+        function find_masked_face_2(i,r,cum_distr,sides,mask_pop) result(roll)
+            ! r: uniformly distributed random number, [0,1)
+            ! cum_distr: cumulative distribution (not normalized) of probabilities (the weights of each face of the dice)
+            ! sides: number of dice sides
+            implicit none
+            !
+            real, intent(in) :: r, cum_distr(sides)
+            logical, intent(in) :: mask_pop(sides)
+            integer, intent(in) :: sides
+            integer             :: roll
+            integer, intent(in) :: i
+            !
+            ! Local use only
+            integer :: j
+            roll = 0
+            !
+            do j = 1, sides
+                if (mask_pop(j)) then ! Efficiency
+                    
+                    if (r <= cum_distr(j)) then
+                        !
+                        roll = j
+                        !
+                        exit
+                    end if 
+                end if
+            end do
+            !
+        end function find_masked_face_2
 
 
         ! Wrap random number subroutine in a function to be able

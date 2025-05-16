@@ -39,8 +39,10 @@ MODULE mo_const
 
     !********** Mobility and people **************************
 
-    real, allocatable :: Q(:,:)           ! Probability of visit matrix (based on the mobility scheme)
-    real, allocatable :: Q_cum(:,:)       ! Mobility "dice", used when agents=.true.
+    real, allocatable :: Q(:,:)           ! Probability of visit matrix for short trips (based on the mobility scheme)
+    real, allocatable :: Q_2(:,:)         ! Probability of visit matrix for long trips  (based on the mobility scheme)
+    real, allocatable :: Q_short(:,:)     ! Mobility "dice" for daily trips, used when agents=.true.
+    real, allocatable :: Q_long(:,:)      ! Mobility "dice" for long overnight trips
     real, allocatable :: dist(:,:)        ! Distance matrix
 
     logical, allocatable :: mask_pop(:)    ! (nxy)
@@ -107,6 +109,17 @@ MODULE mo_const
     real :: D_pop, H_0, D_grav, m       ! Pop. density and mobility
     real :: B_0, fS_0, fI_0, fA_0, fR_0 ! Initial conditions
 
+    !--- Malaria ---
+
+
+
+
+    ! Malaria parameters
+
+    real :: bite_night, bite_day        ! 
+    real :: m_short, m_long, r_ret      !
+    real :: fE_0                        ! Initial conditions
+
     !--- VECTRI/Malaria ---
     ! mo_vectri.f90
 
@@ -161,7 +174,7 @@ MODULE mo_const
         !    
         ! Mobility ---------------------------------------------------
         m=0.6      ! Fraction of mobile population (could be an array to account for age, ... but is set to one constant for now)
-        D_grav=2   ! e-folding distance for gravity model [km] ; Rinaldo et al. (2012) gives 100km for Haiti's epidemic
+        D_grav=2.   ! e-folding distance for gravity model [km] ; Rinaldo et al. (2012) gives 100km for Haiti's epidemic
         beta=1.    ! Contact rate [day^-1]
         
         ! Idealized world parameters
@@ -181,9 +194,34 @@ MODULE mo_const
       case(1)
         disease_name="Malaria"
         !
-        ! Default disease values
+        ! Default disease values for human host
+        bite_night = 0.       ! Base daily probability to get bitten overnight. Should be a function of wellfare index (availability of bednets, ...)
+        bite_day   = 0.       ! Base daily probability to get bitten during day (relevant for short daily trips and vectors that are active during day hours)
 
+        mu   =1./(61.*365)! Background human mortality rate        [day^-1]
+        rho  =1./(3.*365) ! Lost of immunity rate                  [day^-1]
 
+        ! Mobility ---------------------------------------------------
+
+        m_short=0.6   ! Fraction of mobile population making short daily trips (could be an array to account for age, ... but is set to one constant for now)
+        m_long =1.e-3 ! Fraction of mobile population starting long overnight trips
+        r_ret  =1./5. ! Rate of long trip return
+        D_grav =2.    ! e-folding distance for gravity model [km] 
+        beta   =1.    ! Contact rate 
+
+        ! Idealized world parameters
+        D_pop=10   ! e-folding decay for radial city         [km]
+        H_0=2000   ! Human population density at city centre [km^2]
+
+        ! Default initial conditions ---------------------------------
+        
+        fS_0=1.   ! Susceptible  [fraction]
+        fE_0=0.   ! Infected     [fraction]
+        fI_0=0.   ! Asymptomatic [fraction]
+        fR_0=0.   ! Recovered    [fraction]
+
+        ! Attribute list 
+        !att_list = ['m_short','m_long', 'bite_night']
 
       case default
         print *, "Incorrect case, choose disID between: 0 (cholera) and 1 (malaria)"

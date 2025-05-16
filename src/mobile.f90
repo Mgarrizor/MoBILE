@@ -227,6 +227,7 @@ PROGRAM MOBILE
         coupling =.true.
 #else 
         coupling =.false.
+        out_t2m  =.false.
 #endif
 !=======!
         !
@@ -261,7 +262,7 @@ PROGRAM MOBILE
         elseif ((gravity)) then
           print *, 'Mobility scheme: gravity model'
           !
-          call mob_gravity_init(nxy,agents,eps,mask_pop,mask_grav,mask_mob,D_grav,pop_dens,dist,Q,Q_cum)
+          call mob_gravity_init(nxy,agents,eps,mask_pop,mask_grav,mask_mob,D_grav,pop_dens,dist,Q,Q_2,Q_short,Q_long)
           !
         ! 0.3.3 Radiation model
         elseif ((radiation)) then ! [Non-functional]
@@ -320,7 +321,8 @@ PROGRAM MOBILE
         !
         if (agents) then
           deallocate(mask_grav)
-          deallocate(Q_cum)
+          deallocate(Q_short)
+          deallocate(Q_long)
         end if
         !
       call cpu_time(t_finish)
