@@ -27,6 +27,12 @@ USE mo_control
         integer :: infc_dur ! Counter for non-exponentially distributed process
     end type malaria
 
+    type dengue 
+        integer :: status   ! S=1, E=2, I=3, R=4
+        integer :: serotype ! 0,1,2,3,4 Either current serotype (if I/E) or from past infection (if S/R)
+        integer :: infc_dur ! Counter for non-exponentially distributed process
+    end type dengue
+
     type active
         logical :: status ! .false.= Dead ; .true.= Alive
     end type active
@@ -35,6 +41,7 @@ USE mo_control
         type(active)  :: active_status
         type(cholera) :: cholera_status
         type(malaria) :: malaria_status
+        type(dengue)  :: dengue_status
 
     end type health
 
@@ -656,6 +663,7 @@ USE mo_control
             integer :: stat ! Agent health status
             integer :: i    ! Agent location
             integer :: j    ! Location where agent moves
+            integer :: home ! Home location
             logical :: active ! Is the agent alive?
             logical :: cyc    ! Cycle flag for growth event
 
@@ -663,50 +671,79 @@ USE mo_control
         active =  people(iagent)%health_status%active_status%status
         stat   =  people(iagent)%health_status%cholera_status%status
         i      =  people(iagent)%location_status%currloc
+        home   =  people(iagent)%location_status%homeloc
 
         if (mask_pop(i)) then ! Check if location is populated and driving fields are not missing
                 if (active) then  ! If agent is alive
                     !
                     if (stat == 1) then ! If susceptible (S) *****************************
                     !
-                    !===
-                        ! Mobility -------------
-                        ! If agent makes a short trip
-                        if ((generate_random() <= m_short)) then ! probability to move = m_short
-
-
-                        ! Mobility -------------
-                        ! If agent makes a long trip
-                        elseif ((generate_random() <= m_long)) then ! probability to move = m_long
-
-
-                        ! Mobility -------------
-                        ! If agent does not move
+                    !=== 
+                        ! If agent is in longloc
+                        if (i /= home) then
+                            if ((generate_random() <= r_ret)) then ! Return home with some constant probability 
+                                                              ! (this means we have exponentially distributed travelling times
+                                                              ! with folding time = r_ret)
+                                people(iagent)%location_status%currloc = home
+                            else 
+                                ! Update duration of trip (useful if we implement not exponential travelling times)
+                                people(iagent)%location_status%longdur = people(iagent)%location_status%longdur + 1
+                            end if
                         else 
-
-
+                            ! Mobility -------------
+                            ! If agent makes a short trip
+                            if ((generate_random() <= m_short)) then ! probability to move = m_short
+                                j = people(iagent)%location_status%currloc ! Do not update currloc as this is a daily trip
+        
+                            ! Mobility -------------
+                            ! If agent makes a long trip
+                            elseif ((generate_random() <= m_long)) then ! probability to move = m_long
+                                j = people(iagent)%location_status%longloc
+                                people(iagent)%location_status%currloc = j
+                                people(iagent)%location_status%longdur = 1
+    
+                            ! Mobility -------------
+                            ! If agent does not move
+                            else 
+    
+    
+                            end if
                         end if
 
                     !==    
                     !
                     elseif (stat == 2) then ! If exposed (E) *****************************
                     !
-                    !===
-                        ! Mobility -------------
-                        ! If agent makes a short trip
-                        if ((generate_random() <= m_short)) then ! probability to move = m_short
-                        
-
-                        ! Mobility -------------
-                        ! If agent makes a long trip
-                        elseif ((generate_random() <= m_long)) then ! probability to move = m_long
-
-
-                        ! Mobility -------------
-                        ! If agent does not move
+                    !=== 
+                        ! If agent is in longloc
+                        if (i /= home) then
+                            if ((generate_random() <= r_ret)) then ! Return home with some constant probability 
+                                                              ! (this means we have exponentially distributed travelling times
+                                                              ! with folding time = r_ret)
+                                people(iagent)%location_status%currloc = home
+                            else 
+                                ! Update duration of trip (useful if we implement not exponential travelling times)
+                                people(iagent)%location_status%longdur = people(iagent)%location_status%longdur + 1
+                            end if
                         else 
-
-
+                            ! Mobility -------------
+                            ! If agent makes a short trip
+                            if ((generate_random() <= m_short)) then ! probability to move = m_short
+                                j = people(iagent)%location_status%currloc ! Do not update currloc as this is a daily trip
+        
+                            ! Mobility -------------
+                            ! If agent makes a long trip
+                            elseif ((generate_random() <= m_long)) then ! probability to move = m_long
+                                j = people(iagent)%location_status%longloc
+                                people(iagent)%location_status%currloc = j
+                                people(iagent)%location_status%longdur = 1
+    
+                            ! Mobility -------------
+                            ! If agent does not move
+                            else 
+    
+    
+                            end if
                         end if
 
                     !==    
@@ -719,7 +756,40 @@ USE mo_control
                     !
                     elseif (stat == 4) then ! If recovered (R) *****************************
                     !
-                    !===
+                    !=== 
+                        ! If agent is in longloc
+                        if (i /= home) then
+                            if ((generate_random() <= r_ret)) then ! Return home with some constant probability 
+                                                              ! (this means we have exponentially distributed travelling times
+                                                              ! with folding time = r_ret)
+                                people(iagent)%location_status%currloc = home
+                            else 
+                                ! Update duration of trip (useful if we implement not exponential travelling times)
+                                people(iagent)%location_status%longdur = people(iagent)%location_status%longdur + 1
+                            end if
+                        else 
+                            ! Mobility -------------
+                            ! If agent makes a short trip
+                            if ((generate_random() <= m_short)) then ! probability to move = m_short
+                                j = people(iagent)%location_status%currloc ! Do not update currloc as this is a daily trip
+        
+                            ! Mobility -------------
+                            ! If agent makes a long trip
+                            elseif ((generate_random() <= m_long)) then ! probability to move = m_long
+                                j = people(iagent)%location_status%longloc
+                                people(iagent)%location_status%currloc = j
+                                people(iagent)%location_status%longdur = 1
+    
+                            ! Mobility -------------
+                            ! If agent does not move
+                            else 
+    
+    
+                            end if
+                        end if
+
+                    !==    
+                    !
 
                     end if
                 else ! If agent is dead
