@@ -236,7 +236,7 @@ PROGRAM MOBILE
         out_Q    =.false.
         out_B    =.false.
         out_F    =.false.
-        out_A    =.false.
+        out_A    =.true.
         coupling =.true.
 #else 
         coupling =.false.
@@ -394,7 +394,7 @@ PROGRAM MOBILE
             !
             !==
                ! Take a VECTRI time step
-               call source_integrate_VECTRI(ixy,nbites,rvect,rlarv,point_rain,point_temp,pop_dens,mask_pop, &
+               call source_integrate_VECTRI(ixy,nbites,npeop,rvect,rlarv,point_rain,point_temp,pop_dens,mask_pop, &
                                           dt,zvecinfc,zvect_density,zvect_one_d_density,zgonof)
                !                            
                rgonof(ixy) = zgonof
@@ -447,10 +447,15 @@ PROGRAM MOBILE
         ! Reset growth array
         nattempt(:) = 0.
         !
+        ! Reset number of infective bites
+        nbites(:) = 0
+        !
         call random_seed()
+        !
         agent_loop: do iagent=1,nagent   
         !
         ! 3.1) Update health status
+          !
           call agents_update(disID,iagent,itime,nattempt(:),npeop(:),nbites(:))
 
           if (MOD(itime,365)==0) then ! Ignore calendar type
@@ -527,6 +532,7 @@ PROGRAM MOBILE
       end if
       !
   !===
+  print *, sum(rvect(ninfv,:))
   !
   end do time_loop
   !

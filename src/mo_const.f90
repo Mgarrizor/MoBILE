@@ -127,10 +127,20 @@ MODULE mo_const
 
     !--- VECTRI/Malaria ---
     ! mo_vectri.f90
+    integer, parameter :: ninfv=25          ! Resolution of vector parasite development
+    real :: P_v0                         ! Probability of vector to human infection upon biting from fully infective vector
+    real :: P_h0                         ! Probability of human to vector infection upon biting from a susceptible vector to an infected human host
+    real :: P_max  
+
+    real, allocatable :: rvect(:,:)         ! (0:ninfv,nlon*nlat)
     integer, allocatable :: nbites(:)       ! (nlon*nlat) Infective bites
                                             ! (vectors that were infected upon
                                             ! bitting a human)
     real, allocatable :: rgonof(:)          ! Gonotrophic cycle 
+
+    ! Numerical methods
+
+    integer,parameter :: n_cut = 5 ! Sum truncation
 
     !********** Clima **************************
     real, allocatable :: rainfall(:,:)    ! 2D long array for rainfall (nxy,t)
@@ -207,6 +217,9 @@ MODULE mo_const
         iip = 15              ! Intrinsic incubation period [day] [ref:??]
         bite_night = 0.       ! Base daily probability to get bitten overnight. Should be a function of wellfare index (availability of bednets, ...)
         bite_day   = 0.       ! Base daily probability to get bitten during day (relevant for short daily trips and vectors that are active during day hours)
+        P_v0 = 0.3            ! Ermert et al. [ref:missing]
+        P_h0 = 0.2            ! "  "
+        P_max= 0.2            ! Maximum transsion probability
 
         mu   =1./(61.*365)! Background human mortality rate        [day^-1]
         rho  =1./(3.*365) ! Lost of immunity rate                  [day^-1]
@@ -226,8 +239,8 @@ MODULE mo_const
 
         ! Mobility ---------------------------------------------------
 
-        m_short=0.6   ! Fraction of mobile population making short daily trips (could be an array to account for age, ... but is set to one constant for now)
-        m_long =1.e-3 ! Fraction of mobile population starting long overnight trips
+        m_short=0.    ! Fraction of mobile population making short daily trips (could be an array to account for age, ... but is set to one constant for now)
+        m_long =0.    ! Fraction of mobile population starting long overnight trips
         r_ret  =1./5. ! Rate of long trip return
         D_grav =2.    ! e-folding distance for gravity model [km] 
         beta   =1.    ! Contact rate 

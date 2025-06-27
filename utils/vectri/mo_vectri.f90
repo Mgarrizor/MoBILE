@@ -42,10 +42,11 @@ implicit none
 ! Default output if VECTRI is active
 
 logical :: out_vect   =.true.        ! Vector density
+logical :: out_vecinfc=.true.        ! Infective vector density
 logical :: out_larv   =.false.       ! Larval density
 logical :: out_wpond  =.true.        ! Pond fraction
 logical :: out_wurbn  =.true.        ! Urban fraction
-logical :: out_wperm  =.true.       ! Permanent fraction
+logical :: out_wperm  =.true.        ! Permanent fraction
 
 !=============================================
 
@@ -59,7 +60,7 @@ integer :: iounit = 7                            ! mo_interface.f90
 ! resolution of larvae development
 integer, parameter :: nlarv=25                   ! mo_control.f90
 ! resolution of vector parasite development
-integer, parameter :: ninfv=25                   ! mo_control.f90
+!integer, parameter :: ninfv=25                   ! mo_control.f90 --> Moved to AB constants file as needed in agents methods
 !
 !
 real :: rvect_min=1.e-4                          ! mo_control.f90
@@ -67,7 +68,7 @@ real :: rvect_min=1.e-4                          ! mo_control.f90
 !
 ! Vector ================================================
 real, allocatable :: rlarv(:,:) ! (0:nlarv,nlon*nlat)
-real, allocatable :: rvect(:,:) ! (0:ninfv,nlon*nlat)
+!real, allocatable :: rvect(:,:) ! (0:ninfv,nlon*nlat) --> Moved to AB constants file as needed in agent methods
 
 real, allocatable :: rmasslarv(:)     ! mass of larvae (0:nlarv)
 
@@ -236,7 +237,7 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
         !
         !
         !
-        subroutine source_integrate_VECTRI(ixy,nbites,rvect,rlarv,rrain,rtemp,rpopdensity,mask_pop,dt, &
+        subroutine source_integrate_VECTRI(ixy,nbites,npeop,rvect,rlarv,rrain,rtemp,rpopdensity,mask_pop,dt, &
                                                 zvecinfc, zvect_density, zvect_one_d_density, zgonof)
 
                !
@@ -256,6 +257,7 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
 
                 ! Disease
                 integer, allocatable, intent(in) :: nbites(:) ! (nlon*nlat) Number of infective bites
+                integer, allocatable, intent(in) :: npeop(:)  ! (nlon*nlat)
                 
                 ! Vectors
                 real, allocatable, intent(inout) :: rvect(:,:)    ! (0:ninfv,nlon*nlat) Adult vector density
@@ -309,7 +311,8 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
                     ! Sporogonic cycle
                     !---------------------
                     !
-                    !zprobhost2vect = nbites(ixy)
+                    zprobhost2vect = dble(nbites(ixy))/npeop(ixy)
+                    ! 
                     call sporo(ixy,ztemp,zprobhost2vect,zgonof,rvect,zsporof,zdel,nnumeric,ninfv,dt,iounit)
                     !
                     !----------------------------------------------------------------------------------------
