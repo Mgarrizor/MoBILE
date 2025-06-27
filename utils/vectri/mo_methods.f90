@@ -680,7 +680,7 @@ USE mo_constants
 
                   ! The previous parameterization linearly reduces survival rate as a function of food limitation
                   ! 
-                 ! zmasslarv=SUM(rlarv(:,ixy)*rmasslarv(:))
+                  zmasslarv=SUM(rlarv(:,ixy)*rmasslarv(:))
                   zcapacity=MIN(MAX((zbiolimit-zmasslarv)/zbiolimit,0.01),1.0)
                   zsurvp_larv=zsurvp_larv*zcapacity ! Bomblies type capacity limitation
 

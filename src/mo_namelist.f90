@@ -161,10 +161,10 @@ MODULE mo_namelist
             integer:: file_unit, iostats
 
             ! Define namelist
-            namelist /CONST/ mu_B, theta_e, theta_p, mu, rho, sigma, gamma, alpha, beta, &       ! cholera disease params
-                             m, D_grav, D_pop, H_0,                                      &       ! mobility params gravity model
-                             B_0, fS_0, fI_0, fA_0, fR_0                                         ! initial conditions
-            
+            namelist /CONST/ mu_B, theta_e, theta_p, mu, rho, sigma, gamma, alpha, beta, & ! cholera disease params
+                             m_long, m_short, D_grav, D_pop, H_0,                        & ! mobility params gravity model
+                             B_0, fS_0, fI_0, fA_0, fR_0                                   ! initial conditions
+                             
 
             ! Does the file exist?
             inquire (file='namelist.nml', iostat=iostats)

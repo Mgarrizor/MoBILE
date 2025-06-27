@@ -31,6 +31,7 @@ MODULE mo_grid
         allocate(S(nxy))
         allocate(E(nxy))
         allocate(I(nxy))
+        allocate(A(nxy))
         allocate(R(nxy))
 
       case (2) ! Dengue [Non-functional]

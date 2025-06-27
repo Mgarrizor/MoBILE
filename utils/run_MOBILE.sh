@@ -57,14 +57,14 @@ fi
             nagent=500000                 #  -a
             spin_up=0                     #  -u
 
-            # Example path for test run (Senegal CHIRXS processed riving files 2012-2014)
-            rain_file=$MOBILE'/utils/test_run/rain.nc'  #  -p
-            pop_file=$MOBILE'/utils/test_run/pop.nc'    #  -r
+            # Example path for test run (Senegal CHIRXS processed driving files 2012-2014)
+            rain_file=$MOBILE'/utils/test_run/rain.nc'  #  -r
+            pop_file=$MOBILE'/utils/test_run/pop.nc'    #  -p
             temp_file=$MOBILE'/utils/test_run/t2m.nc'   #  -t
 
             const='params.txt'            #  -c
             vectri=$disID
-            vectorID=10
+            vectorID=0
 
 # Environmental variables
 #--------------------------------

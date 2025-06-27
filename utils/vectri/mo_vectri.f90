@@ -78,9 +78,6 @@ real, allocatable :: rzoophilic(:)    ! (nlon*nlat)
 ! 2d arrays =======================================
 !real, allocatable :: point_rain(:)           ! (nlon*nlat)
 !real, allocatable :: point_t2m(:)            ! (nlon*nlat)
-integer, allocatable :: nbites(:)           ! (nlon*nlat) Infective bites
-                                            ! (vectors that were infected upon
-                                            ! bitting a human)
 
 !
 real, allocatable :: zsurvp_larv(:)           ! (0:nlarv)
@@ -89,6 +86,8 @@ real, allocatable :: zvecinfc(:)              ! (nlon*nlat)
  
 real, allocatable :: zvect_density(:)       ! (nlon*nlat)
 real, allocatable :: zvect_one_d_density(:) ! (nlon*nlat)
+
+real :: zgonof !
 !===========================================================
 
 
@@ -179,6 +178,9 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
              
              rbitezoo(:)   = 0.
              rzoophilic(:) = 0.
+
+             allocate(rgonof(nlon*nlat))
+             rgonof(:) = 0.
             
           !=
           !------ Hydro/Carrying capacity ---------
@@ -235,7 +237,7 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
         !
         !
         subroutine source_integrate_VECTRI(ixy,nbites,rvect,rlarv,rrain,rtemp,rpopdensity,mask_pop,dt, &
-                                                zvecinfc, zvect_density, zvect_one_d_density)
+                                                zvecinfc, zvect_density, zvect_one_d_density, zgonof)
 
                !
                ! This subroutine wraps VECTRI's vector methods
@@ -258,6 +260,7 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
                 ! Vectors
                 real, allocatable, intent(inout) :: rvect(:,:)    ! (0:ninfv,nlon*nlat) Adult vector density
                 real, allocatable, intent(inout) :: rlarv(:,:)    ! (0:nlarv,nlon*nlat)
+                real, intent(inout) :: zgonof
 
                ! Climate 
                 real, intent(in) :: rrain, rtemp     ! (:, t=it) --> (nlat*nlon)
@@ -270,7 +273,8 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
                 ! "z" variables
 
                 ! == Vector
-                real :: sum_egg, zdel, zfac, zgonof, zlarvmaturef, zmasslarv, zsurvp_vec
+                
+                real :: sum_egg, zdel, zfac, zlarvmaturef, zmasslarv, zsurvp_vec
                 real, allocatable :: zvect_density(:), zvect_one_d_density(:) !(nlon*nlat)
 
                 ! == Climate
@@ -289,7 +293,7 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
                     call safe_diag(zvect_density,zvect_one_d_density,zvecinfc,rlarv,rvect,rvect_min,ninfv,&
                                     rpopdensity,mask_pop,rbitezoo,rzoophilic,dt,ixy) 
 
-                    zmasslarv=SUM(rlarv(:,ixy)*rmasslarv(:))  ! Should we move this to where it is actually used?
+                    !zmasslarv=SUM(rlarv(:,ixy)*rmasslarv(:))  ! Should we move this to where it is actually used?
                     !
                     !--------------------------------------------------
                     ! Meteorological data
@@ -305,6 +309,7 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
                     ! Sporogonic cycle
                     !---------------------
                     !
+                    !zprobhost2vect = nbites(ixy)
                     call sporo(ixy,ztemp,zprobhost2vect,zgonof,rvect,zsporof,zdel,nnumeric,ninfv,dt,iounit)
                     !
                     !----------------------------------------------------------------------------------------

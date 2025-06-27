@@ -67,7 +67,7 @@ MODULE mo_mobility
     !
     !--------------------------------------------------------------------------------------
     !
-    subroutine mob_gravity_init(nxy,agents,eps,mask_pop,mask_grav,mask_mob,D_grav,pop_dens,dist,Q,Q_2,Q_short,Q_long) !******************************************
+    subroutine mob_gravity_init(nxy,agents,eps,mask_pop,mask_grav,mask_mob,D_grav,pop_dens,dist,Q,Q_2,Q_short,Q_long,m_short,m_long) !******************************************
       ! Calculate 
       !     1) Visit probabilities of gravity model from
       !        Lorenzo et al. (http://doi.org/10.1098/rsif.2014.0840)
@@ -88,6 +88,7 @@ MODULE mo_mobility
       real, allocatable, intent(out)   :: Q_2(:,:)      ! Probability of visit matrix for long trips
       real, allocatable, intent(out)   :: Q_short(:,:)  !
       real, allocatable, intent(out)   :: Q_long(:,:)   !
+      real, intent(in)                 :: m_short, m_long  ! Fraction of short and long trip travellers
 
 
       ! Local use only
@@ -163,16 +164,16 @@ MODULE mo_mobility
                   if (agents) then
                     !
                     
-                    ! To use it as a dice efficiently we switch the indexes in the cummulative array
+                    ! To use the dice efficiently we switch the indexes in the cummulative array
                     ! and apply the cut-off mask asigning zero probability to points outside
                     !
                     if (mask_grav(ixy_2,ixy_1) .and. mask_pop(ixy_2)) then
                       !
                       norm_dice = norm_dice + Q(ixy_1,ixy_2)   ! Include in normalization factor
-                      Q_short(ixy_2,ixy_1) = norm_dice     ! By building the dice in this way we have a 
-                                                   ! cummulative array only in the indexes where this condition is true
-                                                   ! The rest of the indexes have zero value and when the dice is thrown
-                                                   ! they are automatically excluded.
+                      Q_short(ixy_2,ixy_1) = norm_dice         ! By building the dice in this way we have a 
+                                                               ! cummulative array only in the indexes where this condition is true
+                                                               ! The rest of the indexes have zero value and when the dice is thrown
+                                                               ! they are automatically excluded.
                       !
                     else 
                       Q_short(ixy_2,ixy_1) = 0.      ! Redundant since its zero already (written for clarity)
@@ -198,57 +199,59 @@ MODULE mo_mobility
           end if
           !-------------- end short trip
 
-          ! Start long trip weights -------------------------------------------
-          ! Safety check
-          if (norm_long < eps) then
-              Q_2(ixy_1,:) = 0.
-          else
-              ! Calculate weights
-              second_inner_loop: do ixy_2=1,nxy
-                  if (mask_pop(ixy_2)) then
-                    !
-                    Q_2(ixy_1,ixy_2) = pop_dens(ixy_2)/norm
-                    !
-                  end if
-
-                  if (agents) then
-                    !
-                    
-                    ! To use it as a dice efficiently we switch the indexes in the cummulative array
-                    !
-                    if (mask_pop(ixy_2)) then
-                      !
-                      norm_dice = norm_dice + Q_2(ixy_1,ixy_2)   ! Include in normalization factor
-                      Q_long(ixy_2,ixy_1) = norm_dice     ! By building the dice in this way we have a 
-                                                   ! cummulative array only in the indexes where this condition is true
-                                                   ! The rest of the indexes have zero value and when the dice is thrown
-                                                   ! they are automatically excluded.
-                      !
-                    else 
-                      Q_long(ixy_2,ixy_1) = 0.      ! Redundant since its zero already (written for clarity)
-                    end if
-                    !
-                  end if
-              end do second_inner_loop
+          if (m_long > eps) then
+              ! Start long trip weights -------------------------------------------
+              ! Safety check
+              if (norm_long < eps) then
+                  Q_2(ixy_1,:) = 0.
+              else
+                  ! Calculate weights
+                  second_inner_loop: do ixy_2=1,nxy
+                      if (mask_pop(ixy_2)) then
+                        !
+                        Q_2(ixy_1,ixy_2) = pop_dens(ixy_2)/norm
+                        !
+                      end if
+    
+                      if (agents) then
+                        !
+                        
+                        ! To use it as a dice efficiently we switch the indexes in the cummulative array
+                        !
+                        if (mask_pop(ixy_2)) then
+                          !
+                          norm_dice = norm_dice + Q_2(ixy_1,ixy_2)   ! Include in normalization factor
+                          Q_long(ixy_2,ixy_1) = norm_dice     ! By building the dice in this way we have a 
+                                                       ! cummulative array only in the indexes where this condition is true
+                                                       ! The rest of the indexes have zero value and when the dice is thrown
+                                                       ! they are automatically excluded.
+                          !
+                        else 
+                          Q_long(ixy_2,ixy_1) = 0.      ! Redundant since its zero already (written for clarity)
+                        end if
+                        !
+                      end if
+                  end do second_inner_loop
+                  !
+              end if
+              ! Set diagonal back to zero
+              Q_2(ixy_1,ixy_1)= 0.
               !
-          end if
-          ! Set diagonal back to zero
-          Q_2(ixy_1,ixy_1)= 0.
-          !
-          ! Normalize cummulative array
-          if (agents .and. (norm_dice > eps)) then ! Second condition is for cases where there are agents but cannot move anywhere
-            !
-            Q_long(:,ixy_1) = Q_long(:,ixy_1)/norm_dice
-            !
-          else if (agents .and. (norm_dice < eps)) then!
-            print*, 'No mobility for long trip scheme!'
-            STOP
-                                        ! If norm_dice is zero it means agents are at ixy_1
-                                        ! but the "grav" and "pop" masks don't allow them to move.
-                                        ! Since the long trips have no gravity mask this will always be .true.
-            !
-          end if
-          !-------------- end short trip
+              ! Normalize cummulative array
+              if (agents .and. (norm_dice > eps)) then ! Second condition is for cases where there are agents but cannot move anywhere
+                !
+                Q_long(:,ixy_1) = Q_long(:,ixy_1)/norm_dice
+                !
+              else if (agents .and. (norm_dice < eps)) then!
+                print*, 'No mobility for long trip scheme!'
+                STOP
+                                            ! If norm_dice is zero it means agents are at ixy_1
+                                            ! but the "grav" and "pop" masks don't allow them to move.
+                                            ! Since the long trips have no gravity mask this should always be .true. (unless m_long = 0)
+                !
+              end if
+              !-------------- end long trip
+          end if ! (m_long > eps)
           !
         end if ! mask_pop(ixy_1)
       end do outer_loop

@@ -18,18 +18,21 @@ USE mo_control
     ! Type declarations
 
     type cholera
-        integer :: status ! S=1, I=2, A=3, R=4
+        integer :: status   ! S=1, I=2, A=3, R=4
         integer :: infc_dur ! Counter for non-exponentially distributed process
     end type cholera
 
     type malaria
-        integer :: status ! S=1, E= 2, I=3, R=4
-        integer :: infc_dur ! Counter for non-exponentially distributed process
+        integer :: status   ! S=1, E= 2, I=3, A=4, R=5 Susceptible-Exposed-Infected-Asymptomatic-Recovered (SEIAR)
+        real    :: e_l      ! Endemicity level [0,1]
+       ! real    :: par_load ! Parasite load [Gametocytes/microLiter] 
+        integer :: infc_dur ! Infection duration (log-Normal distribution) PfPR ~ 0% (MalariaTheraphy dataset) [ref:m1]
+        !                                                                  PfPR ~75% (Ghanaian cohort)         [ref:m2]
     end type malaria
 
     type dengue 
         integer :: status   ! S=1, E=2, I=3, R=4
-        integer :: serotype ! 0,1,2,3,4 Either current serotype (if I/E) or from past infection (if S/R)
+        integer :: serotype ! 0,1,2,3,4 Either current serotype (if I/E) or serotype from past infection (if S/R)
         integer :: infc_dur ! Counter for non-exponentially distributed process
     end type dengue
 
@@ -55,7 +58,7 @@ USE mo_control
 
     type agentID
         integer :: name    ! The name of the agent is an integer
-        integer :: age     ! 0-X   [Non-functional]
+        integer :: age     ! 0-X
         integer :: sex     ! F/M   [Non-functional]
         integer :: wealth  ! L/M/H [Non-functional]
     end type agentID
@@ -75,9 +78,7 @@ USE mo_control
 
         subroutine agents_init(nxy,idis,nagent,npeop,n_attempt,mask_pop,pop_dens,scale,dist)
             ! 
-            ! For now, assume normally distributed population (need mean and std as input
-            ! but for now hardcoded). In the future we could hardcode a set of basic distributions.
-            ! To Do - Initialize agents based on input distributions.
+            ! 
             !
             implicit none
             !
@@ -114,7 +115,8 @@ USE mo_control
             ! the steady-state population density
             norm = sum(pop_dens(:)*(1.+ band)) ! Valid for regular grid (otherwise should be weighted by cell area)
             !
-            scale = norm/nagent
+            scale  = norm/nagent
+            scaleI = 1./scale
             !
             ! Initialize array of types "agent"
             allocate(people(nagent))
@@ -321,6 +323,7 @@ USE mo_control
             S(:) = 0.
             E(:) = 0.
             I(:) = 0.
+            A(:) = 0.
             R(:) = 0.
             do iagent = 1,nagent
                 stat =  people(iagent)%health_status%cholera_status%status
@@ -332,6 +335,8 @@ USE mo_control
                 elseif (stat == 3 .and. active) then
                     I(people(iagent)%location_status%currloc) = I(people(iagent)%location_status%currloc) + 1.
                 elseif (stat == 4 .and. active) then
+                    A(people(iagent)%location_status%currloc) = A(people(iagent)%location_status%currloc) + 1.
+                elseif (stat == 5 .and. active) then
                     R(people(iagent)%location_status%currloc) = R(people(iagent)%location_status%currloc) + 1.
                 end if 
 
@@ -343,6 +348,7 @@ USE mo_control
             S(:) = scale*S(:)
             E(:) = scale*E(:)
             I(:) = scale*I(:)
+            A(:) = scale*A(:)
             R(:) = scale*R(:)
             !
             case (2) ! Dengue [Non-functional]
@@ -355,13 +361,17 @@ USE mo_control
         !===
         end subroutine agents_diagnostics
 
-        subroutine agents_update(idis,iagent,itime,n_attempt)
+        subroutine agents_update(idis,iagent,itime,n_attempt,npeop,nbites)
         !===
             ! This subroutine takes one time step with agent method
             implicit none
-            integer, intent(in) :: idis, iagent            ! Disease ID (0: Cholera) and Agent ID (integer number)
-            integer, intent(in) :: itime                   ! Time step
-            integer, intent(inout) :: n_attempt(:)         ! (nxy) Number of growth attempts at location of iagent at time itime
+            integer, intent(in) :: idis, iagent      ! Disease ID (0: Cholera) and Agent ID (integer number)
+            integer, intent(in) :: itime             ! Time step
+            integer, intent(inout) :: n_attempt(:)   ! (nxy) Number of growth attempts at location of iagent at time itime
+            integer, intent(inout) :: npeop(:)       ! Number of agents in each grid cell 
+            integer, intent(inout) :: nbites(:)      ! (nlon*nlat) Infective bites
+                                                     ! (vectors that were infected upon
+                                                     ! bitting a human)
 
             ! "Implicit" input (from mo_const):
 
@@ -385,7 +395,7 @@ USE mo_control
             !
             case (1) ! Malaria [Non-functional]
             ! 
-            call agents_malaria(iagent,itime,n_attempt) 
+            call agents_malaria(iagent,itime,n_attempt,npeop,nbites) 
             !
             case (2) ! Dengue [Non-functional]
             !
@@ -439,7 +449,7 @@ USE mo_control
                         ! Mobility ==========
                         !
                         ! If agent moves
-                        if ((generate_random() <= m) .and. (mask_mob(i))) then ! probability to move = m ; Are you allowed to move? --> mask_mob
+                        if ((generate_random() < m_short) .and. (mask_mob(i))) then ! probability to move = m ; Are you allowed to move? --> mask_mob
                             !call random_number(rand)
                             ! then go to travel location
                             j = people(iagent)%location_status%shortloc
@@ -543,7 +553,7 @@ USE mo_control
                         ! If agent moves
                         !
                         call random_number(rand)
-                        if ((rand <= m) .and. (mask_mob(i))) then
+                        if ((rand < m_short) .and. (mask_mob(i))) then
                             ! then go to typical short trip location
                             j = people(iagent)%location_status%shortloc 
                             !
@@ -605,7 +615,7 @@ USE mo_control
                     elseif (stat == 4) then ! If recovered (R) *****************************
                         ! Health ============
                         !
-                        ! Lost of immunity R --> S
+                        ! Loss of immunity R --> S
                         if (generate_random() <= rho) then 
                             !
                             people(iagent)%health_status%cholera_status%status=1
@@ -650,12 +660,16 @@ USE mo_control
         end subroutine agents_cholera
         !
         !
-        subroutine agents_malaria(iagent,itime,n_attempt)
+        subroutine agents_malaria(iagent,itime,n_attempt,npeop,nbites)
 
             implicit none
             integer, intent(in) :: iagent            ! Agent ID (integer number)
             integer, intent(in) :: itime             ! Time step
             integer, intent(inout) :: n_attempt(:)   ! (nxy) Number of growth attempts at location of iagent at time itime
+            integer, intent(inout) :: npeop(:)       ! (nxy) Number of agents in each grid cell 
+            integer, intent(inout) :: nbites(:)      ! (nlon*nlat) Infective bites
+                                                     ! (vectors that were infected upon
+                                                     ! bitting a human)
 
             ! Local use only
             ! Local use only
@@ -679,8 +693,12 @@ USE mo_control
                     if (stat == 1) then ! If susceptible (S) *****************************
                     !
                     !=== 
+                        ! Since vector-human interactions are overnight we can neglect the effect of daily trips
+                        ! and therefore treat mobility first and then disease  
+                        ! 1) Mobility ==============================
                         ! If agent is in longloc
                         if (i /= home) then
+                            
                             if ((generate_random() <= r_ret)) then ! Return home with some constant probability 
                                                               ! (this means we have exponentially distributed travelling times
                                                               ! with folding time = r_ret)
@@ -690,25 +708,30 @@ USE mo_control
                                 people(iagent)%location_status%longdur = people(iagent)%location_status%longdur + 1
                             end if
                         else 
-                            ! Mobility -------------
+                            !
                             ! If agent makes a short trip
-                            if ((generate_random() <= m_short)) then ! probability to move = m_short
+                            if ((generate_random() < m_short)) then ! probability to move = m_short
                                 j = people(iagent)%location_status%currloc ! Do not update currloc as this is a daily trip
         
-                            ! Mobility -------------
+                            !
                             ! If agent makes a long trip
-                            elseif ((generate_random() <= m_long)) then ! probability to move = m_long
+                            elseif ((generate_random() < m_long)) then ! probability to move = m_long
+                                
+                                
                                 j = people(iagent)%location_status%longloc
                                 people(iagent)%location_status%currloc = j
                                 people(iagent)%location_status%longdur = 1
     
-                            ! Mobility -------------
+                            !
                             ! If agent does not move
                             else 
     
     
                             end if
                         end if
+                        !
+                        ! 2) Disease ===========================
+
 
                     !==    
                     !
@@ -728,12 +751,12 @@ USE mo_control
                         else 
                             ! Mobility -------------
                             ! If agent makes a short trip
-                            if ((generate_random() <= m_short)) then ! probability to move = m_short
+                            if ((generate_random() < m_short)) then ! probability to move = m_short
                                 j = people(iagent)%location_status%currloc ! Do not update currloc as this is a daily trip
         
                             ! Mobility -------------
                             ! If agent makes a long trip
-                            elseif ((generate_random() <= m_long)) then ! probability to move = m_long
+                            elseif ((generate_random() < m_long)) then ! probability to move = m_long
                                 j = people(iagent)%location_status%longloc
                                 people(iagent)%location_status%currloc = j
                                 people(iagent)%location_status%longdur = 1
@@ -748,13 +771,14 @@ USE mo_control
 
                     !==    
                     !
-                    elseif (stat == 3) then ! If infected (I) *****************************
+                    elseif (stat == 3) then ! If infected symptomatic (I) *****************************
                     !
                     !===
 
                     !===                  
                     !
-                    elseif (stat == 4) then ! If recovered (R) *****************************
+                    !
+                    elseif (stat == 4) then ! If infected asymptomatic (A) *****************************
                     !
                     !=== 
                         ! If agent is in longloc
@@ -770,12 +794,48 @@ USE mo_control
                         else 
                             ! Mobility -------------
                             ! If agent makes a short trip
-                            if ((generate_random() <= m_short)) then ! probability to move = m_short
+                            if ((generate_random() < m_short)) then ! probability to move = m_short
                                 j = people(iagent)%location_status%currloc ! Do not update currloc as this is a daily trip
         
                             ! Mobility -------------
                             ! If agent makes a long trip
-                            elseif ((generate_random() <= m_long)) then ! probability to move = m_long
+                            elseif ((generate_random() < m_long)) then ! probability to move = m_long
+                                j = people(iagent)%location_status%longloc
+                                people(iagent)%location_status%currloc = j
+                                people(iagent)%location_status%longdur = 1
+    
+                            ! Mobility -------------
+                            ! If agent does not move
+                            else 
+    
+    
+                            end if
+                        end if
+
+                    !==    
+                    !
+                    elseif (stat == 5) then ! If recovered (R) *****************************
+                    !
+                    !=== 
+                        ! If agent is in longloc
+                        if (i /= home) then
+                            if ((generate_random() <= r_ret)) then ! Return home with some constant probability 
+                                                              ! (this means we have exponentially distributed travelling times
+                                                              ! with e-folding factor = r_ret)
+                                people(iagent)%location_status%currloc = home
+                            else 
+                                ! Update duration of trip (useful if we implement not exponential travelling times)
+                                people(iagent)%location_status%longdur = people(iagent)%location_status%longdur + 1
+                            end if
+                        else 
+                            ! Mobility -------------
+                            ! If agent makes a short trip
+                            if ((generate_random() < m_short)) then ! probability to move = m_short
+                                j = people(iagent)%location_status%currloc ! Do not update currloc as this is a daily trip
+        
+                            ! Mobility -------------
+                            ! If agent makes a long trip
+                            elseif ((generate_random() < m_long)) then ! probability to move = m_long
                                 j = people(iagent)%location_status%longloc
                                 people(iagent)%location_status%currloc = j
                                 people(iagent)%location_status%longdur = 1
@@ -796,7 +856,7 @@ USE mo_control
                    !
                    ! We try to activate agent "iagent" a maximum number of (npeop(i) - nattempt(i)) times
                    ! If successful then cycle (cyc=.true.) to next agent
-                   cyc=.false.
+                   cyc=.true.
                    do while ((n_attempt(i) .le. npeop(i)) .and. (.not. cyc))
                         if (generate_random() <= mu) then ! Growth event
                              !

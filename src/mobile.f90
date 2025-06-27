@@ -8,9 +8,8 @@ PROGRAM MOBILE
 !                       MoBILE
 !
 !                      (model) by
-!
-!          Adrian M. Tompkins (tompkins@ictp.it) 
-!          Miguel G. Zornoza  (mgarrizoraca@gmail.com)
+! 
+!          M. Garrido Zornoza  (mgarrizoraca@gmail.com)
 !          
 !                      (2024)
 !
@@ -19,11 +18,25 @@ PROGRAM MOBILE
 !
 ! Referenced sources in MoBILE
 !
-! [1] Lorenzo et al. (http://doi.org/10.1098/rsif.2014.0840)
-! [2] Rinaldo et al. (https://doi.org/10.1073/pnas.1203333109)
+! --------- Cholera --------------------
+! [ref:c1] Lorenzo et al. (http://doi.org/10.1098/rsif.2014.0840)
+! [ref:c2] Rinaldo et al. (https://doi.org/10.1073/pnas.1203333109)
 !
+
+
+! --------- Malaria --------------------
+! [ref:m1] Sama et al. 2006a (https://doi.org/10.1016/j.trstmh.2005.11.001)
+! [ref:m2] Bretscher et al. 2011 (https://doi.org/10.1016/j.epidem.2011.03.002)
+! [m3]
+
+
+! --------- Dengue ---------------------
+! [d1]
+! [d2]
+! [d3]
 !
-!
+
+
 !********************************************************************
 !
 !-------------------------------------------------------
@@ -191,7 +204,7 @@ PROGRAM MOBILE
         elseif ((.not. input)) then !--> Idealized world
           ! Namelists
           !=
-            !--Init namelist constants, overriding default --> New parameter values from input
+            !--Init namelist constants, overwritting default --> New parameter values from input
             call namelist_const()
             !
           !=
@@ -262,7 +275,7 @@ PROGRAM MOBILE
         elseif ((gravity)) then
           print *, 'Mobility scheme: gravity model'
           !
-          call mob_gravity_init(nxy,agents,eps,mask_pop,mask_grav,mask_mob,D_grav,pop_dens,dist,Q,Q_2,Q_short,Q_long)
+          call mob_gravity_init(nxy,agents,eps,mask_pop,mask_grav,mask_mob,D_grav,pop_dens,dist,Q,Q_2,Q_short,Q_long,m_short,m_long)
           !
         ! 0.3.3 Radiation model
         elseif ((radiation)) then ! [Non-functional]
@@ -382,24 +395,27 @@ PROGRAM MOBILE
             !==
                ! Take a VECTRI time step
                call source_integrate_VECTRI(ixy,nbites,rvect,rlarv,point_rain,point_temp,pop_dens,mask_pop, &
-                                          dt,zvecinfc,zvect_density,zvect_one_d_density)
+                                          dt,zvecinfc,zvect_density,zvect_one_d_density,zgonof)
                !                            
-   
+               rgonof(ixy) = zgonof
                ! **Input from agent methods**
      
-               !   - nbites(:) - Number/density of infective bites (human to vector). 
-               !                 This (nbites calculation) is handled in the agent methods and thus benefits from agent attributes.
-               !                 We then feed it to VECTRI to inform the sporogonic cycle routine.
+               !   1) nbites(:) - "Success" fraction of infective bites (human to vector). 
+               !                  This (nbites calculation) is handled in the agent methods and thus benefits from agent attributes.
+               !                  We then feed it to VECTRI to inform the sporogonic cycle routine.
                
                ! **Output from VECTRI**
 
-               !   - Updated vector and larval densities as well as sporogony state, V(t + dt, ixy, sporo_new)
+               !   Updated vector and larval densities as well as sporogony state, V(t + dt, ixy, sporo_new):
+               !
+               !   1) rvect(ixy)  - vector density array 
+               !   2) rgonof(ixy) - gonotrophic factor for proportion of susceptible and infective vectors searching for a blood meal
                !
             !==
             ! 2.2) Update health status (bulk)
               if (.not. agents) then ! [Non-functional]
                 ! Densities S(t) --> S(t + dt), ...
-                !call bulk_integrate_SEIR_Malaria(ixy,V,...) --> this is the way malaria is currently treated in VECTRI
+                !call bulk_integrate_SEIR_Malaria(ixy,V,...) --> this is the way malaria is currently handled in VECTRI
                 print*, "Bulk malaria subroputine is non-functional yet --> Stop"
                 STOP
               end if
@@ -435,7 +451,7 @@ PROGRAM MOBILE
         agent_loop: do iagent=1,nagent   
         !
         ! 3.1) Update health status
-          call agents_update(disID,iagent,itime,nattempt(:))
+          call agents_update(disID,iagent,itime,nattempt(:),npeop(:),nbites(:))
 
           if (MOD(itime,365)==0) then ! Ignore calendar type
             !

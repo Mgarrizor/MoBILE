@@ -21,6 +21,7 @@ MODULE mo_const
     integer :: nsteps       ! Number of integration steps (days) (either Namelist of Read from file)
     integer :: nagent       ! Number of agents
     real    :: scale        ! Scale factor to transform numbers into a densities
+    real    :: scaleI       ! Inverse of scale
     integer :: nalive       ! Number of alive agents
     real    :: dt = 1.      ! Time step (fixed)
     integer :: ncid_out     ! ID of output NetCDF file
@@ -112,16 +113,24 @@ MODULE mo_const
     !--- Malaria ---
 
 
-
-
     ! Malaria parameters
 
+    integer :: iip 
     real :: bite_night, bite_day        ! 
-    real :: m_short, m_long, r_ret      !
+    real :: m_short, m_long             ! Fraction of short and long trip travellers
+    real :: r_ret                       ! Time scale for long trip return home
     real :: fE_0                        ! Initial conditions
+
+    real :: e_0, tau_e1, tau_e2, e_th   ! Immunity
+ 
+    real :: alph_max, alph_min          ! Symptomatics
 
     !--- VECTRI/Malaria ---
     ! mo_vectri.f90
+    integer, allocatable :: nbites(:)       ! (nlon*nlat) Infective bites
+                                            ! (vectors that were infected upon
+                                            ! bitting a human)
+    real, allocatable :: rgonof(:)          ! Gonotrophic cycle 
 
     !********** Clima **************************
     real, allocatable :: rainfall(:,:)    ! 2D long array for rainfall (nxy,t)
@@ -160,7 +169,7 @@ MODULE mo_const
         disease_name="Cholera"
         !
         ! Disease ---------------------------------------------------------------------
-        ! - Default disease values from Lorenzo et al. (2014), Rinaldo et al. (2012)
+        ! - Default disease values from [ref:c1], [ref:c2]
         !   and references therein (see Supp. Information in Rinaldo, table S2)
         !
         mu_B =0.2         ! Bacterial decay rate                   [day^-1]
@@ -173,7 +182,7 @@ MODULE mo_const
         alpha=0.004       ! Death rate (infection or other causes) [day^-1]
         !    
         ! Mobility ---------------------------------------------------
-        m=0.6      ! Fraction of mobile population (could be an array to account for age, ... but is set to one constant for now)
+        m_short=0.6      ! Fraction of mobile population (could be an array to account for age, ... but is set to one constant for now)
         D_grav=2.   ! e-folding distance for gravity model [km] ; Rinaldo et al. (2012) gives 100km for Haiti's epidemic
         beta=1.    ! Contact rate [day^-1]
         
@@ -195,11 +204,25 @@ MODULE mo_const
         disease_name="Malaria"
         !
         ! Default disease values for human host
+        iip = 15              ! Intrinsic incubation period [day] [ref:??]
         bite_night = 0.       ! Base daily probability to get bitten overnight. Should be a function of wellfare index (availability of bednets, ...)
         bite_day   = 0.       ! Base daily probability to get bitten during day (relevant for short daily trips and vectors that are active during day hours)
 
         mu   =1./(61.*365)! Background human mortality rate        [day^-1]
         rho  =1./(3.*365) ! Lost of immunity rate                  [day^-1]
+
+        ! Immunity
+
+        e_0    = 0.01     ! Base increase in endemicity level [per infectious bite]               [x]
+        tau_e1 = 2*e_0    ! e-folding decay in boosted maternal/naive immunity acquisition (fast) [e_0]
+        tau_e2 = 100*e_0  ! e-folding decay in gradual immunity acquisition (slow)                [e_0]
+        e_th   = 0.001    ! Threshold endemicity level value for R --> S transition               [x]
+
+        ! Symptomatics 
+
+        alph_min = 0.25   ! []
+        alph_max = 1.     !
+
 
         ! Mobility ---------------------------------------------------
 
@@ -222,6 +245,9 @@ MODULE mo_const
 
         ! Attribute list 
         !att_list = ['m_short','m_long', 'bite_night']
+
+      case(2)
+        disease_name="Malaria"
 
       case default
         print *, "Incorrect case, choose disID between: 0 (cholera) and 1 (malaria)"
