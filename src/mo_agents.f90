@@ -26,6 +26,7 @@ USE, INTRINSIC :: ISO_C_BINDING
 
     type malaria
         integer :: status   ! S=1, E= 2, I=3, A=4, R=5 Susceptible-Exposed-Infected-Asymptomatic-Recovered (SEIAR)
+        real    :: EIR_att      ! Entomological inoculation rate
         real    :: e_l      ! Endemicity level [0,1]
        ! real    :: par_load ! Parasite load [Gametocytes/microLiter] 
         integer :: infc_dur ! Infection duration (log-Normal distribution) PfPR ~ 0% (MalariaTheraphy dataset) [ref:m1]
@@ -352,8 +353,9 @@ USE, INTRINSIC :: ISO_C_BINDING
             I(:) = 0.
             A(:) = 0.
             R(:) = 0.
+            EIR(:) = 0.
             do iagent = 1,nagent
-                stat =  people(iagent)%health_status%cholera_status%status
+                stat =  people(iagent)%health_status%malaria_status%status
                 active  =  people(iagent)%health_status%active_status%status
                 if (stat == 1 .and. active) then
                     S(people(iagent)%location_status%currloc) = S(people(iagent)%location_status%currloc) + 1.
@@ -370,6 +372,8 @@ USE, INTRINSIC :: ISO_C_BINDING
                 if (active) then
                     counter = counter + 1
                 end if
+
+                EIR(people(iagent)%location_status%currloc) = EIR(people(iagent)%location_status%currloc) + people(iagent)%health_status%malaria_status%EIR_att
 
             end do 
             S(:) = scale*S(:)
@@ -388,10 +392,14 @@ USE, INTRINSIC :: ISO_C_BINDING
         !===
         end subroutine agents_diagnostics
 
-        subroutine agents_update(idis,iagent,itime,n_attempt,npeop,nbites)
+        subroutine agents_update(idis,iagent,itime,n_attempt,npeop,nbites,m_0,m_1)
         !===
             ! This subroutine takes one time step with agent method
             implicit none
+
+            real, allocatable, intent(in) :: m_0(:)
+            real, allocatable, intent(in) :: m_1(:) ! Vector to host ratio times the vector biting rate
+            
             integer, intent(in) :: idis, iagent      ! Disease ID (0: Cholera) and Agent ID (integer number)
             integer, intent(in) :: itime             ! Time step
             integer, intent(inout) :: n_attempt(:)   ! (nxy) Number of growth attempts at location of iagent at time itime
@@ -399,6 +407,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             integer, intent(inout) :: nbites(:)      ! (nlon*nlat) Infective bites
                                                      ! (vectors that were infected upon
                                                      ! bitting a human)
+
 
             ! "Implicit" input (from mo_const):
 
@@ -422,7 +431,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             case (1) ! Malaria [Non-functional]
             ! 
-            call agents_malaria(iagent,itime,n_attempt,npeop,nbites) 
+            call agents_malaria(iagent,itime,n_attempt,npeop,nbites,m_0,m_1) 
             !
             case (2) ! Dengue [Non-functional]
             !
@@ -687,7 +696,7 @@ USE, INTRINSIC :: ISO_C_BINDING
         end subroutine agents_cholera
         !
         !
-        subroutine agents_malaria(iagent,itime,n_attempt,npeop,nbites)
+        subroutine agents_malaria(iagent,itime,n_attempt,npeop,nbites,m_0,m_1)
 
             implicit none
             integer, intent(in) :: iagent            ! Agent ID (integer number)
@@ -697,6 +706,8 @@ USE, INTRINSIC :: ISO_C_BINDING
             integer, intent(inout) :: nbites(:)      ! (nlon*nlat) Infective bites
                                                      ! (vectors that were infected upon
                                                      ! bitting a human)
+            real, allocatable, intent(in)       :: m_0(:)
+            real, allocatable, intent(in)       :: m_1(:) ! Vector to host ratio times the vector biting rate
 
             ! Local use only
             real :: rand    ! Uniformly distributed random number to throw dices
@@ -714,7 +725,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             ! 0: Human to vector  1: Vector to human
             !
             real :: hbr_0, hbr_1
-            real :: m_0, m_1
+           ! real :: m_0, m_1
             real :: lambda_0, lambda_1
             real :: P_0                     ! Human to vector
             real :: P_1                     ! Vector to human
@@ -722,7 +733,7 @@ USE, INTRINSIC :: ISO_C_BINDING
 
         ! Events depend on health status and physical location. 
         active =  people(iagent)%health_status%active_status%status
-        stat   =  people(iagent)%health_status%cholera_status%status
+        stat   =  people(iagent)%health_status%malaria_status%status
         i      =  people(iagent)%location_status%currloc
         home   =  people(iagent)%location_status%homeloc
  
@@ -732,11 +743,12 @@ USE, INTRINSIC :: ISO_C_BINDING
                 if (active) then  ! If agent is alive
                     !
                     !
+                    ! Since vector-human interactions are overnight we can neglect the effect of daily trips
+                    ! and therefore treat mobility first and then disease  
                     ! 1) Mobility ==============================
                     !
                     if (stat /= 3) then ! If not in symptomatic state
-                    ! Since vector-human interactions are overnight we can neglect the effect of daily trips
-                        ! and therefore treat mobility first and then disease  
+                    !===
                         !
                         ! If agent is in longloc
                         if (i /= home) then
@@ -776,26 +788,45 @@ USE, INTRINSIC :: ISO_C_BINDING
                     end if
                     !
                     j = people(iagent)%location_status%currloc
+                    !
                     ! Human to Vector transmission ------------------------------------------------
                     !
-                    m_0 = rgonof(j)*rvect(0,j)/npeop(j)*scaleI
-                    lambda_0 = m_0*1.
+                    !m_0 = b_rate*rgonof(j)*rvect(0,j)/npeop(j)*scaleI*20
+                    lambda_0 = m_0(j)*1.
                     P_0 = 0.
                     !
-                    ! Vector to human transmission
+                    ! Vector to human transmission ------------------------------------------------
                     !
-                    m_1 = rgonof(j)*rvect(ninfv,j)/npeop(j)*scaleI
-                    lambda_1 = m_1*1.
+                    !m_1 = b_rate*rgonof(j)*rvect(ninfv,j)/npeop(j)*scaleI*20
+                    lambda_1 = m_1(j)*1.
                     P_1 = 0.
-            
-                    if ((lambda_0 > 0.1) .or. (lambda_1 > 0.1)) then
-                        print *, "Out of linear regime --> Stop"
+                    !
+                    !------------------------------------------------------------------------------
+                    !
+                    ! Save entomological inoculation rate
+                    people(iagent)%health_status%malaria_status%EIR_att = lambda_1
+                    !
+                    if ((lambda_0 > 10.) .or. (lambda_1 > 10.)) then
+                        print *, "Out of cubic regime --> Stop", lambda_1, lambda_0, mask_pop(j), npeop(j)
                         STOP 
                     else 
-                        do k = 1,n_cut
-                            P_0 = P_0 + P_max*lambda_0**k*(1-lambda_0)*factorialI(k)*(1-(1-P_h0)**k)
-                            P_1 = P_1 +       lambda_1**k*(1-lambda_1)*factorialI(k)*(1-(1-P_v0)**k)
-                        end do
+
+                        !lambda_0 = min(real(floor(lambda_0/eps)),lambda_0)
+                        !lambda_1 = min(real(floor(lambda_1/eps)),lambda_1)
+
+                        if (lambda_0 > eps) then
+                            do k = 1,n_cut
+                              !  P_0 = P_0 + P_max*lambda_0**k*(1-lambda_0+0.5*lambda_0**2-0.167*lambda_0**3)*factorialI(k)*(1-(1-P_h0)**k)
+                                P_0 = P_0 + P_max*lambda_0**k*exp(-lambda_0)*factorialI(k)*(1-(1-P_h0)**k)
+                            end do
+                        end if 
+                        if (lambda_1 > eps) then
+                            do k = 1,n_cut
+                              !  P_1 = P_1 +       lambda_1**k*(1-lambda_1+0.5*lambda_1**2-0.167*lambda_1**3)*factorialI(k)*(1-(1-P_v0)**k)
+                                P_1 = P_1 +       lambda_1**k*exp(-lambda_1)*factorialI(k)*(1-(1-P_v0)**k)
+                            end do
+                        end if 
+                        
             
                         !if (P_0 < eps) then
                         !    P_0 = 0.
@@ -805,9 +836,9 @@ USE, INTRINSIC :: ISO_C_BINDING
                         !    P_1 = 0.
                         !end if
             
-                        P_0 = min(real(floor(P_0/eps)),P_0)
-                        P_1 = min(real(floor(P_1/eps)),P_1)
-            
+                    !   P_0 = min(real(floor(P_0/eps)),P_0)
+                    !   P_1 = min(real(floor(P_1/eps)),P_1)
+                    !
                     end if
                     !
                     ! 2) Disease ===========================
@@ -815,35 +846,47 @@ USE, INTRINSIC :: ISO_C_BINDING
                     if (stat == 1) then ! If susceptible (S) *****************************
                     !
                     !=== 
-                        
-
+                        !
                         if ((generate_random() < P_1)) then    ! If infected by vector
-                            print *, 'Eureka!', P_1, rvect(ninfv,j), npeop(j)
+                           ! print *, 'Eureka! --> V-H', P_1, lambda_1, rvect(ninfv,j), npeop(j)
                             !
+                            ! Move to Exposed
                             people(iagent)%health_status%malaria_status%status=2
+                            !
+                            ! Intrinsic Incubation Period (IIP)
                             people(iagent)%health_status%malaria_status%infc_dur=iip
                             !
                         end if 
-
-                    !==    
+                        !
+                    !===   
                     !
                     elseif (stat == 2) then ! If exposed (E) *****************************
                     !
                     !===
-                        people(iagent)%health_status%malaria_status%infc_dur=people(iagent)%health_status%malaria_status%infc_dur - 1
                         !
                         if (people(iagent)%health_status%malaria_status%infc_dur == 0) then
-
+                            !
                             ! Transition to symptomatic with probability ...
-                            people(iagent)%health_status%malaria_status%status=3
+                            people(iagent)%health_status%malaria_status%status=4
 
 
                             ! Otherwise asymptomatic
-
-
-                            ! Log-normally distributed times - function of e_l
-                            people(iagent)%health_status%malaria_status%infc_dur=10       
-
+                            !
+                            if (generate_random() < 0.1) then 
+                                print *, 'New chronic asymptomatic', lambda_1
+                                people(iagent)%health_status%malaria_status%infc_dur=150 
+                            else 
+                                ! Log-normally distributed times - function of e_l
+                                people(iagent)%health_status%malaria_status%infc_dur=10
+                            end if
+                            !
+                            !
+                        else 
+                           ! print *, people(iagent)%health_status%malaria_status%infc_dur
+                            !
+                            people(iagent)%health_status%malaria_status%infc_dur=people(iagent)%health_status%malaria_status%infc_dur - 1
+                            !
+                           ! print *, people(iagent)%health_status%malaria_status%infc_dur
                         end if
                     !===
                     !
@@ -853,19 +896,18 @@ USE, INTRINSIC :: ISO_C_BINDING
                     !
                     !===
                         ! Clearance of disease
-                        people(iagent)%health_status%malaria_status%infc_dur=people(iagent)%health_status%malaria_status%infc_dur - 1
-                        !
                         if (people(iagent)%health_status%malaria_status%infc_dur == 0) then
                             people(iagent)%health_status%malaria_status%status=5
+                        else 
+                            people(iagent)%health_status%malaria_status%infc_dur=people(iagent)%health_status%malaria_status%infc_dur - 1
                         end if
                         !
                         ! Human to vector transmission
-                        if ((generate_random() < P_0)) then    ! If infected by vector
+                        if ((generate_random() < P_0)) then    ! If infected by human
                             !
                             nbites(j) = nbites(j) + 1
                             !
                         end if
-
                     !===                  
                     !
                     !
@@ -873,16 +915,20 @@ USE, INTRINSIC :: ISO_C_BINDING
                     !
                     !===
                         ! Clearance of disease
-                        people(iagent)%health_status%malaria_status%infc_dur=people(iagent)%health_status%malaria_status%infc_dur - 1
-                        !
                         if (people(iagent)%health_status%malaria_status%infc_dur == 0) then
                             people(iagent)%health_status%malaria_status%status=5
+                        else 
+                            people(iagent)%health_status%malaria_status%infc_dur=people(iagent)%health_status%malaria_status%infc_dur - 1
                         end if
                         !
                         ! Human to vector transmission
-                        if ((generate_random() < P_0)) then    ! If infected by vector
+                        if ((generate_random() < P_0)) then    ! If infected by human
                             !
+                            !print *, 'Eureka! --> H-V', P_0, lambda_0, rvect(0,j), npeop(j)
+
                             nbites(j) = nbites(j) + 1
+
+                        !    print *, dble(nbites(j))/npeop(j)
                             !
                         end if
                     !==    
@@ -892,7 +938,6 @@ USE, INTRINSIC :: ISO_C_BINDING
 
                     !==    
                     !
-
                     end if
                 else ! If agent is dead
                    !

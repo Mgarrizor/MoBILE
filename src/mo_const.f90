@@ -112,7 +112,7 @@ MODULE mo_const
 
     !--- Malaria ---
 
-
+    real, allocatable :: EIR(:) ! 1D long array for Entomological Inoculation Rate
     ! Malaria parameters
 
     integer :: iip 
@@ -121,13 +121,15 @@ MODULE mo_const
     real :: r_ret                       ! Time scale for long trip return home
     real :: fE_0                        ! Initial conditions
 
+    real :: b_rate                      ! Mosquito biting rate (bites/mosquito/day)
+
     real :: e_0, tau_e1, tau_e2, e_th   ! Immunity
  
     real :: alph_max, alph_min          ! Symptomatics
 
     !--- VECTRI/Malaria ---
     ! mo_vectri.f90
-    integer, parameter :: ninfv=25          ! Resolution of vector parasite development
+    integer, parameter :: ninfv=25       ! Resolution of vector parasite development
     real :: P_v0                         ! Probability of vector to human infection upon biting from fully infective vector
     real :: P_h0                         ! Probability of human to vector infection upon biting from a susceptible vector to an infected human host
     real :: P_max  
@@ -137,10 +139,11 @@ MODULE mo_const
                                             ! (vectors that were infected upon
                                             ! bitting a human)
     real, allocatable :: rgonof(:)          ! Gonotrophic cycle 
+    real, allocatable :: m_0(:), m_1(:)  ! Vector to host ratio times the vector biting rate
 
     ! Numerical methods
 
-    integer,parameter :: n_cut = 5 ! Sum truncation
+    integer,parameter :: n_cut = 3 ! Sum truncation
 
     !********** Clima **************************
     real, allocatable :: rainfall(:,:)    ! 2D long array for rainfall (nxy,t)
@@ -214,12 +217,14 @@ MODULE mo_const
         disease_name="Malaria"
         !
         ! Default disease values for human host
-        iip = 15              ! Intrinsic incubation period [day] [ref:??]
+        iip = 10              ! Intrinsic incubation period [day] [ref:??]
         bite_night = 0.       ! Base daily probability to get bitten overnight. Should be a function of wellfare index (availability of bednets, ...)
         bite_day   = 0.       ! Base daily probability to get bitten during day (relevant for short daily trips and vectors that are active during day hours)
         P_v0 = 0.3            ! Ermert et al. [ref:missing]
         P_h0 = 0.2            ! "  "
         P_max= 0.2            ! Maximum transsion probability
+
+        b_rate = 10.
 
         mu   =1./(61.*365)! Background human mortality rate        [day^-1]
         rho  =1./(3.*365) ! Lost of immunity rate                  [day^-1]
@@ -260,7 +265,7 @@ MODULE mo_const
         !att_list = ['m_short','m_long', 'bite_night']
 
       case(2)
-        disease_name="Malaria"
+        disease_name="Dengue"
 
       case default
         print *, "Incorrect case, choose disID between: 0 (cholera) and 1 (malaria)"

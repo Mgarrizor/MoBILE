@@ -237,10 +237,12 @@ PROGRAM MOBILE
         out_B    =.false.
         out_F    =.false.
         out_A    =.true.
+        out_E    =.true.
         coupling =.true.
 #else 
         coupling =.false.
         out_t2m  =.false.
+        out_EIR  =.false.
 #endif
 !=======!
         !
@@ -248,7 +250,7 @@ PROGRAM MOBILE
         call mob_dist_init(nxy,x_coord_1d,y_coord_1d,lon_coord,lat_coord,dx,dy,input,Re,Pi,mask_pop,dist)
         !
         ! Allocate arrays of disease "disID" (SEIAR)
-        call grid_dis(disID,nxy,S,E,I,A,A_old,R)
+        call grid_dis(disID,nxy,S,E,I,A,A_old,R,EIR)
         !
         !**********************************
         !
@@ -447,16 +449,20 @@ PROGRAM MOBILE
         ! Reset growth array
         nattempt(:) = 0.
         !
-        ! Reset number of infective bites
-        nbites(:) = 0
-        !
+        if (disID == 1) then  
+          ! Reset number of infective bites
+          nbites(:) = 0
+          m_0(:) = b_rate*rgonof(:)*rvect(0,:)/npeop(:)*scaleI*20
+          m_1(:) = b_rate*rgonof(:)*rvect(ninfv,:)/npeop(:)*scaleI*20
+          !
+        end if
         call random_seed()
         !
         agent_loop: do iagent=1,nagent   
         !
         ! 3.1) Update health status
           !
-          call agents_update(disID,iagent,itime,nattempt(:),npeop(:),nbites(:))
+          call agents_update(disID,iagent,itime,nattempt(:),npeop(:),nbites(:),m_0(:),m_1(:))
 
           if (MOD(itime,365)==0) then ! Ignore calendar type
             !
@@ -480,6 +486,11 @@ PROGRAM MOBILE
         ! 3.3) Calculate bulk SEIAR
         call agents_diagnostics(disID,scale,nalive)  ! Compute bulk stats
         !
+        if (disID == 1) then  
+          ! Calculate average EIR
+          where(mask_pop(:)) EIR(:) = EIR(:)/npeop(:)
+          !
+        end if
       end if
       !
       if (disID == 0) then
@@ -532,7 +543,7 @@ PROGRAM MOBILE
       end if
       !
   !===
-  print *, sum(rvect(ninfv,:))
+  !print *, sum(rvect(ninfv,:))
   !
   end do time_loop
   !

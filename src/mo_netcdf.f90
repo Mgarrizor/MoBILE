@@ -188,6 +188,18 @@ MODULE mo_netcdf
             call write_check_3D(itime,rwaterpond*wpond_ratio,var_out,'NetCDF Status waterpond')
             !
         end if
+        !
+        if ((out_EIR)) then
+            !
+            call write_check_3D(itime,EIR,var_out,'NetCDF Status Entomological Inoculation Rate')
+            !
+        end if
+        !
+        if ((out_E)) then
+            !
+            call write_check_3D(itime,E,var_out,'NetCDF Status E')
+            !
+        end if
 #endif
 
 
@@ -277,7 +289,7 @@ MODULE mo_netcdf
 
         ! Horrible, clean it up!
         ! Lon+Lat+Time+ Rest
-        dim = 3 + merge(1, 0, out_pop)+merge(1, 0, out_S)+merge(1, 0, out_E) &
+        dim = 3 + merge(1, 0, out_pop)+merge(1, 0, out_S)  &
                                       +merge(1, 0, out_I)+merge(1, 0, out_R) &
                                       +merge(1, 0, out_B)+merge(1, 0, out_F) &
                                       +merge(1, 0, out_A)+merge(1, 0, out_Q) &
@@ -287,8 +299,9 @@ MODULE mo_netcdf
 
 #ifdef COUPLED
         ! Declarations or interfaces related to the coupled mode
-        dim = dim +merge(1, 0, out_wurbn) +merge(1, 0, out_wperm) +merge(1, 0, out_wpond) &
-                  +merge(1, 0, out_vect) +merge(1, 0, out_vecinfc)
+        dim = dim +merge(1, 0, out_wurbn) +merge(1, 0, out_wperm)   +merge(1, 0, out_wpond) &
+                  +merge(1, 0, out_vect)  +merge(1, 0, out_vecinfc) +merge(1, 0, out_EIR)&
+                  +merge(1, 0, out_E)
         !
 #endif
 
@@ -563,6 +576,28 @@ MODULE mo_netcdf
           status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "long_name", values = "Fraction of temporary rain-driven ponds")
           var_out = var_out + 1
           !
+        end if
+        !
+        if (out_EIR) then
+          !
+          VarId(var_out)=var_out
+          status = nf90_def_var(ncid = ncid_out, name = "EIR", xtype = nf90_double, &
+                    dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
+          status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "units", values = "day^-1")
+          status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "long_name", values = "Entomological Inoculation Rate")
+          var_out = var_out + 1
+          !
+        end if
+        !
+        if ((out_E)) then
+
+            VarId(var_out)=var_out
+            status = nf90_def_var(ncid = ncid_out, name = "E", xtype = nf90_double, &
+                      dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
+            status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "units", values = "km^-2")
+            status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "long_name", values = "Exposed population density")
+            var_out = var_out + 1
+
         end if
 #endif
 

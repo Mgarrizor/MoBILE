@@ -142,6 +142,11 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
            allocate(nbites(nlon*nlat))
            nbites(:) = 0.
 
+           allocate(m_0(nlon*nlat))
+           allocate(m_1(nlon*nlat))
+           m_0(:) = 0.
+           m_1(:) = 0.
+
            !----- Larva biomass -------------------
            !=
              allocate(rmasslarv(0:nlarv))
@@ -333,7 +338,6 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
                     !
                     !-----------------------------------------------------
                     ! Larvae maturation - larvae progression
-                    !
                     !
                     call larv_dev(ixy,dt,iounit,ztempwater,zlarvmaturef,rlarv,nlarv,nnumeric) 
                     !

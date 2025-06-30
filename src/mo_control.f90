@@ -34,7 +34,7 @@ MODULE mo_control
     !
     !======= Disease
     logical :: out_S    =.true.  ! Susceptible
-    logical :: out_E    =.true.  ! Exposed [Non-functional]
+    logical :: out_E    =.true.  ! Exposed
     logical :: out_I    =.true.  ! Infected
     logical :: out_A    =.true.  ! Asymptomatic
     logical :: out_R    =.true.  ! Recovered
@@ -42,6 +42,7 @@ MODULE mo_control
     logical :: out_B    =.true.  ! Bacterial density (could be changed to generic source of disease, e.g., B, V,...)
     logical :: out_F    =.true.  ! Force of infection
     !--- Malaria ----
+    logical :: out_EIR  =.true.  ! Entomological Inoculation Rate
     !
     ! Defined in mo_vectri.f90
     !
