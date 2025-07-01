@@ -27,7 +27,7 @@ PROGRAM MOBILE
 ! --------- Malaria --------------------
 ! [ref:m1] Sama et al. 2006a (https://doi.org/10.1016/j.trstmh.2005.11.001)
 ! [ref:m2] Bretscher et al. 2011 (https://doi.org/10.1016/j.epidem.2011.03.002)
-! [m3]
+! [ref:m3] Nzioki et al. 2023 (https://doi.org/10.1186/s13071-023-05944-5)
 
 
 ! --------- Dengue ---------------------
@@ -134,6 +134,7 @@ PROGRAM MOBILE
   integer :: iagent    ! Agents  (nagents)
   integer :: ixy       ! Space   (nxy = nx*ny = nlon*nlat)
   real :: conv1, conv2
+  real :: dummy
   ! Get time 
   real :: t_start
   real :: t_finish
@@ -452,8 +453,13 @@ PROGRAM MOBILE
         if (disID == 1) then  
           ! Reset number of infective bites
           nbites(:) = 0
-          m_0(:) = b_rate*rgonof(:)*rvect(0,:)/npeop(:)*scaleI*20
-          m_1(:) = b_rate*rgonof(:)*rvect(ninfv,:)/npeop(:)*scaleI*20
+          m_0(:) = b_rate*rgonof(:)*rvect(0,:)/pop_dens(:)*1!npeop(:)*scaleI*20
+          m_1(:) = b_rate*rgonof(:)*rvect(ninfv,:)/pop_dens(:)*1!npeop(:)*scaleI*20
+
+          !where ((pop_dens(:) > 0.) .and. (npeop(:) > 0)) 
+          dummy = sum(scale/npeop(:)/pop_dens(:), mask=((pop_dens(:) > 0.) .and. (npeop(:) > 0)))
+          !end
+          print *, 'Dummy = ', dummy
           !
         end if
         call random_seed()
@@ -462,7 +468,7 @@ PROGRAM MOBILE
         !
         ! 3.1) Update health status
           !
-          call agents_update(disID,iagent,itime,nattempt(:),npeop(:),nbites(:),m_0(:),m_1(:))
+          call agents_update(disID,iagent,itime,nattempt,npeop,nbites,m_0,m_1)
 
           if (MOD(itime,365)==0) then ! Ignore calendar type
             !
@@ -486,12 +492,14 @@ PROGRAM MOBILE
         ! 3.3) Calculate bulk SEIAR
         call agents_diagnostics(disID,scale,nalive)  ! Compute bulk stats
         !
+        ! Post-diagnostics calculations
+        !
         if (disID == 1) then  
           ! Calculate average EIR
           where(mask_pop(:)) EIR(:) = EIR(:)/npeop(:)
           !
         end if
-      end if
+      end if ! End agent methods -------------------------------------------------
       !
       if (disID == 0) then
         !
@@ -543,7 +551,7 @@ PROGRAM MOBILE
       end if
       !
   !===
-  !print *, sum(rvect(ninfv,:))
+  print *, sum(rvect(ninfv,:))
   !
   end do time_loop
   !

@@ -143,7 +143,7 @@ MODULE mo_const
 
     ! Numerical methods
 
-    integer,parameter :: n_cut = 3 ! Sum truncation
+    integer,parameter :: n_cut = 18 ! Sum truncation
 
     !********** Clima **************************
     real, allocatable :: rainfall(:,:)    ! 2D long array for rainfall (nxy,t)
@@ -224,7 +224,7 @@ MODULE mo_const
         P_h0 = 0.2            ! "  "
         P_max= 0.2            ! Maximum transsion probability
 
-        b_rate = 10.
+        b_rate = 20.          ! [ref:mx] Nzioki et al. 2023 mean of 1.6 bites/person/hour from 18:00 - 6:30 (~ 1.6*12.5)
 
         mu   =1./(61.*365)! Background human mortality rate        [day^-1]
         rho  =1./(3.*365) ! Lost of immunity rate                  [day^-1]

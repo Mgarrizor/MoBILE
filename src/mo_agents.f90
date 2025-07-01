@@ -110,7 +110,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             real :: cdf_health(4) ! Cumulative distribution to asign agent health based on initial profile
             real :: cdf(nxy)      ! Cumulative distribution to asign agent location based on human density
             integer :: stat_health
-            real :: band = 0.10
+            real :: band = 0.0
             !
             call random_seed()       ! Each simulation generates a different series of random numbers
 
@@ -123,6 +123,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             scale  = norm/nagent
             scaleI = 1./scale
+            print *, 'Scale factor = ', scale, 'Sum(pop) =', norm
             !
             do k = 1, n_cut
                 !
@@ -397,16 +398,15 @@ USE, INTRINSIC :: ISO_C_BINDING
             ! This subroutine takes one time step with agent method
             implicit none
 
-            real, allocatable, intent(in) :: m_0(:)
-            real, allocatable, intent(in) :: m_1(:) ! Vector to host ratio times the vector biting rate
+            real, allocatable, intent(in) :: m_0(:)  ! Susceptible vector to host ratio times the vector biting rate
+            real, allocatable, intent(in) :: m_1(:)  ! Infective   vector to host ratio times the vector biting rate
             
-            integer, intent(in) :: idis, iagent      ! Disease ID (0: Cholera) and Agent ID (integer number)
-            integer, intent(in) :: itime             ! Time step
-            integer, intent(inout) :: n_attempt(:)   ! (nxy) Number of growth attempts at location of iagent at time itime
-            integer, intent(inout) :: npeop(:)       ! Number of agents in each grid cell 
-            integer, intent(inout) :: nbites(:)      ! (nlon*nlat) Infective bites
-                                                     ! (vectors that were infected upon
-                                                     ! bitting a human)
+            integer, intent(in) :: idis              ! Disease ID (0: Cholera, 1: Malaria)
+            integer, intent(in) :: iagent            ! Agent ID (integer number)
+            integer, intent(in) :: itime             ! Current time step
+            integer, allocatable, intent(inout) :: n_attempt(:)   ! (nxy) Number of growth attempts at location of iagent at time itime
+            integer, allocatable, intent(inout) :: npeop(:)       ! (nxy) Number of agents in each grid cell 
+            integer, allocatable, intent(inout) :: nbites(:)      ! (nxy) Infective bites (vectors that were infected upon bitting a human)
 
 
             ! "Implicit" input (from mo_const):
@@ -462,7 +462,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             implicit none
             integer, intent(in) :: iagent            ! Agent ID (integer number)
             integer, intent(in) :: itime             ! Time step
-            integer, intent(inout) :: n_attempt(:)   ! (nxy) Number of growth attempts at location of iagent at time itime
+            integer, allocatable, intent(inout) :: n_attempt(:)   ! (nxy) Number of growth attempts at location of iagent at time itime
 
             ! Local use only
             real :: rand    ! Uniformly distributed random number to throw dices
@@ -701,13 +701,13 @@ USE, INTRINSIC :: ISO_C_BINDING
             implicit none
             integer, intent(in) :: iagent            ! Agent ID (integer number)
             integer, intent(in) :: itime             ! Time step
-            integer, intent(inout) :: n_attempt(:)   ! (nxy) Number of growth attempts at location of iagent at time itime
-            integer, intent(inout) :: npeop(:)       ! (nxy) Number of agents in each grid cell 
-            integer, intent(inout) :: nbites(:)      ! (nlon*nlat) Infective bites
+            integer, allocatable, intent(inout) :: n_attempt(:)   ! (nxy) Number of growth attempts at location of iagent at time itime
+            integer, allocatable, intent(inout) :: npeop(:)       ! (nxy) Number of agents in each grid cell 
+            integer, allocatable, intent(inout) :: nbites(:)      ! (nlon*nlat) Infective bites
                                                      ! (vectors that were infected upon
                                                      ! bitting a human)
-            real, allocatable, intent(in)       :: m_0(:)
-            real, allocatable, intent(in)       :: m_1(:) ! Vector to host ratio times the vector biting rate
+            real, allocatable, intent(in) :: m_0(:)  ! Susceptible vector to host ratio times the vector biting rate
+            real, allocatable, intent(in) :: m_1(:)  ! Infective   vector to host ratio times the vector biting rate
 
             ! Local use only
             real :: rand    ! Uniformly distributed random number to throw dices
@@ -807,9 +807,11 @@ USE, INTRINSIC :: ISO_C_BINDING
                     people(iagent)%health_status%malaria_status%EIR_att = lambda_1
                     !
                     if ((lambda_0 > 10.) .or. (lambda_1 > 10.)) then
-                        print *, "Out of cubic regime --> Stop", lambda_1, lambda_0, mask_pop(j), npeop(j)
-                        STOP 
-                    else 
+                        !print *, "Out of cubic regime --> !!!", lambda_1, lambda_0, mask_pop(j), npeop(j), j
+                       !STOP
+                    end if
+
+                    !else 
 
                         !lambda_0 = min(real(floor(lambda_0/eps)),lambda_0)
                         !lambda_1 = min(real(floor(lambda_1/eps)),lambda_1)
@@ -818,12 +820,24 @@ USE, INTRINSIC :: ISO_C_BINDING
                             do k = 1,n_cut
                               !  P_0 = P_0 + P_max*lambda_0**k*(1-lambda_0+0.5*lambda_0**2-0.167*lambda_0**3)*factorialI(k)*(1-(1-P_h0)**k)
                                 P_0 = P_0 + P_max*lambda_0**k*exp(-lambda_0)*factorialI(k)*(1-(1-P_h0)**k)
+                                !
+                                !if ((lambda_0 > 10.)) then
+                                !    print *, "Out of cubic regime --> P_0", P_0, lambda_0, mask_pop(j), npeop(j), j
+                                    !STOP
+                                !end if
+                                !
                             end do
                         end if 
                         if (lambda_1 > eps) then
                             do k = 1,n_cut
                               !  P_1 = P_1 +       lambda_1**k*(1-lambda_1+0.5*lambda_1**2-0.167*lambda_1**3)*factorialI(k)*(1-(1-P_v0)**k)
                                 P_1 = P_1 +       lambda_1**k*exp(-lambda_1)*factorialI(k)*(1-(1-P_v0)**k)
+                                !
+                                !if ((lambda_1 > 10.)) then
+                                !    print *, "Out of cubic regime --> P_1", P_1, lambda_1, mask_pop(j), npeop(j), j
+                                    !STOP
+                                !end if
+                                !
                             end do
                         end if 
                         
@@ -839,7 +853,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                     !   P_0 = min(real(floor(P_0/eps)),P_0)
                     !   P_1 = min(real(floor(P_1/eps)),P_1)
                     !
-                    end if
+                    !end if
                     !
                     ! 2) Disease ===========================
                     !
@@ -873,7 +887,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                             ! Otherwise asymptomatic
                             !
                             if (generate_random() < 0.1) then 
-                                print *, 'New chronic asymptomatic', lambda_1
+                                !print *, 'New chronic asymptomatic', lambda_1
                                 people(iagent)%health_status%malaria_status%infc_dur=150 
                             else 
                                 ! Log-normally distributed times - function of e_l
@@ -931,12 +945,25 @@ USE, INTRINSIC :: ISO_C_BINDING
                         !    print *, dble(nbites(j))/npeop(j)
                             !
                         end if
+                        !
                     !==    
                     !
                     elseif (stat == 5) then ! If recovered (R) *****************************
                     !
-
-                    !==    
+                    !===
+                        !
+                        if ((generate_random() < P_1)) then    ! If infected by vector
+                           ! print *, 'Eureka! --> V-H', P_1, lambda_1, rvect(ninfv,j), npeop(j)
+                            !
+                            ! Move to Exposed
+                            people(iagent)%health_status%malaria_status%status=2
+                            !
+                            ! Intrinsic Incubation Period (IIP)
+                            people(iagent)%health_status%malaria_status%infc_dur=iip
+                            !
+                        end if 
+                        !
+                    !===    
                     !
                     end if
                 else ! If agent is dead

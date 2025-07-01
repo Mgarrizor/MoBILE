@@ -10,7 +10,7 @@ MODULE mo_control
     ! These are overwritten by the input command when running MOBILE (when namelist_inout is called)
     logical :: input    =.true.  ! (from flag) [Non-functional]
     logical :: agents   =.true.  ! Use agents, if false the program falls back to density
-    logical :: coupling =.true. ! Use VECTRI [Non-functional]
+    logical :: coupling =.true. ! Use VECTRI
     logical :: gravity  =.true.  ! Use gravity model
     logical :: radial   =.false. ! If .true. build radial city, otherwise uniform 
     logical :: random   =.true.  ! Disease initialization - if .true. and rand_seed = .false. random S,I,A,R,B everywhere
