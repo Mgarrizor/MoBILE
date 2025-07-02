@@ -76,9 +76,6 @@ USE, INTRINSIC :: ISO_C_BINDING
     ! "target" for future "slow" mobility using pointers
     type(agent), allocatable, target :: people(:)
 
-    real :: factorialI(n_cut) ! 
-    !allocate(factorial(n_cut))
-
     CONTAINS
 
         subroutine agents_init(nxy,idis,nagent,npeop,n_attempt,mask_pop,pop_dens,scale,dist)
@@ -125,11 +122,6 @@ USE, INTRINSIC :: ISO_C_BINDING
             scaleI = 1./scale
             print *, 'Scale factor = ', scale, 'Sum(pop) =', norm
             !
-            do k = 1, n_cut
-                !
-                factorialI(k) = 1./dgamma(dble(k+1))
-                !
-            end do
             !
             ! Initialize array of types "agent"
             allocate(people(nagent))
@@ -299,6 +291,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             npeop(:) = floor((1./(1.+band))*npeop(:))
             write(*,*) ' '
+            print *, 'Check normalization of agents', sum(npeop(:)/pop_dens(:)*scale, mask=((pop_dens(:) > 0.) .and. (npeop(:) > 0)))/sum(merge(1, 0, mask_pop(:)))
             !
         end subroutine agents_init
 
@@ -758,6 +751,10 @@ USE, INTRINSIC :: ISO_C_BINDING
                                                               ! with folding time = r_ret)
                                 people(iagent)%location_status%currloc = home
                                 j = home
+
+                                ! Update number of agents in either grid cell
+                                npeop(i) = npeop(i) - 1 
+                                npeop(j) = npeop(j) + 1
                             else 
                                 ! Update duration of trip (useful if we implement not exponential travelling times)
                                 people(iagent)%location_status%longdur = people(iagent)%location_status%longdur + 1
@@ -776,7 +773,11 @@ USE, INTRINSIC :: ISO_C_BINDING
                                 
                                 j = people(iagent)%location_status%longloc
                                 people(iagent)%location_status%currloc = j
-                                people(iagent)%location_status%longdur = 1
+                                people(iagent)%location_status%longdur = 1     ! Counter in case trip durations are not exponentially distributed
+
+                                ! Update number of agents in either grid cell
+                                npeop(i) = npeop(i) - 1 
+                                npeop(j) = npeop(j) + 1
     
                             !
                             ! If agent does not move
@@ -785,77 +786,34 @@ USE, INTRINSIC :: ISO_C_BINDING
                             end if
                         end if
                         !
+                    !===
                     end if
                     !
-                    j = people(iagent)%location_status%currloc
+                    ! ! 2) Disease ===========================
                     !
-                    ! Human to Vector transmission ------------------------------------------------
+                    ! 2.1) Transmission probabilities --------
                     !
-                    !m_0 = b_rate*rgonof(j)*rvect(0,j)/npeop(j)*scaleI*20
-                    lambda_0 = m_0(j)*1.
-                    P_0 = 0.
+                    !---
+                        j = people(iagent)%location_status%currloc
+                        !
+                        ! Human to Vector transmission
+                        !
+                        lambda_0 = m_0(j)*1.   ! f(a,t) = 1
+                        P_0 = P_max*(1 - exp(-lambda_0*P_h0))
+                        !
+                        ! Vector to human transmission
+                        !
+                        lambda_1 = m_1(j)*1.   ! f(a,t) = 1
+                        P_1 =        1 - exp(-lambda_1*P_v0)
+                        !
+                        ! Apply numerical threshold ---> Need to optimize transmission events for cases where P < epsilon
+                        P_0 = min(real(floor(P_0/eps)),P_0)
+                        P_1 = min(real(floor(P_1/eps)),P_1)
+                        !
+                        ! Save agent-specific daily entomological inoculation rate
+                        people(iagent)%health_status%malaria_status%EIR_att = lambda_1
+                    !---
                     !
-                    ! Vector to human transmission ------------------------------------------------
-                    !
-                    !m_1 = b_rate*rgonof(j)*rvect(ninfv,j)/npeop(j)*scaleI*20
-                    lambda_1 = m_1(j)*1.
-                    P_1 = 0.
-                    !
-                    !------------------------------------------------------------------------------
-                    !
-                    ! Save entomological inoculation rate
-                    people(iagent)%health_status%malaria_status%EIR_att = lambda_1
-                    !
-                    if ((lambda_0 > 10.) .or. (lambda_1 > 10.)) then
-                        !print *, "Out of cubic regime --> !!!", lambda_1, lambda_0, mask_pop(j), npeop(j), j
-                       !STOP
-                    end if
-
-                    !else 
-
-                        !lambda_0 = min(real(floor(lambda_0/eps)),lambda_0)
-                        !lambda_1 = min(real(floor(lambda_1/eps)),lambda_1)
-
-                        if (lambda_0 > eps) then
-                            do k = 1,n_cut
-                              !  P_0 = P_0 + P_max*lambda_0**k*(1-lambda_0+0.5*lambda_0**2-0.167*lambda_0**3)*factorialI(k)*(1-(1-P_h0)**k)
-                                P_0 = P_0 + P_max*lambda_0**k*exp(-lambda_0)*factorialI(k)*(1-(1-P_h0)**k)
-                                !
-                                !if ((lambda_0 > 10.)) then
-                                !    print *, "Out of cubic regime --> P_0", P_0, lambda_0, mask_pop(j), npeop(j), j
-                                    !STOP
-                                !end if
-                                !
-                            end do
-                        end if 
-                        if (lambda_1 > eps) then
-                            do k = 1,n_cut
-                              !  P_1 = P_1 +       lambda_1**k*(1-lambda_1+0.5*lambda_1**2-0.167*lambda_1**3)*factorialI(k)*(1-(1-P_v0)**k)
-                                P_1 = P_1 +       lambda_1**k*exp(-lambda_1)*factorialI(k)*(1-(1-P_v0)**k)
-                                !
-                                !if ((lambda_1 > 10.)) then
-                                !    print *, "Out of cubic regime --> P_1", P_1, lambda_1, mask_pop(j), npeop(j), j
-                                    !STOP
-                                !end if
-                                !
-                            end do
-                        end if 
-                        
-            
-                        !if (P_0 < eps) then
-                        !    P_0 = 0.
-                        !end if 
-            
-                        !if (P_1 < eps) then
-                        !    P_1 = 0.
-                        !end if
-            
-                    !   P_0 = min(real(floor(P_0/eps)),P_0)
-                    !   P_1 = min(real(floor(P_1/eps)),P_1)
-                    !
-                    !end if
-                    !
-                    ! 2) Disease ===========================
                     !
                     if (stat == 1) then ! If susceptible (S) *****************************
                     !

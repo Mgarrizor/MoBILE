@@ -134,7 +134,6 @@ PROGRAM MOBILE
   integer :: iagent    ! Agents  (nagents)
   integer :: ixy       ! Space   (nxy = nx*ny = nlon*nlat)
   real :: conv1, conv2
-  real :: dummy
   ! Get time 
   real :: t_start
   real :: t_finish
@@ -453,13 +452,8 @@ PROGRAM MOBILE
         if (disID == 1) then  
           ! Reset number of infective bites
           nbites(:) = 0
-          m_0(:) = b_rate*rgonof(:)*rvect(0,:)/pop_dens(:)*1!npeop(:)*scaleI*20
-          m_1(:) = b_rate*rgonof(:)*rvect(ninfv,:)/pop_dens(:)*1!npeop(:)*scaleI*20
-
-          !where ((pop_dens(:) > 0.) .and. (npeop(:) > 0)) 
-          dummy = sum(scale/npeop(:)/pop_dens(:), mask=((pop_dens(:) > 0.) .and. (npeop(:) > 0)))
-          !end
-          print *, 'Dummy = ', dummy
+          m_0(:) = b_rate*rgonof(:)*rvect(0,:)/npeop(:)*scaleI!*20
+          m_1(:) = b_rate*rgonof(:)*rvect(ninfv,:)/npeop(:)*scaleI!*20
           !
         end if
         call random_seed()
@@ -551,7 +545,7 @@ PROGRAM MOBILE
       end if
       !
   !===
-  print *, sum(rvect(ninfv,:))
+  !print *, sum(rvect(ninfv,:))
   !
   end do time_loop
   !

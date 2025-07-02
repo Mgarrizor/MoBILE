@@ -141,9 +141,8 @@ MODULE mo_const
     real, allocatable :: rgonof(:)          ! Gonotrophic cycle 
     real, allocatable :: m_0(:), m_1(:)  ! Vector to host ratio times the vector biting rate
 
-    ! Numerical methods
+    integer :: Pa ! Number of agents per person in the simulation
 
-    integer,parameter :: n_cut = 18 ! Sum truncation
 
     !********** Clima **************************
     real, allocatable :: rainfall(:,:)    ! 2D long array for rainfall (nxy,t)
