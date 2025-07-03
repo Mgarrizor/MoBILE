@@ -54,13 +54,14 @@ fi
 #                             11: Ae. aegypti      [In development]
 #           --------------------------------
             
-            nagent=500000                 #  -a
+            nagent=150000                 #  -a
             spin_up=0                     #  -u
 
             # Example path for test run (Senegal CHIRXS processed driving files 2012-2014)
             rain_file=$MOBILE'/utils/test_run/rain.nc'  #  -r
             pop_file=$MOBILE'/utils/test_run/pop.nc'    #  -p
             temp_file=$MOBILE'/utils/test_run/t2m.nc'   #  -t
+            area_file=$MOBILE'/utils/test_run/area.nc'  #  -x
 
             const='params.txt'            #  -c
             vectri=$disID
@@ -86,6 +87,7 @@ var_7="-u ${spin_up}"
 # CLIMA
 var_8="-r ${rain_file}"
 var_9="-t ${temp_file}"
+var_15="-x ${area_file}"
 
 # HUMAN
 var_10="-p ${pop_file}"
@@ -113,6 +115,7 @@ $var_10
 $var_11
 $var_12
 $var_13
+$var_15
 EOM
 
 echo 'Command:' ${command} > ${output_name}.info

@@ -56,6 +56,7 @@ MODULE mo_control
     character(len=100) :: pop_file   ! Name of population file
     character(len=100) :: rain_file  ! Name of rain/precipitation file
     character(len=100) :: t2m_file   ! Name of temperature file
+    character(len=100) :: area_file  ! Name of cell area file
     !----------------------------------------------------------
 
     ! https://fortran-lang.org/en/learn/quickstart/arrays_strings/#array-of-strings
@@ -65,6 +66,7 @@ MODULE mo_control
     character(len=100) ::  pop_names(4) = [character(len=20) :: "pop", "population", "population density", "Band1"]
     character(len=100) ::  rain_names(5)= [character(len=20) :: "rain", "rainfall", "precipitation", "tp", "precip"]
     character(len=100) ::  temp_names(1)= [character(len=20) :: "temperature"]
+    character(len=100) ::  area_names(1)= [character(len=20) :: "cell_area"]
 
     ! Attribute names
     integer, parameter :: att_len = 6

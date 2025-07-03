@@ -20,8 +20,8 @@ MODULE mo_const
     !********** Integration **********************
     integer :: nsteps       ! Number of integration steps (days) (either Namelist of Read from file)
     integer :: nagent       ! Number of agents
-    real    :: scale        ! Scale factor to transform numbers into a densities
-    real    :: scaleI       ! Inverse of scale
+    real, allocatable    :: scale(:)   ! Scale factor to transform numbers into a densities
+    real, allocatable    :: scaleI(:)  ! Inverse of scale
     integer :: nalive       ! Number of alive agents
     real    :: dt = 1.      ! Time step (fixed)
     integer :: ncid_out     ! ID of output NetCDF file
@@ -29,6 +29,7 @@ MODULE mo_const
 
     integer :: TempVarID, ncTempID
     integer :: RainVarID, ncRainID
+    integer :: AreaVarID, ncAreaID
 
 
     real    :: eps = 1e-15  ! Numerical tolerance 
@@ -55,6 +56,8 @@ MODULE mo_const
     real, allocatable :: pop_dens(:)    ! 1D long array for human population density 
     real, allocatable :: Ipop_dens(:)   ! Inverse of 1D long array for human population density 
     real, allocatable :: D(:)           ! Dilution factor
+    integer           :: P_a             ! Number of agents per person in the simulation
+    real, allocatable :: A_cell(:)      ! Area of grid cells
     
 
     !********** Grid *****************************
@@ -141,7 +144,6 @@ MODULE mo_const
     real, allocatable :: rgonof(:)          ! Gonotrophic cycle 
     real, allocatable :: m_0(:), m_1(:)  ! Vector to host ratio times the vector biting rate
 
-    integer :: Pa ! Number of agents per person in the simulation
 
 
     !********** Clima **************************

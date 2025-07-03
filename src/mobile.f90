@@ -170,7 +170,7 @@ PROGRAM MOBILE
             call namelist_human(pop_file,nagent)
             !
             !--Climate input
-            call namelist_clima(rain_file,t2m_file)
+            call namelist_clima(rain_file,t2m_file,area_file)
             !
             !--Init namelist constants, overriding default --> New parameter values from input
             call namelist_const()
@@ -182,7 +182,9 @@ PROGRAM MOBILE
             ! Declarations or interfaces related to the coupled mode
             !=
               call init_constants() ! VECTRI-specific constants
+              wurbn_ratio = 1e-6    ! 
               call init_vectri(pop_dens,mask_pop,nlon,nlat)
+
             !=
             !
 #endif
@@ -301,9 +303,9 @@ PROGRAM MOBILE
         ! 0.4.1 Agents
         print *, '------------------------'
         if ((agents)) then ![Non-functional]
-          print '("People representation: Agents", I8)', nagent
+          print *, "People representation: Agents"
           !'("Pi = ",f4.2)', pi
-           call agents_init(nxy,disID,nagent,npeop,nattempt,mask_pop,pop_dens,scale,dist)
+           call agents_init(nxy,disID,nagent,npeop,nattempt,mask_pop,pop_dens,scale,dist,A_cell)
            call agents_diagnostics(disID,scale,nalive)
           !
         ! 0.4.2 Density
@@ -452,8 +454,9 @@ PROGRAM MOBILE
         if (disID == 1) then  
           ! Reset number of infective bites
           nbites(:) = 0
-          m_0(:) = b_rate*rgonof(:)*rvect(0,:)/npeop(:)*scaleI!*20
-          m_1(:) = b_rate*rgonof(:)*rvect(ninfv,:)/npeop(:)*scaleI!*20
+          !b_rate
+          m_0(:) = b_rate*rgonof(:)*rvect(0,:)/npeop(:)*scaleI*P_a
+          m_1(:) = b_rate*rgonof(:)*rvect(ninfv,:)/npeop(:)*scaleI*P_a
           !
         end if
         call random_seed()
@@ -475,10 +478,10 @@ PROGRAM MOBILE
 
         if (disID == 0) then
           ! Scale excretion events to density
-          exc(:) = scale*exc(:)
+          exc(:) = scale(:)*exc(:)
           !
           if (out_rain) then
-            exc_clim(:) = scale*exc_clim(:)
+            exc_clim(:) = scale(:)*exc_clim(:)
           end if
           !
         end if
@@ -490,7 +493,7 @@ PROGRAM MOBILE
         !
         if (disID == 1) then  
           ! Calculate average EIR
-          where(mask_pop(:)) EIR(:) = EIR(:)/npeop(:)
+          where(mask_pop(:)) EIR(:) = EIR(:)/npeop(:)/P_a
           !
         end if
       end if ! End agent methods -------------------------------------------------
@@ -506,7 +509,7 @@ PROGRAM MOBILE
         do ixy = 1,nxy
           if (mask_pop(ixy)) then
               !
-              conv1 = conv1 + (scale*npeop(ixy) - alpha/mu * I(ixy))
+              conv1 = conv1 + (scale(ixy)*npeop(ixy) - alpha/mu * I(ixy))
               conv2 = conv2 + (1+ gamma/(rho+mu))*(I(ixy)+ A(ixy)) + S(ixy)  
               !
           end if
@@ -517,15 +520,7 @@ PROGRAM MOBILE
       if (itime > spin_up) then
       !=
         !
-        if (agents) then
-            WRITE(*,'(1a1,A11,F6.1,A2, A16, F6.2, A2, A4, F6.2, A4, F6.2)', advance='no') char(13),'Integrating',(real(itime-spin_up)/(nsteps)*100.),' %', &
-                                                                 ' // Agents alive', real(nalive)/real(nagent)*100, '%', ' =? ', &
-                                                                 conv1/scale/nagent*100, ' =? ', conv2/scale/nagent*100
-                                                                  
-        else
-            WRITE(*,'(1a1,A11,F6.1,A2)', advance='no') char(13),'Integrating',(real(itime-spin_up)/(nsteps)*100.),' %'
-
-        end if 
+        WRITE(*,'(1a1,A11,F6.1,A2)', advance='no') char(13),'Integrating',(real(itime-spin_up)/(nsteps)*100.),' %'
         !
         ! Write 3D fields (x,y,t) here
         call netcdf_3D_output(itime+1-spin_up,Var3D)
@@ -533,19 +528,12 @@ PROGRAM MOBILE
       !=
       else
         !
-        if (agents) then
-            WRITE(*,'(1a1,A7,F6.1,A2, A16, F6.2, A2, A4, F6.2, A4, F6.2)', advance='no') char(13),'Spin Up',(real(itime)/(spin_up)*100.),' %', &
-                                                                 ' // Agents alive', real(nalive)/real(nagent)*100, '%', ' =? ', &
-                                                                 conv1/scale/nagent*100, ' =? ', conv2/scale/nagent*100
-                                                                 
-        else
-            WRITE(*,'(1a1,A7,F6.1,A2)', advance='no') char(13),'Spin Up',(real(itime)/(spin_up)*100.),' %'
+        WRITE(*,'(1a1,A7,F6.1,A2)', advance='no') char(13),'Spin Up',(real(itime)/(spin_up)*100.),' %'
         !
-        end if
       end if
       !
   !===
-  !print *, sum(rvect(ninfv,:))
+  !print *, sum(rvect(ninfv,:)), sum(rvect(:,:))
   !
   end do time_loop
   !

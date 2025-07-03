@@ -8,6 +8,8 @@ MODULE mo_namelist
     use, intrinsic :: iso_fortran_env, only: stderr => error_unit
     use mo_const
     use mo_control
+
+    
     implicit none
 
     CONTAINS
@@ -93,17 +95,17 @@ MODULE mo_namelist
 
 
 
-        subroutine namelist_clima(rain_file,t2m_file)
+        subroutine namelist_clima(rain_file,t2m_file,area_file)
             implicit none
 
-            character(len=100), intent(out):: rain_file, t2m_file
+            character(len=100), intent(out):: rain_file, t2m_file, area_file
             
             ! Local use only
             character(len=1000) :: line
             integer:: file_unit, iostats
             
             ! Define namelist
-            namelist /CLIMA/ rain_file, t2m_file
+            namelist /CLIMA/ rain_file, t2m_file, area_file
 
             ! Does the file exist?
             inquire (file='namelist.nml', iostat=iostats)
@@ -137,6 +139,13 @@ MODULE mo_namelist
                 out_t2m = .false.
             end if
 
+            if (len(trim(area_file)) == 0) then
+                print *, 'No area input'
+                if (agents) then 
+                    STOP 
+                end if
+            end if
+
             
             close (file_unit)
             
@@ -165,7 +174,6 @@ MODULE mo_namelist
                              m_long, m_short, D_grav, D_pop, H_0,                        & ! mobility params gravity model
                              B_0, fS_0, fI_0, fA_0, fR_0                                   ! initial conditions
                              
-
             ! Does the file exist?
             inquire (file='namelist.nml', iostat=iostats)
 

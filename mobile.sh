@@ -28,12 +28,13 @@ usage() { echo "Usage:              \n
                 -u: Spin up length [days]
                 -v: VECTRI coupling [0: No, 1: Yes]
                 -i: Vector ID [0: gambiae, ...]
+                -x: Area of grid cells 
 
                  "; }
 # Resources
 # https://stackoverflow.com/questions/16483119/an-example-of-how-to-use-getopts-in-bash
 # https://serverfault.com/questions/266867/bash-getops-allow-but-not-require-arg
-while getopts ":ho:p:r:t:d:n:s:a:c:u:v:" flag; do
+while getopts ":ho:p:r:t:d:n:s:a:c:u:v:x:" flag; do
  case $flag in
    h) # Handle the -h flag
    # Display script help information
@@ -72,6 +73,9 @@ while getopts ":ho:p:r:t:d:n:s:a:c:u:v:" flag; do
    ;;
    v) # Handle the -c flag
    vectri=$OPTARG
+   ;;
+   x) # Handle the -c flag
+   area_file=$OPTARG
    ;;
    \?) # Handle invalid options
    usage
@@ -184,8 +188,9 @@ seed=${seed},
 spin_up=${spin_up}
 /
 &CLIMA
-rain_file='${rain_file}'
-t2m_file='${temp_file}'
+rain_file='${rain_file}',
+t2m_file='${temp_file}',
+area_file='${area_file}'
 /
 &HUMAN
 pop_file='${pop_file}',

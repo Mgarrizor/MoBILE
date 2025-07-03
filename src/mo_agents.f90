@@ -78,7 +78,7 @@ USE, INTRINSIC :: ISO_C_BINDING
 
     CONTAINS
 
-        subroutine agents_init(nxy,idis,nagent,npeop,n_attempt,mask_pop,pop_dens,scale,dist)
+        subroutine agents_init(nxy,idis,nagent,npeop,n_attempt,mask_pop,pop_dens,scale,dist,A_cell)
             ! 
             ! 
             !
@@ -93,8 +93,9 @@ USE, INTRINSIC :: ISO_C_BINDING
             logical, allocatable, intent(in) :: mask_pop(:)   ! (nxy)
 
             real, allocatable, intent(in)   :: dist(:,:)     ! Distance matrix
+            real, allocatable, intent(inout)   :: A_cell(:)     ! Grid cell area
 
-            real, intent(out) :: scale ! Scale factor to translate number of excretion events into density
+            real, allocatable, intent(inout) :: scale(:) ! Scale factor to translate number of excretion events into density
 
             !
             !
@@ -107,7 +108,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             real :: cdf_health(4) ! Cumulative distribution to asign agent health based on initial profile
             real :: cdf(nxy)      ! Cumulative distribution to asign agent location based on human density
             integer :: stat_health
-            real :: band = 0.0
+            
             !
             call random_seed()       ! Each simulation generates a different series of random numbers
 
@@ -116,11 +117,18 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             ! When all agents are active they represent the (1+band)*100 % of
             ! the steady-state population density
-            norm = sum(pop_dens(:)*(1.+ band)) ! Valid for regular grid (otherwise should be weighted by cell area)
+            norm = sum(pop_dens(:)*A_cell(:)) ! Weighted by cell area
             !
-            scale  = norm/nagent
-            scaleI = 1./scale
-            print *, 'Scale factor = ', scale, 'Sum(pop) =', norm
+            allocate(scale(nxy))
+            allocate(scaleI(nxy))
+            !
+            scale(:)  = norm/(A_cell(:)*nagent)
+            scaleI(:) = 1./scale(:)
+            print *, 'Average scale factor = ', sum(scale(:))/size(scale(:))
+            print *, 'Number of people in simulated region', norm
+            P_a = norm/nagent
+            print *, 'Human to agent ratio ~', P_a
+            !
             !
             !
             ! Initialize array of types "agent"
@@ -148,7 +156,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                     ! Calculate number of agents in ixy as the fraction of the total pop at ixy times the total number of agents
                     ! We start below the steady-state and fill it up to max.
                     ! When
-                    npeop(ixy) = floor(pop_dens(ixy)*(1.+ band)/norm*nagent) ! Rounding error is big, we correct at the end
+                    npeop(ixy) = floor(pop_dens(ixy)*(A_cell(ixy))/norm*nagent) ! Rounding error is big, we correct at the end
                     !
                     if (npeop(ixy) /= 0) then ! If there is someone
                         do ipeo = 1,npeop(ixy)
@@ -168,7 +176,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                             else 
                                 !
                                 if (idis == 1) then  ! For malaria we generate a low percentage of chronic asymptomatics (10%)
-                                    if (generate_random() < 0.1) then 
+                                    if (generate_random() < 0.01) then 
                                         stat_health = 4 !(Asymptomatic)
                                         people(indx)%health_status%malaria_status%infc_dur=150 
                                     else 
@@ -215,8 +223,8 @@ USE, INTRINSIC :: ISO_C_BINDING
             ! i.e., until sum(npeop(:)) = nagent = (indx - 1).
             !
             ! For this, build a biased dice (see functions below) with weights 
-            ! prop. to pop_dens(:) and throw it.
-            cdf(:) = cumsum(pop_dens(:)*(1.+ band))/norm
+            ! prop. to pop_dens(:)*A_cell(:) and throw it.
+            cdf(:) = cumsum(pop_dens(:)*(A_cell(:)))/norm
             !
             !
             do while (indx /= (nagent+1))
@@ -242,7 +250,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                    else 
                        !
                         if (idis == 1) then  ! For malaria we generate a low percentage of chronic asymptomatics (10%)
-                            if (generate_random() < 0.1) then 
+                            if (generate_random() < 0.01) then 
                                 stat_health = 4 !(Asymptomatic)
                                 people(indx)%health_status%malaria_status%infc_dur=150 
                             else 
@@ -289,10 +297,14 @@ USE, INTRINSIC :: ISO_C_BINDING
             ! alive agents that would represent the 100% of the steady-state.
             ! This number is then used in the "agents_update" subroutine.
             !
-            npeop(:) = floor((1./(1.+band))*npeop(:))
+            !npeop(:) = floor((1./(1.+band))*npeop(:))
             write(*,*) ' '
-            print *, 'Check normalization of agents', sum(npeop(:)/pop_dens(:)*scale, mask=((pop_dens(:) > 0.) .and. (npeop(:) > 0)))/sum(merge(1, 0, mask_pop(:)))
+            print *, 'Check normalization of agents', sum(npeop(:)/pop_dens(:)*scale(:), mask=((pop_dens(:) > 0.) .and. (npeop(:) > 0))) & 
+                                                              /sum(merge(1, 0, mask_pop(:)), mask=((pop_dens(:) > 0.) .and. (npeop(:) > 0)))
+
+            print '("Initialized:", I8, A8)', nagent, '  agents'
             !
+            deallocate(A_cell)
         end subroutine agents_init
 
         subroutine agents_diagnostics(idis,scale,counter)
@@ -300,7 +312,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             ! Calculate bulk statistics to feed into the disease source integration
             !
             integer, intent(in) :: idis ! 0 = Cholera: SIAR  ; 1 = Malaria: SEIR [Non-functional]
-            real, intent(in)    :: scale
+            real, allocatable, intent(in)    :: scale(:)
             integer, intent(out):: counter ! Number of alive agents
             !
             ! Local use only
@@ -335,10 +347,10 @@ USE, INTRINSIC :: ISO_C_BINDING
                 end if
 
             end do 
-            S(:) = scale*S(:)
-            I(:) = scale*I(:)
-            A(:) = scale*A(:)
-            R(:) = scale*R(:)
+            S(:) = scale(:)*S(:)
+            I(:) = scale(:)*I(:)
+            A(:) = scale(:)*A(:)
+            R(:) = scale(:)*R(:)
             !
             case (1) ! Malaria [Non-functional]
             !
@@ -370,11 +382,11 @@ USE, INTRINSIC :: ISO_C_BINDING
                 EIR(people(iagent)%location_status%currloc) = EIR(people(iagent)%location_status%currloc) + people(iagent)%health_status%malaria_status%EIR_att
 
             end do 
-            S(:) = scale*S(:)
-            E(:) = scale*E(:)
-            I(:) = scale*I(:)
-            A(:) = scale*A(:)
-            R(:) = scale*R(:)
+            S(:) = scale(:)*S(:)
+            E(:) = scale(:)*E(:)
+            I(:) = scale(:)*I(:)
+            A(:) = scale(:)*A(:)
+            R(:) = scale(:)*R(:)
             !
             case (2) ! Dengue [Non-functional]
             !
@@ -793,7 +805,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                     !
                     ! 2.1) Transmission probabilities --------
                     !
-                    !---
+                    !===
                         j = people(iagent)%location_status%currloc
                         !
                         ! Human to Vector transmission
@@ -804,7 +816,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                         ! Vector to human transmission
                         !
                         lambda_1 = m_1(j)*1.   ! f(a,t) = 1
-                        P_1 =        1 - exp(-lambda_1*P_v0)
+                        P_1 = 1 - exp(-lambda_1*P_v0)
                         !
                         ! Apply numerical threshold ---> Need to optimize transmission events for cases where P < epsilon
                         P_0 = min(real(floor(P_0/eps)),P_0)
@@ -812,8 +824,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                         !
                         ! Save agent-specific daily entomological inoculation rate
                         people(iagent)%health_status%malaria_status%EIR_att = lambda_1
-                    !---
-                    !
+                    !===
                     !
                     if (stat == 1) then ! If susceptible (S) *****************************
                     !
@@ -844,7 +855,7 @@ USE, INTRINSIC :: ISO_C_BINDING
 
                             ! Otherwise asymptomatic
                             !
-                            if (generate_random() < 0.1) then 
+                            if (generate_random() < 0.01) then 
                                 !print *, 'New chronic asymptomatic', lambda_1
                                 people(iagent)%health_status%malaria_status%infc_dur=150 
                             else 
@@ -860,9 +871,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                             !
                            ! print *, people(iagent)%health_status%malaria_status%infc_dur
                         end if
-                    !===
-                    !
-                    !==    
+                    !===  
                     !
                     elseif (stat == 3) then ! If infected symptomatic (I) *****************************
                     !
@@ -1068,6 +1077,55 @@ USE, INTRINSIC :: ISO_C_BINDING
             call random_number(rand_num) ! Call the intrinsic subroutine
             !
         end function generate_random
+
+        ! =============== Immunity functions =============================
+
+        function endemicity(e_l,e_0,tau_e1,tau_e2) result(delta_e)
+
+        ! Return the acquired inmmunity after an infectious bite
+
+        implicit none
+
+        real, intent(in)  :: e_0     ! Maximum acquisition per infectious bite (when fully susceptible)
+        real, intent(in)  :: e_l     ! Current immunity level
+        real, intent(in)  :: tau_e1  ! Fast 
+        real, intent(in)  :: tau_e2  ! Slow
+        real              :: delta_e ! Acquired immunity 
+
+            delta_e = 0.5*e_0*(exp(-e_l/tau_e1) + exp(-e_l/tau_e2))
+
+
+        end function endemicity
+
+
+        function prob_symp(e_l,gamma_min) result(p)
+
+        ! Return the acquired inmmunity after an infectious bite
+
+        implicit none
+
+        real, intent(in)  :: e_l        ! Current immunity level
+        real, intent(in)  :: gamma_min  ! Minimum symptomatic fraction (1- maximum asymptomatic fraction) 
+        real              :: p          ! Probability to be symptomatic
+
+            p = -(1-gamma_min)*e_l + 1
+
+
+        end function prob_symp
+
+        function mean_logtimes(e_l,mu_min,mu_max,d_eI) result(mu_e)
+
+        implicit none
+
+        real, intent(in) :: e_l 
+        real, intent(in) :: mu_min, mu_max 
+        real, intent(in) :: d_eI
+        real             :: mu_e
+
+            mu_e = -d_eI*(mu_max-mu_min)*e_l + mu_min
+
+
+        end function mean_logtimes
 
 
 

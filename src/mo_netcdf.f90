@@ -179,7 +179,7 @@ MODULE mo_netcdf
         !
         if ((out_vecinfc)) then
             !
-            call write_check_3D(itime,zvecinfc,var_out,'NetCDF Status Infective Vector density')
+            call write_check_3D(itime,zvecinfc*zvect_density,var_out,'NetCDF Status Infective Vector density')
             !
         end if
         !
@@ -559,10 +559,10 @@ MODULE mo_netcdf
         if (out_vecinfc) then
           !
           VarId(var_out)=var_out
-          status = nf90_def_var(ncid = ncid_out, name = "infective vector", xtype = nf90_double, &
+          status = nf90_def_var(ncid = ncid_out, name = "frac. inf. vector", xtype = nf90_double, &
                     dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
           status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "units", values = "m^-2")
-          status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "long_name", values = "Infective Vector density")
+          status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "long_name", values = "Fraction of infective vectors")
           var_out = var_out + 1
           !
         end if
@@ -935,6 +935,43 @@ MODULE mo_netcdf
           t2m(:,:) = 0
 
 
+        end if
+
+        if (agents) then
+
+              ! We need to extract the dates of the forcing and its total length, ntime, so that
+              ! nsteps <= ntime.
+
+              ! Open file
+              status = nf90_open(path = area_file, mode = nf90_nowrite, ncid = ncAreaID)        
+      
+              ! Inquire about rainfall and get its VarID
+              do indx=1,size(area_names)
+                  status = nf90_inq_varid(ncid=ncAreaID, name=area_names(indx), varid=AreaVarID)
+                  
+                  ! If name is found exit do loop
+                  if (status == nf90_noerr) then
+                    print *, 'NetCDF Status: found area variable of name --> ', area_names(indx)
+                    !
+                    exit
+                  else if((indx == size(area_names)) .and. (status /= nf90_noerr)) then
+                    print *, 'NetCDF Status: area variable not indentified'
+                    STOP
+                  end if
+              end do
+              !
+              ! Get cell area values
+              status = nf90_get_var(ncid=ncAreaID, varid=AreaVarID, values=grid)
+              !
+              allocate(A_cell(nxy))
+              A_cell = reshape(grid, (/nxy/))
+              !
+
+        else  ! If not rainfall input set to zero 
+          !
+          !allocate(rainfall(nxy,nsteps))
+          !rainfall(:,:) = 0
+          !
         end if
     
         deallocate(grid)

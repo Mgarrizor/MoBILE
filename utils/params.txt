@@ -14,4 +14,5 @@ B_0=,
 fS_0= ,
 fI_0= , 
 fA_0= , 
-fR_0=
+fR_0= ,
+wurbn_ratio=1e-4
