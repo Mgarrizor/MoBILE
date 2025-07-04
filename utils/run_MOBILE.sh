@@ -54,7 +54,7 @@ fi
 #                             11: Ae. aegypti      [In development]
 #           --------------------------------
             
-            nagent=150000                 #  -a
+            nagent=500000                 #  -a
             spin_up=0                     #  -u
 
             # Example path for test run (Senegal CHIRXS processed driving files 2012-2014)

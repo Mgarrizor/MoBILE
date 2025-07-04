@@ -455,8 +455,8 @@ PROGRAM MOBILE
           ! Reset number of infective bites
           nbites(:) = 0
           !b_rate
-          m_0(:) = b_rate*rgonof(:)*rvect(0,:)/npeop(:)*scaleI*P_a
-          m_1(:) = b_rate*rgonof(:)*rvect(ninfv,:)/npeop(:)*scaleI*P_a
+          m_0(:) = b_rate*rgonof(:)*rvect(0,:)/(npeop(:)+K_h)*scaleI*P_a
+          m_1(:) = b_rate*rgonof(:)*rvect(ninfv,:)/(npeop(:)+K_h)*scaleI*P_a
           !
         end if
         call random_seed()

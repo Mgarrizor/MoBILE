@@ -91,6 +91,8 @@ MODULE mo_const
 
     !********** Disease **************************
 
+    integer, parameter :: K_h = 1000 
+
     real, allocatable :: S(:) ! 1D long array for Sensitive density
     real, allocatable :: E(:) ! 1D long array for Exposed density
     real, allocatable :: I(:) ! 1D long array for Infected density
