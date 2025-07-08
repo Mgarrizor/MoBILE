@@ -26,8 +26,9 @@ USE, INTRINSIC :: ISO_C_BINDING
 
     type malaria
         integer :: status   ! S=1, E= 2, I=3, A=4, R=5 Susceptible-Exposed-Infected-Asymptomatic-Recovered (SEIAR)
-        real    :: EIR_att      ! Entomological inoculation rate
+        real    :: EIR_att  ! Entomological inoculation rate
         real    :: e_l      ! Endemicity level [0,1]
+        logical :: mat_im   ! Maternal immunity 
        ! real    :: par_load ! Parasite load [Gametocytes/microLiter] 
         integer :: infc_dur ! Infection duration (log-Normal distribution) PfPR ~ 0% (MalariaTheraphy dataset) [ref:m1]
         !                                                                  PfPR ~75% (Ghanaian cohort)         [ref:m2]
@@ -115,8 +116,6 @@ USE, INTRINSIC :: ISO_C_BINDING
             ! Calculate number of agents per grid cell for a given total, nagent, and
             ! the input human population density, pop_dens
             !
-            ! When all agents are active they represent the (1+band)*100 % of
-            ! the steady-state population density
             norm = sum(pop_dens(:)*A_cell(:)) ! Weighted by cell area
             !
             allocate(scale(nxy))
@@ -124,16 +123,20 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             scale(:)  = norm/(A_cell(:)*nagent)
             scaleI(:) = 1./scale(:)
-            print *, 'Average scale factor = ', sum(scale(:))/size(scale(:))
+           ! print *, 'Average scale factor = ', sum(scale(:))/size(scale(:))
             print *, 'Number of people in simulated region', norm
+            !
+            if (norm < nagent) then
+                print *, 'More agents than people! --> STOP'
+                STOP 
+            end if 
+            !
             P_a = norm/nagent
             print *, 'Human to agent ratio ~', P_a
             !
-            !
-            !
             ! Initialize array of types "agent"
             allocate(people(nagent))
-            ! Allocate array with the number of agents in each grid cell
+            ! Allocate array of the number of agents in each grid cell
             allocate(npeop(nxy))
             ! Allocate array of number of growth attempts 
             allocate(n_attempt(nxy))
@@ -146,6 +149,13 @@ USE, INTRINSIC :: ISO_C_BINDING
             else ! Follow initial condition profile
                 
             end if
+            !
+            ! CDF for age distribution
+
+
+
+
+
             !
             ! Need an index to keep track of agents
             indx = 1
@@ -175,7 +185,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                                 !
                             else 
                                 !
-                                if (idis == 1) then  ! For malaria we generate a low percentage of chronic asymptomatics (10%)
+                                if (idis == 1) then  ! For malaria we generate a low percentage of chronic asymptomatics (1%)
                                     if (generate_random() < 0.01) then 
                                         stat_health = 4 !(Asymptomatic)
                                         people(indx)%health_status%malaria_status%infc_dur=150 
@@ -802,20 +812,29 @@ USE, INTRINSIC :: ISO_C_BINDING
                     end if
                     !
                     ! ! 2) Disease ===========================
+
+                    ! 2.0) Maternal immunity 
                     !
                     ! 2.1) Transmission probabilities --------
                     !
                     !===
+                        ! Get agent location to get local biting rates m(j)
                         j = people(iagent)%location_status%currloc
+                        !
+                        ! ********** Interventions **************
+                        !
+                        ! f(a,t) = 1   
+                        !
+                        !****************************************
                         !
                         ! Human to Vector transmission
                         !
-                        lambda_0 = m_0(j)*1.   ! f(a,t) = 1
+                        lambda_0 = m_0(j)*1. ! f(a,t) = 1 
                         P_0 = P_max*(1 - exp(-lambda_0*P_h0))
                         !
                         ! Vector to human transmission
                         !
-                        lambda_1 = m_1(j)*1.   ! f(a,t) = 1
+                        lambda_1 = m_1(j)*1. ! f(a,t) = 1 
                         P_1 = 1 - exp(-lambda_1*P_v0)
                         !
                         ! Apply numerical threshold ---> Need to optimize transmission events for cases where P < epsilon
@@ -831,7 +850,6 @@ USE, INTRINSIC :: ISO_C_BINDING
                     !=== 
                         !
                         if ((generate_random() < P_1)) then    ! If infected by vector
-                           ! print *, 'Eureka! --> V-H', P_1, lambda_1, rvect(ninfv,j), npeop(j)
                             !
                             ! Move to Exposed
                             people(iagent)%health_status%malaria_status%status=2
@@ -848,19 +866,31 @@ USE, INTRINSIC :: ISO_C_BINDING
                     !===
                         !
                         if (people(iagent)%health_status%malaria_status%infc_dur == 0) then
-                            !
-                            ! Transition to symptomatic with probability ...
-                            people(iagent)%health_status%malaria_status%status=4
 
-
-                            ! Otherwise asymptomatic
+                            ! Update immunity/endemicity level
+                            people(iagent)%health_status%malaria_status%e_l = people(iagent)%health_status%malaria_status%e_l + endemicity(people(iagent)%health_status%malaria_status%e_l,e_0,e1,e2)
                             !
-                            if (generate_random() < 0.01) then 
-                                !print *, 'New chronic asymptomatic', lambda_1
-                                people(iagent)%health_status%malaria_status%infc_dur=150 
-                            else 
+                            ! Transition to symptomatic with probability prob_symp()
+                            if (generate_random() < prob_symp(people(iagent)%health_status%malaria_status%e_l,alph_min)) then 
+
+                                people(iagent)%health_status%malaria_status%status=3
+                                !
                                 ! Log-normally distributed times - function of e_l
                                 people(iagent)%health_status%malaria_status%infc_dur=10
+
+                            else ! Otherwise asymptomatic 
+                                people(iagent)%health_status%malaria_status%status=4
+
+                                ! New chronic asymptomatic
+                                if (generate_random() < 0.01) then 
+                               
+                                    people(iagent)%health_status%malaria_status%infc_dur=150 
+                                ! Otherwise log-normally distributed times - function of e_l
+                                else 
+                                    !
+                                    people(iagent)%health_status%malaria_status%infc_dur=10
+                                    !
+                                end if
                             end if
                             !
                             !
@@ -876,18 +906,19 @@ USE, INTRINSIC :: ISO_C_BINDING
                     elseif (stat == 3) then ! If infected symptomatic (I) *****************************
                     !
                     !===
-                        ! Clearance of disease
-                        if (people(iagent)%health_status%malaria_status%infc_dur == 0) then
-                            people(iagent)%health_status%malaria_status%status=5
-                        else 
-                            people(iagent)%health_status%malaria_status%infc_dur=people(iagent)%health_status%malaria_status%infc_dur - 1
-                        end if
                         !
                         ! Human to vector transmission
                         if ((generate_random() < P_0)) then    ! If infected by human
                             !
                             nbites(j) = nbites(j) + 1
                             !
+                        end if
+                        !
+                        ! Clearance of disease
+                        if (people(iagent)%health_status%malaria_status%infc_dur == 0) then
+                            people(iagent)%health_status%malaria_status%status=5
+                        else 
+                            people(iagent)%health_status%malaria_status%infc_dur=people(iagent)%health_status%malaria_status%infc_dur - 1
                         end if
                     !===                  
                     !
@@ -895,55 +926,76 @@ USE, INTRINSIC :: ISO_C_BINDING
                     elseif (stat == 4) then ! If infected asymptomatic (A) *****************************
                     !
                     !===
+                        !
+                        ! Human to vector transmission
+                        if ((generate_random() < P_0)) then    ! If infected by human
+                            !
+                            nbites(j) = nbites(j) + 1
+                            !
+                        end if
+                        !
                         ! Clearance of disease
                         if (people(iagent)%health_status%malaria_status%infc_dur == 0) then
                             people(iagent)%health_status%malaria_status%status=5
                         else 
                             people(iagent)%health_status%malaria_status%infc_dur=people(iagent)%health_status%malaria_status%infc_dur - 1
                         end if
-                        !
-                        ! Human to vector transmission
-                        if ((generate_random() < P_0)) then    ! If infected by human
-                            !
-                            !print *, 'Eureka! --> H-V', P_0, lambda_0, rvect(0,j), npeop(j)
-
-                            nbites(j) = nbites(j) + 1
-
-                        !    print *, dble(nbites(j))/npeop(j)
-                            !
-                        end if
-                        !
                     !==    
                     !
                     elseif (stat == 5) then ! If recovered (R) *****************************
                     !
                     !===
-                        !
+                        ! Vector to human transmission 
                         if ((generate_random() < P_1)) then    ! If infected by vector
-                           ! print *, 'Eureka! --> V-H', P_1, lambda_1, rvect(ninfv,j), npeop(j)
                             !
                             ! Move to Exposed
                             people(iagent)%health_status%malaria_status%status=2
                             !
                             ! Intrinsic Incubation Period (IIP)
                             people(iagent)%health_status%malaria_status%infc_dur=iip
+                        !
+                        ! Immunity loss
+                        else
                             !
+                            people(iagent)%health_status%malaria_status%e_l = people(iagent)%health_status%malaria_status%e_l*(1 - mat_rate*dt)
+                            !
+                            ! Transition to Susceptible
+                            if (people(iagent)%health_status%malaria_status%e_l < e_th) then 
+                                !
+                                people(iagent)%health_status%malaria_status%e_l = 0.
+                                people(iagent)%health_status%malaria_status%status=1
+                                !
+                            end if
                         end if 
                         !
+
                     !===    
                     !
                     end if
+                    !
+                    ! Base mortality
+                    !===
+                        !
+                        if (generate_random() <= mu) then 
+                            !
+                            people(iagent)%health_status%active_status%status=.false.
+                            !
+                        end if
+                        !
+                    !===
                 else ! If agent is dead
                    !
                    ! We try to activate agent "iagent" a maximum number of (npeop(i) - nattempt(i)) times
                    ! If successful then cycle (cyc=.true.) to next agent
-                   cyc=.true.
-                   do while ((n_attempt(j) .le. npeop(j)) .and. (.not. cyc))
+                   cyc=.false.
+                   do while ((n_attempt(i) .le. npeop(i)) .and. (.not. cyc))
                         if (generate_random() <= mu) then ! Growth event
                              !
-                             people(iagent)%health_status%active_status%status=.true. ! You are now alive,
-                             people(iagent)%health_status%malaria_status%status=1     ! born susceptible
-                             people(iagent)%agent_ID%age=0                            ! and as a baby
+                             people(iagent)%health_status%active_status%status=.true.  ! You are now alive,
+                             people(iagent)%health_status%malaria_status%status=1      ! born susceptible
+                             people(iagent)%agent_ID%age=0                             ! and as a baby
+                             people(iagent)%health_status%malaria_status%e_l=0.        ! Endemicity level is zero
+                             people(iagent)%health_status%malaria_status%mat_im=.true. ! Maternal immunity is active
                              !
                              if (generate_random() <= 0.51) then ! Sex
                                  people(iagent)%agent_ID%sex=0   ! Female = 0
@@ -951,9 +1003,9 @@ USE, INTRINSIC :: ISO_C_BINDING
                                  people(iagent)%agent_ID%sex=1   ! Male = 0
                              end if
                              cyc=.true.
-                             n_attempt(j) = n_attempt(j) + 1
+                             n_attempt(i) = n_attempt(i) + 1
                         else
-                             n_attempt(j) = n_attempt(j) + 1
+                             n_attempt(i) = n_attempt(i) + 1
                         end if 
                     end do
                 end if ! If (active)
@@ -1080,7 +1132,7 @@ USE, INTRINSIC :: ISO_C_BINDING
 
         ! =============== Immunity functions =============================
 
-        function endemicity(e_l,e_0,tau_e1,tau_e2) result(delta_e)
+        function endemicity(e_l,e_0,e1,e2) result(delta_e)
 
         ! Return the acquired inmmunity after an infectious bite
 
@@ -1088,30 +1140,47 @@ USE, INTRINSIC :: ISO_C_BINDING
 
         real, intent(in)  :: e_0     ! Maximum acquisition per infectious bite (when fully susceptible)
         real, intent(in)  :: e_l     ! Current immunity level
-        real, intent(in)  :: tau_e1  ! Fast 
-        real, intent(in)  :: tau_e2  ! Slow
+        real, intent(in)  :: e1  ! Fast 
+        real, intent(in)  :: e2  ! Slow
         real              :: delta_e ! Acquired immunity 
 
-            delta_e = 0.5*e_0*(exp(-e_l/tau_e1) + exp(-e_l/tau_e2))
-
+            delta_e = 0.5*e_0*(exp(-e_l/e1) + exp(-e_l/e2))
 
         end function endemicity
 
 
-        function prob_symp(e_l,gamma_min) result(p)
+        function prob_symp(e_l,alph_min) result(p)
 
         ! Return the acquired inmmunity after an infectious bite
+        ! Linear function
+
+        implicit none
+
+        real, intent(in)  :: e_l        ! Current immunity level
+        real, intent(in)  :: alph_min  ! Minimum symptomatic fraction (1- maximum asymptomatic fraction) 
+        real              :: p          ! Probability to be symptomatic
+
+            p = -(1-alph_min)*e_l + 1
+
+        end function prob_symp
+
+        function prob_symp_sig(e_l,gamma_min,K_symp) result(p)
+
+        ! Return the acquired inmmunity after an infectious bite
+        ! Sigmoidal function
 
         implicit none
 
         real, intent(in)  :: e_l        ! Current immunity level
         real, intent(in)  :: gamma_min  ! Minimum symptomatic fraction (1- maximum asymptomatic fraction) 
+        real, intent(in)  :: K_symp     !
         real              :: p          ! Probability to be symptomatic
 
-            p = -(1-gamma_min)*e_l + 1
 
+            p = (1-gamma_min)*(e_l / K_symp + e_l) 
 
-        end function prob_symp
+        end function prob_symp_sig
+
 
         function mean_logtimes(e_l,mu_min,mu_max,d_eI) result(mu_e)
 
@@ -1123,7 +1192,6 @@ USE, INTRINSIC :: ISO_C_BINDING
         real             :: mu_e
 
             mu_e = -d_eI*(mu_max-mu_min)*e_l + mu_min
-
 
         end function mean_logtimes
 

@@ -128,7 +128,7 @@ MODULE mo_const
 
     real :: b_rate                      ! Mosquito biting rate (bites/mosquito/day)
 
-    real :: e_0, tau_e1, tau_e2, e_th   ! Immunity
+    real :: e_0, e1, e2, e_th, mat_rate   ! Immunity
  
     real :: alph_max, alph_min          ! Symptomatics
 
@@ -192,15 +192,15 @@ MODULE mo_const
         theta_e=0.141     ! (normalized) Baseline excretion/contamination rate from infected population [day^-1]
         theta_p=0.141     ! Effect of precipitation in the climate-driven excretion rate                [mm^-1]
         mu   =1./(61.*365)! Background human mortality rate        [day^-1]
-        rho  =1./(3.*365) ! Lost of immunity rate                  [day^-1]
+        rho  =1./(3.*365) ! Loss of immunity rate                  [day^-1]
         sigma=0.2         ! Proportion of symptomatics             [fraction]
         gamma=0.2         ! Recovery rate                          [day^-1]
         alpha=0.004       ! Death rate (infection or other causes) [day^-1]
         !    
         ! Mobility ---------------------------------------------------
-        m_short=0.6      ! Fraction of mobile population (could be an array to account for age, ... but is set to one constant for now)
-        D_grav=2.   ! e-folding distance for gravity model [km] ; Rinaldo et al. (2012) gives 100km for Haiti's epidemic
-        beta=1.    ! Contact rate [day^-1]
+        m_short=0.6   ! Fraction of mobile population (could be an array to account for age, ... but is set to one constant for now)
+        D_grav=2.     ! e-folding distance for gravity model [km] ; Rinaldo et al. (2012) gives 100km for Haiti's epidemic --> not very realistic
+        beta=1.       ! Contact rate [day^-1]
         
         ! Idealized world parameters
         D_pop=10   ! e-folding decay for radial city         [km]
@@ -220,38 +220,49 @@ MODULE mo_const
         disease_name="Malaria"
         !
         ! Default disease values for human host
-        iip = 10              ! Intrinsic incubation period [day] [ref:??]
+        iip = 10              ! Intrinsic incubation period [day] Cowman et al 2016 [DOI:]
         bite_night = 0.       ! Base daily probability to get bitten overnight. Should be a function of wellfare index (availability of bednets, ...)
         bite_day   = 0.       ! Base daily probability to get bitten during day (relevant for short daily trips and vectors that are active during day hours)
-        P_v0 = 0.3            ! Ermert et al. [ref:missing]
-        P_h0 = 0.2            ! "  "
-        P_max= 0.2            ! Maximum transsion probability
+        P_v0 = 0.3            ! Base vector to human transmission probability  Ermert et al. 2011 [DOI:]
+        P_h0 = 0.2            ! Base human to vector transmission probability          "  "
+        P_max= 0.2            ! Maximum transsion probability ~ 0.2 +- 0.15 Churcher et al. 2013 [DOI:]
+                              !                               ~ 0.125       Bousema  et al. 2011 [DOI:] ---> and references therein | Ouedraogo 2009 [DOI:]
+                              !                                                                                                     | Schneider 2007 [DOI:]
 
-        b_rate = 20.          ! [ref:mx] Nzioki et al. 2023 mean of 1.6 bites/person/hour from 18:00 - 6:30 (~ 1.6*12.5)
+        b_rate = 20.          ! Vector biting rate - mean of 1.6 bites/person/hour from 18:00 - 6:30 (~ 1.6*12.5) Nzioki et al. 2023 [DOI:]
 
-        mu   =1./(61.*365)! Background human mortality rate        [day^-1]
-        rho  =1./(3.*365) ! Lost of immunity rate                  [day^-1]
+        mu  = 1./(61.*365)    ! Background human mortality rate [day^-1]
 
         ! Immunity
 
-        e_0    = 0.01     ! Base increase in endemicity level [per infectious bite]               [x]
-        tau_e1 = 2*e_0    ! e-folding decay in boosted maternal/naive immunity acquisition (fast) [e_0]
-        tau_e2 = 100*e_0  ! e-folding decay in gradual immunity acquisition (slow)                [e_0]
-        e_th   = 0.001    ! Threshold endemicity level value for R --> S transition               [x]
+        e_0    = 0.01     ! Base increase in endemicity level [per infectious bite]                  [x]
+        e1     = 2*e_0    ! e-folding factor in boosted maternal/naive immunity acquisition (fast) [e_0]
+        e2     = 100*e_0  ! e-folding factor in gradual immunity acquisition (slow)                [e_0]
+        e_th   = 0.001    ! Threshold endemicity level value for R --> S transition                  [x]
 
+        mat_rate = log(2.)/(6.*30)  ! Loss rate of maternal immunity = ln(2)/(Half-life of maternal immunity) [day^-1] 
+                                  !
+                                  ! 3-9 months Gupta 1999 [DOI:]
+                                  ! 3   months Ghani 2009 [DOI:]
+        rho = log(2.)/(6.*365)    ! Decay rate of endemicity/immunity level = ln(2)/(Half-life of clinical immunity) 5   [yr] Filipe 2007 [DOI:]
+                                  !                                                                                  6.9 [yr] Ghani 2009  [DOI:]
         ! Symptomatics 
 
-        alph_min = 0.25   ! []
-        alph_max = 1.     !
+        alph_min = 0.28   !    We take the lowest we can find in literature from highly endemic areas reporting adult prevalence
+                          !    1-0.311 (Malawi) Topazian    2020 [DOI:]
+                          !    1-0.482 (DCR)    Mvumbi      2015 [DOI:]
+                          !    1-0.520 (Gabon)  Dal-Bianco  2007 [DOI:]
+                          !    1-0.680 (Ghana)  Heinemann   2020 [DOI:]
+        ! So far this one ---> 1-0.721 (Ghana)  Owusu-Agyei 2002 [DOI:] 
+        alph_max = 1.    !
 
 
         ! Mobility ---------------------------------------------------
 
         m_short=0.    ! Fraction of mobile population making short daily trips (could be an array to account for age, ... but is set to one constant for now)
         m_long =0.    ! Fraction of mobile population starting long overnight trips
-        r_ret  =1./5. ! Rate of long trip return
+        r_ret  =1./5. ! Rate of long trip return [dayy^-1]
         D_grav =2.    ! e-folding distance for gravity model [km] 
-        beta   =1.    ! Contact rate 
 
         ! Idealized world parameters
         D_pop=10   ! e-folding decay for radial city         [km]
@@ -260,8 +271,9 @@ MODULE mo_const
         ! Default initial conditions ---------------------------------
         
         fS_0=1.   ! Susceptible  [fraction]
-        fE_0=0.   ! Infected     [fraction]
-        fI_0=0.   ! Asymptomatic [fraction]
+        fE_0=0.   ! Exposed      [fraction]
+        fI_0=0.   ! Symptomatic  [fraction]
+        fA_0=0.   ! Asymptomatic [fraction]
         fR_0=0.   ! Recovered    [fraction]
 
         ! Attribute list 

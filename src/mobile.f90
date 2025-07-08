@@ -492,7 +492,7 @@ PROGRAM MOBILE
         ! Post-diagnostics calculations
         !
         if (disID == 1) then  
-          ! Calculate average EIR
+          ! Calculate average daily EIR
           where(mask_pop(:)) EIR(:) = EIR(:)/npeop(:)/P_a
           !
         end if
@@ -533,7 +533,6 @@ PROGRAM MOBILE
       end if
       !
   !===
-  !print *, sum(rvect(ninfv,:)), sum(rvect(:,:))
   !
   end do time_loop
   !

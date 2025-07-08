@@ -559,7 +559,7 @@ MODULE mo_netcdf
         if (out_vecinfc) then
           !
           VarId(var_out)=var_out
-          status = nf90_def_var(ncid = ncid_out, name = "frac. inf. vector", xtype = nf90_double, &
+          status = nf90_def_var(ncid = ncid_out, name = "inf. vector", xtype = nf90_double, &
                     dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
           status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "units", values = "m^-2")
           status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "long_name", values = "Fraction of infective vectors")
