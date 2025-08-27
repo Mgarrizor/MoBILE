@@ -105,8 +105,9 @@ USE, INTRINSIC :: ISO_C_BINDING
             integer :: ixy ! Looping long index
             integer :: ipeo, indx, loc
             real :: norm, rand
+            integer :: nfaces
             integer :: j          ! Short trip location index
-            real :: cdf_health(4) ! Cumulative distribution to asign agent health based on initial profile
+            real, allocatable :: cdf_health(:) ! Cumulative distribution to asign agent health based on initial profile
             real :: cdf(nxy)      ! Cumulative distribution to asign agent location based on human density
             integer :: stat_health
             
@@ -123,7 +124,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             scale(:)  = norm/(A_cell(:)*nagent)
             scaleI(:) = 1./scale(:)
-           ! print *, 'Average scale factor = ', sum(scale(:))/size(scale(:))
+            print *, 'Average scale factor = ', sum(scale(:))/size(scale(:))
             print *, 'Number of people in simulated region', norm
             !
             if (norm < nagent) then
@@ -143,8 +144,18 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             ! CDF for initial health status
             if (random) then
-                ! To Do: We should here use disID input to build a disease-dependent dice
-                cdf_health(:) = cumsum([0.25,0.25,0.25,0.25])/sum([0.25,0.25,0.25,0.25])
+                !
+                if (disID == 0) then
+                    nfaces = 4  ! SEIR
+                    allocate(cdf_health(nfaces))
+                    !
+                else if (disID == 1) then 
+                    nfaces = 5  ! SEIAR
+                    allocate(cdf_health(nfaces))
+                    !
+                end if
+                !
+                cdf_health(:) = cumsum([(1./nfaces,k=1,nfaces)])
                 !
             else ! Follow initial condition profile
                 
@@ -179,16 +190,47 @@ USE, INTRINSIC :: ISO_C_BINDING
 
                             ! Initialize health attributes
                             if (random .and. (.not. rand_seed)) then
-                                !
+
                                 call random_number(rand)
-                                stat_health = find_face(rand,cdf_health(:),4) ! Random initial status
+                                stat_health = find_face(rand,cdf_health(:),nfaces)
+                                !
+                                if (idis == 1) then
+                                    !  
+                                    people(indx)%health_status%malaria_status%e_l = 0.5
+                                    !
+                                    if (stat_health == 1) then !(Susceptible)
+                                        !
+                                        people(indx)%health_status%malaria_status%infc_dur=0
+                                        !
+                                    else if (stat_health == 2) then !(Exposed)
+                                        !
+                                        people(indx)%health_status%malaria_status%infc_dur=iip
+                                        !
+                                    else if (stat_health == 3) then !(Symptomatic)
+                                        ! Log-normally distributed times - function of e_l
+                                        people(indx)%health_status%malaria_status%infc_dur=tau_log(people(indx)%health_status%malaria_status%e_l,d_mu,mu_1,d_sig,sig_1)
+                                        !
+                                    else if (stat_health == 4) then !(Asymptomatic)
+                                        !
+                                        ! Chronic asymptomatics
+                                        if (generate_random() < fA_chr) then 
+                                             !
+                                             people(indx)%health_status%malaria_status%infc_dur=tau_chr
+                                             !
+                                        else 
+                                             ! Log-normally distributed times - function of e_l
+                                             people(indx)%health_status%malaria_status%infc_dur=tau_log(people(indx)%health_status%malaria_status%e_l,d_mu,mu_1,d_sig,sig_1)
+                                             !
+                                         end if
+                                    end if
+                                end if
                                 !
                             else 
                                 !
                                 if (idis == 1) then  ! For malaria we generate a low percentage of chronic asymptomatics (1%)
-                                    if (generate_random() < 0.01) then 
+                                    if (generate_random() < fA_chr) then 
                                         stat_health = 4 !(Asymptomatic)
-                                        people(indx)%health_status%malaria_status%infc_dur=150 
+                                        people(indx)%health_status%malaria_status%infc_dur=tau_chr
                                     else 
                                         stat_health = 1 !(Susceptible)
                                         people(indx)%health_status%malaria_status%infc_dur=0
@@ -200,8 +242,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                             people(indx)%health_status%cholera_status%status=stat_health !(S:1, I:2, A:3, R:4)
                             people(indx)%health_status%cholera_status%infc_dur=0
                             ! Malaria
-                            people(indx)%health_status%malaria_status%status=stat_health !(S:1, E:2, I:3, R:4)
-
+                            people(indx)%health_status%malaria_status%status=stat_health !(S:1, E:2, I:3, A:4, R:5)
                             people(indx)%health_status%active_status%status=.true.       ! All agents are initially alive
 
                             ! Initialize location attributes
@@ -256,13 +297,46 @@ USE, INTRINSIC :: ISO_C_BINDING
                    ! Initialize health attributes
                    if (random .and. (.not. rand_seed)) then
                        call random_number(rand)
-                       stat_health = find_face(rand,cdf_health(:),4)
+                       stat_health = find_face(rand,cdf_health(:),nfaces)
+                       !
+                       if (idis == 1) then
+                           !  
+                           !  
+                           people(indx)%health_status%malaria_status%e_l = 0.5
+                           !
+                           if (stat_health == 1) then !(Susceptible)
+                               !
+                               people(indx)%health_status%malaria_status%infc_dur=0
+                               !
+                           else if (stat_health == 2) then !(Exposed)
+                               !
+                               people(indx)%health_status%malaria_status%infc_dur=iip
+                               !
+                           else if (stat_health == 3) then !(Symptomatic)
+                               ! Log-normally distributed times - function of e_l
+                               people(indx)%health_status%malaria_status%infc_dur=tau_log(people(indx)%health_status%malaria_status%e_l,d_mu,mu_1,d_sig,sig_1)
+                               !
+                           else if (stat_health == 4) then !(Symptomatic)
+                               !
+                               ! Chronic asymptomatics
+                               if (generate_random() < fA_chr) then 
+                                    !
+                                    people(indx)%health_status%malaria_status%infc_dur=tau_chr
+                                    !
+                               else 
+                                    ! Log-normally distributed times - function of e_l
+                                    people(indx)%health_status%malaria_status%infc_dur=tau_log(people(indx)%health_status%malaria_status%e_l,d_mu,mu_1,d_sig,sig_1)
+                                    !
+                                end if
+                           end if
+                       end if
+                       !
                    else 
                        !
                         if (idis == 1) then  ! For malaria we generate a low percentage of chronic asymptomatics (10%)
-                            if (generate_random() < 0.01) then 
+                            if (generate_random() < fA_chr) then 
                                 stat_health = 4 !(Asymptomatic)
-                                people(indx)%health_status%malaria_status%infc_dur=150 
+                                people(indx)%health_status%malaria_status%infc_dur=tau_chr
                             else 
                                 stat_health = 1 !(Susceptible)
                                 people(indx)%health_status%malaria_status%infc_dur=0
@@ -301,16 +375,9 @@ USE, INTRINSIC :: ISO_C_BINDING
                !
             end do
             !
-            ! Note: npeop(:) is now the total number of agents.
-            ! If all agents are active they represent (1+band)*100% of the steady-state
-            ! population density. We now factor it back to get the number of
-            ! alive agents that would represent the 100% of the steady-state.
-            ! This number is then used in the "agents_update" subroutine.
-            !
-            !npeop(:) = floor((1./(1.+band))*npeop(:))
             write(*,*) ' '
             print *, 'Check normalization of agents', sum(npeop(:)/pop_dens(:)*scale(:), mask=((pop_dens(:) > 0.) .and. (npeop(:) > 0))) & 
-                                                              /sum(merge(1, 0, mask_pop(:)), mask=((pop_dens(:) > 0.) .and. (npeop(:) > 0)))
+                                                              /sum(merge(1, 0, mask_pop(:)), mask=((pop_dens(:) > 0.) .and. (npeop(:) > 0))), '~ 1?'
 
             print '("Initialized:", I8, A8)', nagent, '  agents'
             !
@@ -553,6 +620,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                         if (generate_random() <= mu) then ! Death
                             !
                             people(iagent)%health_status%active_status%status=.false.
+                            npeop(i) = npeop(i) - 1
                             !
                         end if
                     !==    
@@ -593,6 +661,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                         if (generate_random() <= mu) then ! Death
                             !
                             people(iagent)%health_status%active_status%status=.false.
+                            npeop(i) = npeop(i) - 1
                             !
                         end if
                         ! end Health  
@@ -659,6 +728,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                         if (generate_random() <= mu) then ! Death
                             !
                             people(iagent)%health_status%active_status%status=.false.
+                            npeop(i) = npeop(i) - 1
                             !
                         end if
                     !===  
@@ -678,6 +748,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                         if (generate_random() <= mu) then 
                             !
                             people(iagent)%health_status%active_status%status=.false.
+                            npeop(i) = npeop(i) - 1
                             !
                         end if
                         !
@@ -740,7 +811,6 @@ USE, INTRINSIC :: ISO_C_BINDING
             ! 0: Human to vector  1: Vector to human
             !
             real :: hbr_0, hbr_1
-           ! real :: m_0, m_1
             real :: lambda_0, lambda_1
             real :: P_0                     ! Human to vector
             real :: P_1                     ! Vector to human
@@ -751,15 +821,25 @@ USE, INTRINSIC :: ISO_C_BINDING
         stat   =  people(iagent)%health_status%malaria_status%status
         i      =  people(iagent)%location_status%currloc
         home   =  people(iagent)%location_status%homeloc
- 
+
+
+        ! ToC ===========================
+        !
+        ! 1) Mobility
+        ! 2) Disease
+        !   2.0) Maternal immunity
+        !   2.1) Transmission probabilities
+        !   2.2) SEIAR update
+        !
         !-----------------------------------------------------------------------------
 
         if (mask_pop(i)) then ! Check if location is populated and driving fields are not missing
                 if (active) then  ! If agent is alive
                     !
                     !
-                    ! Since vector-human interactions are overnight we can neglect the effect of daily trips
+                    ! Since vector-human interactions are (for now) overnight we can neglect the effect of daily trips
                     ! and therefore treat mobility first and then disease  
+                    !
                     ! 1) Mobility ==============================
                     !
                     if (stat /= 3) then ! If not in symptomatic state
@@ -769,8 +849,8 @@ USE, INTRINSIC :: ISO_C_BINDING
                         if (i /= home) then
                             
                             if ((generate_random() <= r_ret)) then ! Return home with some constant probability 
-                                                              ! (this means we have exponentially distributed travelling times
-                                                              ! with folding time = r_ret)
+                                                                   ! (this means we have exponentially distributed travelling times
+                                                                   ! with folding time = 1/r_ret)
                                 people(iagent)%location_status%currloc = home
                                 j = home
 
@@ -778,7 +858,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                                 npeop(i) = npeop(i) - 1 
                                 npeop(j) = npeop(j) + 1
                             else 
-                                ! Update duration of trip (useful if we implement not exponential travelling times)
+                                ! Update duration of trip counter --> useful if we implement not exponential travelling times
                                 people(iagent)%location_status%longdur = people(iagent)%location_status%longdur + 1
 
                             end if
@@ -792,7 +872,6 @@ USE, INTRINSIC :: ISO_C_BINDING
                             ! If agent makes a long trip
                             elseif ((generate_random() < m_long)) then ! probability to move = m_long
                                 
-                                
                                 j = people(iagent)%location_status%longloc
                                 people(iagent)%location_status%currloc = j
                                 people(iagent)%location_status%longdur = 1     ! Counter in case trip durations are not exponentially distributed
@@ -802,9 +881,8 @@ USE, INTRINSIC :: ISO_C_BINDING
                                 npeop(j) = npeop(j) + 1
     
                             !
-                            ! If agent does not move
-                            else 
-    
+                            ! else agent does not move
+                            !
                             end if
                         end if
                         !
@@ -832,7 +910,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                         lambda_0 = m_0(j)*1. ! f(a,t) = 1 
                         P_0 = P_max*(1 - exp(-lambda_0*P_h0))
                         !
-                        ! Vector to human transmission
+                        ! Vector to Human transmission
                         !
                         lambda_1 = m_1(j)*1. ! f(a,t) = 1 
                         P_1 = 1 - exp(-lambda_1*P_v0)
@@ -840,10 +918,12 @@ USE, INTRINSIC :: ISO_C_BINDING
                         ! Apply numerical threshold ---> Need to optimize transmission events for cases where P < epsilon
                         P_0 = min(real(floor(P_0/eps)),P_0)
                         P_1 = min(real(floor(P_1/eps)),P_1)
-                        !
+                        ! 
                         ! Save agent-specific daily entomological inoculation rate
-                        people(iagent)%health_status%malaria_status%EIR_att = lambda_1
+                        people(iagent)%health_status%malaria_status%EIR_att = P_1
                     !===
+                    !
+                    ! 2.2) SEIAR update -----------
                     !
                     if (stat == 1) then ! If susceptible (S) *****************************
                     !
@@ -864,42 +944,40 @@ USE, INTRINSIC :: ISO_C_BINDING
                     elseif (stat == 2) then ! If exposed (E) *****************************
                     !
                     !===
-                        !
+                        ! Check if IIP has finished
                         if (people(iagent)%health_status%malaria_status%infc_dur == 0) then
 
                             ! Update immunity/endemicity level
-                            people(iagent)%health_status%malaria_status%e_l = people(iagent)%health_status%malaria_status%e_l + endemicity(people(iagent)%health_status%malaria_status%e_l,e_0,e1,e2)
+                            people(iagent)%health_status%malaria_status%e_l = people(iagent)%health_status%malaria_status%e_l + endemicity(people(iagent)%health_status%malaria_status%e_l,e_0,e1,e2,A1)
                             !
                             ! Transition to symptomatic with probability prob_symp()
-                            if (generate_random() < prob_symp(people(iagent)%health_status%malaria_status%e_l,alph_min)) then 
+                            if (generate_random() < prob_symp_sig(people(iagent)%health_status%malaria_status%e_l,alph_max,alph_min,e_m,sig_m)) then 
 
                                 people(iagent)%health_status%malaria_status%status=3
                                 !
                                 ! Log-normally distributed times - function of e_l
-                                people(iagent)%health_status%malaria_status%infc_dur=10
+                                people(iagent)%health_status%malaria_status%infc_dur=tau_log(people(iagent)%health_status%malaria_status%e_l,d_mu,mu_1,d_sig,sig_1)
 
                             else ! Otherwise asymptomatic 
                                 people(iagent)%health_status%malaria_status%status=4
 
                                 ! New chronic asymptomatic
-                                if (generate_random() < 0.01) then 
+                                if (generate_random() < fA_chr) then 
                                
-                                    people(iagent)%health_status%malaria_status%infc_dur=150 
+                                    people(iagent)%health_status%malaria_status%infc_dur=tau_chr 
                                 ! Otherwise log-normally distributed times - function of e_l
                                 else 
                                     !
-                                    people(iagent)%health_status%malaria_status%infc_dur=10
+                                    people(iagent)%health_status%malaria_status%infc_dur=tau_log(people(iagent)%health_status%malaria_status%e_l,d_mu,mu_1,d_sig,sig_1)
                                     !
                                 end if
                             end if
                             !
-                            !
+                        ! Otherwise reduce by 1 day the IIP counter
                         else 
-                           ! print *, people(iagent)%health_status%malaria_status%infc_dur
                             !
                             people(iagent)%health_status%malaria_status%infc_dur=people(iagent)%health_status%malaria_status%infc_dur - 1
                             !
-                           ! print *, people(iagent)%health_status%malaria_status%infc_dur
                         end if
                     !===  
                     !
@@ -934,8 +1012,18 @@ USE, INTRINSIC :: ISO_C_BINDING
                             !
                         end if
                         !
+                        ! Vector to human transmission 
+                        if ((generate_random() < P_1)) then    ! If infected by vector
+                            !
+                            ! Move to Exposed
+                            people(iagent)%health_status%malaria_status%status=2
+                            !
+                            ! Intrinsic Incubation Period (IIP)
+                            people(iagent)%health_status%malaria_status%infc_dur=iip
+
+                        !
                         ! Clearance of disease
-                        if (people(iagent)%health_status%malaria_status%infc_dur == 0) then
+                        elseif (people(iagent)%health_status%malaria_status%infc_dur == 0) then
                             people(iagent)%health_status%malaria_status%status=5
                         else 
                             people(iagent)%health_status%malaria_status%infc_dur=people(iagent)%health_status%malaria_status%infc_dur - 1
@@ -953,11 +1041,12 @@ USE, INTRINSIC :: ISO_C_BINDING
                             !
                             ! Intrinsic Incubation Period (IIP)
                             people(iagent)%health_status%malaria_status%infc_dur=iip
+
                         !
                         ! Immunity loss
                         else
                             !
-                            people(iagent)%health_status%malaria_status%e_l = people(iagent)%health_status%malaria_status%e_l*(1 - mat_rate*dt)
+                            people(iagent)%health_status%malaria_status%e_l = people(iagent)%health_status%malaria_status%e_l*(1. - rho*dt)
                             !
                             ! Transition to Susceptible
                             if (people(iagent)%health_status%malaria_status%e_l < e_th) then 
@@ -979,6 +1068,9 @@ USE, INTRINSIC :: ISO_C_BINDING
                         if (generate_random() <= mu) then 
                             !
                             people(iagent)%health_status%active_status%status=.false.
+                            people(iagent)%health_status%malaria_status%EIR_att=0.
+                            people(iagent)%health_status%malaria_status%e_l=0.
+                            npeop(j) = npeop(j) - 1
                             !
                         end if
                         !
@@ -1020,8 +1112,9 @@ USE, INTRINSIC :: ISO_C_BINDING
 
         end subroutine agents_dengue
         !
-        !
+        !**************************************
         !============ Functions ===============
+        !**************************************
         !
         function cumsum(a) result(r)
             ! https://fortran-lang.discourse.group/t/what-is-the-fastest-way-to-do-cumulative-sum-in-fortran-to-mimic-matlab-cumsum/1976/11
@@ -1033,7 +1126,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             r(:) = [(sum(a(1:i)),i=1,size(a))]
             !
         end function cumsum
-
+        !
         function find_face(r,cum_distr,sides) result(roll)
             ! r: uniformly distributed random number, [0,1)
             ! cum_distr: cumulative distribution (not normalized) of probabilities (the weights of each face of the dice)
@@ -1057,7 +1150,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             end do
             !
         end function find_face
-
+        !
         function find_masked_face(i,r,cum_distr,sides,mask_grav,mask_pop) result(roll)
             ! r: uniformly distributed random number, [0,1)
             ! cum_distr: cumulative distribution (not normalized) of probabilities (the weights of each face of the dice)
@@ -1118,11 +1211,11 @@ USE, INTRINSIC :: ISO_C_BINDING
             end do
             !
         end function find_masked_face_2
-
-
+        !
+        function generate_random() result(rand_num)
         ! Wrap random number subroutine in a function to be able
         ! to use it inside an "if" statement
-        function generate_random() result(rand_num)
+
             implicit none
             real :: rand_num
             !
@@ -1132,7 +1225,7 @@ USE, INTRINSIC :: ISO_C_BINDING
 
         ! =============== Immunity functions =============================
 
-        function endemicity(e_l,e_0,e1,e2) result(delta_e)
+        function endemicity(e_l,e_0,e1,e2,A1) result(delta_e)
 
         ! Return the acquired inmmunity after an infectious bite
 
@@ -1140,15 +1233,34 @@ USE, INTRINSIC :: ISO_C_BINDING
 
         real, intent(in)  :: e_0     ! Maximum acquisition per infectious bite (when fully susceptible)
         real, intent(in)  :: e_l     ! Current immunity level
-        real, intent(in)  :: e1  ! Fast 
-        real, intent(in)  :: e2  ! Slow
+        real, intent(in)  :: e1      ! Fast 
+        real, intent(in)  :: e2      ! Slow
+        real, intent(in)  :: A1      ! Coefficient
         real              :: delta_e ! Acquired immunity 
 
-            delta_e = 0.5*e_0*(exp(-e_l/e1) + exp(-e_l/e2))
+            delta_e = e_0*(A1*exp(-e_l/e1) + (1-A1)*(1-e_l/e2))
 
         end function endemicity
+        !
+        function prob_symp_sig(e_l,alph_max,alph_min,e_m,sig_m) result(p)
 
+        ! Return the acquired inmmunity after an infectious bite
+        ! Sigmoidal function
 
+        implicit none
+
+        real, intent(in)  :: e_l        ! Current immunity level
+        real, intent(in)  :: e_m        ! inflection
+        real, intent(in)  :: sig_m      ! "slope"
+        real, intent(in)  :: alph_max   ! Maximum symptomatic fraction 
+        real, intent(in)  :: alph_min   ! Minimum symptomatic fraction (1- maximum asymptomatic fraction) 
+
+        real              :: p          ! Probability to be symptomatic
+
+            p = alph_max*(1-1./(alph_max/(alph_max-alph_min)+exp(-m*(e_l-e_m))))
+
+        end function prob_symp_sig
+        !
         function prob_symp(e_l,alph_min) result(p)
 
         ! Return the acquired inmmunity after an infectious bite
@@ -1163,51 +1275,138 @@ USE, INTRINSIC :: ISO_C_BINDING
             p = -(1-alph_min)*e_l + 1
 
         end function prob_symp
-
-        function prob_symp_sig(e_l,gamma_min,K_symp) result(p)
-
-        ! Return the acquired inmmunity after an infectious bite
-        ! Sigmoidal function
-
-        implicit none
-
-        real, intent(in)  :: e_l        ! Current immunity level
-        real, intent(in)  :: gamma_min  ! Minimum symptomatic fraction (1- maximum asymptomatic fraction) 
-        real, intent(in)  :: K_symp     !
-        real              :: p          ! Probability to be symptomatic
-
-
-            p = (1-gamma_min)*(e_l / K_symp + e_l) 
-
-        end function prob_symp_sig
-
-
-        function mean_logtimes(e_l,mu_min,mu_max,d_eI) result(mu_e)
+        !
+        function mean_logtimes(e_l,d_mu,mu_1) result(mu_e)
 
         implicit none
 
         real, intent(in) :: e_l 
-        real, intent(in) :: mu_min, mu_max 
-        real, intent(in) :: d_eI
+        real, intent(in) :: d_mu, mu_1 
         real             :: mu_e
 
-            mu_e = -d_eI*(mu_max-mu_min)*e_l + mu_min
+            mu_e = d_mu*e_l + mu_1
 
         end function mean_logtimes
+        !
+        function sig_logtimes(e_l,d_sig,sig_1) result(sig_e)
+
+        implicit none
+
+        real, intent(in) :: e_l 
+        real, intent(in) :: d_sig, sig_1 
+        real             :: sig_e
+
+            sig_e = d_sig*e_l + sig_1
+
+        end function sig_logtimes
+        !
+        function r4_normal_cd (c, d) result(r4_normal)
+
+        !*****************************************************************************
+        !
+        ! This is a modified version of the function "R4_NORMAL_AB",
+        ! which can be found at https://people.math.sc.edu/Burkardt/f_src/normal/normal.html
+        ! 
+        ! Author: John Burkardt
+        ! Modified: 2013
+        !
+        !*****************************************************************************
+
+          ! Returns a sample, r4_normal, of the normal probability distribution N(c,d)
+          !
+          ! Input, real - c:
+          ! Input, real - d:
+
+          implicit none
+        
+          real, intent(in) :: c
+          real, intent(in) :: d
+        
+          ! Local use
+          real :: r1
+          real :: r2
+          real :: x
+          real :: r4_normal    !  Single precision (kind=4)
+        
+          r1 = generate_random()
+          r2 = generate_random()
+          x = sqrt ( - 2.0E+00 * log ( r1 ) ) * cos ( 2.0E+00 * pi * r2 )
+
+            r4_normal = c + d * x     ! Transform from N(0,1) to N(c,d)
+
+          end function r4_normal_cd
+
+          function mean_log_to_norm(a,b) result(c)
+          !
+          ! Returns mean, c, of normal distribution N(c,d) from log-normal distribution logN(a,b)
+          !
+          ! Input, real -  a: Mean of the log-normal PDF
+          ! Input, real -  b: Standard deviation of the log-normal PDF
+          !
+          ! Output, real - c: Mean of the corresponding normal distribution
+
+          implicit none  
+
+          real, intent(in) :: a, b 
+          real :: c
+
+            c = log(a) - 0.5*b**2
+
+          end function mean_log_to_norm
+
+          function std_log_to_norm(a,b) result(d)
+          !
+          ! Returns standard deviation (std), d, of normal distribution N(c,d) from log-normal distribution logN(a,b)
+          !
+          ! Input, real -  a: Mean of the log-normal PDF
+          ! Input, real -  b: Standard deviation of the log-normal PDF
+          !
+          ! Output, real - d: Mean of the corresponding normal distribution
+
+          implicit none  
+
+          real, intent(in) :: a, b 
+          real :: d
+
+            d = sqrt(log(1 + (b/a)**2))
+
+          end function std_log_to_norm
+          !
+          function tau_log(e_l,d_mu,mu_1,d_sig,sig_1) result(tau)
+          !
+          ! Returns log-normally distributed clearance time, tau ~ logN(a,b), given an immunity level e_l
+          !
+          ! ------------ Uses ------------------- -------------- Gets ---------------
+          !     mean_logtimes(e_l,d_mu,mu_1) --> | a: Mean logNorm PDF               |
+          !     sig_logtimes(e_l,d_sig,sig_1)--> | b: STD  logNorm PDF               |
+          !     mean_log_to_norm(a,b)        --> | c: Mean    Norm PDF               |
+          !     std_log_to_norm(a,b)         --> | d: STD     Norm PDF               |
+          !     r4_normal_cd(c,d)            --> | N(c,d): Normally distr. Rand. Num.|
+          !--------------------------------------------------------------------------
+          !     tau ~ exp(N(c,d))
+          !
+          implicit none
+          ! 
+          ! Result
+          real :: tau
+          !
+          ! Input
+          real, intent(in) :: e_l
+          real, intent(in) :: d_mu, mu_1, d_sig, sig_1
+          !
+          ! Local use
+          real :: a,b,c,d
 
 
+          a = mean_logtimes(e_l,d_mu,mu_1)
+          b = sig_logtimes(e_l,d_sig,sig_1)
 
+          c = mean_log_to_norm(a,b)
+          d = std_log_to_norm(a,b)
 
+          tau = exp(r4_normal_cd(c,d))
 
-
-
-
-
-
-
-
-
-
+          end function tau_log
 
 
 end MODULE mo_agents

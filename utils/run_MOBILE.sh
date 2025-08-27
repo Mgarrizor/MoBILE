@@ -33,6 +33,7 @@ fi
                              # 1: Malaria [non-functional]
                              # 2: Dengue  [non-functional]
             nstep=1095        # [days]       #  -n
+            nstep=2000
             seed=12345                       #  -s
 #          |
 #          |
@@ -58,14 +59,21 @@ fi
             spin_up=0                     #  -u
 
             # Example path for test run (Senegal CHIRXS processed driving files 2012-2014)
-            rain_file=$MOBILE'/utils/test_run/rain.nc'  #  -r
-            pop_file=$MOBILE'/utils/test_run/pop.nc'    #  -p
-            temp_file=$MOBILE'/utils/test_run/t2m.nc'   #  -t
-            area_file=$MOBILE'/utils/test_run/area.nc'  #  -x
+            #rain_file=$MOBILE'/utils/test_run/rain.nc'  #  -r
+            #pop_file=$MOBILE'/utils/test_run/pop.nc'    #  -p
+            #temp_file=$MOBILE'/utils/test_run/t2m.nc'   #  -t
+            #area_file=$MOBILE'/utils/test_run/area.nc'  #  -x
 
+
+            rain_file='Data/CHIRXS/rainfall/Senegal/rain.nc'
+            temp_file='Data/CHIRXS/temperature/Senegal/t2m.nc'
+            pop_file='Data/CHIRXS/pop.nc'
+            area_file='Data/CHIRXS/area.nc'  #  -x
+
+            
             const='params.txt'            #  -c
             vectri=$disID
-            vectorID=0
+            vectorID=0         # [non-functional]
 
 # Environmental variables
 #--------------------------------

@@ -43,7 +43,7 @@ implicit none
 
 logical :: out_vect   =.true.        ! Vector density
 logical :: out_vecinfc=.true.        ! Infective vector density
-logical :: out_larv   =.false.       ! Larval density
+logical :: out_larv   =.true.       ! Larval density
 logical :: out_wpond  =.true.        ! Pond fraction
 logical :: out_wurbn  =.true.        ! Urban fraction
 logical :: out_wperm  =.true.        ! Permanent fraction
@@ -162,8 +162,8 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
              allocate(rvect(0:ninfv,nlon*nlat))
              rvect(:,:) = 0.
 
-             where(mask_pop) rvect(0,:) = 100*rhost_infect_init*rvect_min
-             where(mask_pop) rvect(ninfv,:)=10*rhost_infect_init*rvect_min
+             !where(mask_pop) rvect(0,:) = 100*rhost_infect_init*rvect_min
+             !where(mask_pop) rvect(ninfv,:)=10*rhost_infect_init*rvect_min
 
              allocate(zvect_density(nlon*nlat))
              allocate(zvect_one_d_density(nlon*nlat))
@@ -174,6 +174,7 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
              !-- Larva
              allocate(rlarv(0:nlarv,nlon*nlat))
              rlarv(:,:) = 0.
+             where(mask_pop) rlarv(0,:) = rvect_min
              
              allocate(zsurvp_larv(0:nlarv))
              zsurvp_larv(:) = 1.
@@ -300,7 +301,6 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
                     call safe_diag(zvect_density,zvect_one_d_density,zvecinfc,rlarv,rvect,rvect_min,ninfv,&
                                     rpopdensity,mask_pop,rbitezoo,rzoophilic,dt,ixy) 
 
-                    !zmasslarv=SUM(rlarv(:,ixy)*rmasslarv(:))  ! Should we move this to where it is actually used?
                     !
                     !--------------------------------------------------
                     ! Meteorological data

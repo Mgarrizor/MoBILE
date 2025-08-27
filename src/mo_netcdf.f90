@@ -183,6 +183,13 @@ MODULE mo_netcdf
             !
         end if
         !
+        !
+        if ((out_larv)) then
+            !
+            call write_check_3D(itime,sum(rlarv(:,:), dim = 1),var_out,'NetCDF Status Larval density')
+            !
+        end if
+        !
         if ((out_wpond)) then
             !
             call write_check_3D(itime,rwaterpond*wpond_ratio,var_out,'NetCDF Status waterpond')
@@ -300,8 +307,8 @@ MODULE mo_netcdf
 #ifdef COUPLED
         ! Declarations or interfaces related to the coupled mode
         dim = dim +merge(1, 0, out_wurbn) +merge(1, 0, out_wperm)   +merge(1, 0, out_wpond) &
-                  +merge(1, 0, out_vect)  +merge(1, 0, out_vecinfc) +merge(1, 0, out_EIR)&
-                  +merge(1, 0, out_E)
+                  +merge(1, 0, out_vect)  +merge(1, 0, out_vecinfc) +merge(1, 0, out_larv)&
+                  +merge(1, 0, out_EIR)   +merge(1, 0, out_E)
         !
 #endif
 
@@ -562,7 +569,18 @@ MODULE mo_netcdf
           status = nf90_def_var(ncid = ncid_out, name = "inf. vector", xtype = nf90_double, &
                     dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
           status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "units", values = "m^-2")
-          status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "long_name", values = "Fraction of infective vectors")
+          status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "long_name", values = "Infective vector density")
+          var_out = var_out + 1
+          !
+        end if
+        !
+        if (out_larv) then
+          !
+          VarId(var_out)=var_out
+          status = nf90_def_var(ncid = ncid_out, name = "larvae", xtype = nf90_double, &
+                    dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
+          status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "units", values = "m^-2")
+          status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "long_name", values = "Larval density")
           var_out = var_out + 1
           !
         end if

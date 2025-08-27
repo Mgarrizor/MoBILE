@@ -125,8 +125,13 @@ MODULE mo_mobility
       counter = 0
 
       outer_loop: do ixy_1=1,nxy
+
         norm = 0.
         norm_dice = 0.
+
+        norm_long = 0.
+        norm_dice_long = 0.
+
         write(*,'(1a1,A19,F6.1,A2)', advance='no') char(13),'Calculating weights',(real(ixy_1)/real(nxy)*100.),' %'
         if (mask_pop(ixy_1)) then
           counter = counter + 1
@@ -142,7 +147,7 @@ MODULE mo_mobility
           
           ! Remove local grid point
           norm = norm - pop_dens(ixy_1)
-          norm = norm - pop_dens(ixy_1)
+          norm_long = norm_long - pop_dens(ixy_1)
 
           ! Start short trip weights -------------------------------------------------
           ! Safety check
@@ -220,8 +225,8 @@ MODULE mo_mobility
                         !
                         if (mask_pop(ixy_2)) then
                           !
-                          norm_dice = norm_dice + Q_2(ixy_1,ixy_2)   ! Include in normalization factor
-                          Q_long(ixy_2,ixy_1) = norm_dice     ! By building the dice in this way we have a 
+                          norm_dice_long = norm_dice_long + Q_2(ixy_1,ixy_2)   ! Include in normalization factor
+                          Q_long(ixy_2,ixy_1) = norm_dice_long     ! By building the dice in this way we have a 
                                                        ! cummulative array only in the indexes where this condition is true
                                                        ! The rest of the indexes have zero value and when the dice is thrown
                                                        ! they are automatically excluded.
@@ -238,11 +243,11 @@ MODULE mo_mobility
               Q_2(ixy_1,ixy_1)= 0.
               !
               ! Normalize cummulative array
-              if (agents .and. (norm_dice > eps)) then ! Second condition is for cases where there are agents but cannot move anywhere
+              if (agents .and. (norm_dice_long > eps)) then ! Second condition is for cases where there are agents but cannot move anywhere
                 !
                 Q_long(:,ixy_1) = Q_long(:,ixy_1)/norm_dice
                 !
-              else if (agents .and. (norm_dice < eps)) then!
+              else if (agents .and. (norm_dice_long < eps)) then!
                 print*, 'No mobility for long trip scheme!'
                 STOP
                                             ! If norm_dice is zero it means agents are at ixy_1

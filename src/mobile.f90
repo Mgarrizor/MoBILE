@@ -305,6 +305,9 @@ PROGRAM MOBILE
         if ((agents)) then ![Non-functional]
           print *, "People representation: Agents"
           !'("Pi = ",f4.2)', pi
+           if (random .and. (.not. rand_seed)) then
+              print *, '-- Random initial disease profiles --'
+           end if
            call agents_init(nxy,disID,nagent,npeop,nattempt,mask_pop,pop_dens,scale,dist,A_cell)
            call agents_diagnostics(disID,scale,nalive)
           !
@@ -455,8 +458,8 @@ PROGRAM MOBILE
           ! Reset number of infective bites
           nbites(:) = 0
           !b_rate
-          m_0(:) = b_rate*rgonof(:)*rvect(0,:)/(npeop(:)+K_h)*scaleI*P_a
-          m_1(:) = b_rate*rgonof(:)*rvect(ninfv,:)/(npeop(:)+K_h)*scaleI*P_a
+          m_0(:) = b_rate*rgonof(:)*rvect(0,:)/(npeop(:)+K_h)*scaleI!*P_a
+          m_1(:) = b_rate*rgonof(:)*rvect(ninfv,:)/(npeop(:)+K_h)*scaleI!*P_a
           !
         end if
         call random_seed()
@@ -493,7 +496,8 @@ PROGRAM MOBILE
         !
         if (disID == 1) then  
           ! Calculate average daily EIR
-          where(mask_pop(:)) EIR(:) = EIR(:)/npeop(:)/P_a
+          where(mask_pop(:).and. (npeop(:)>0)) EIR(:) = EIR(:)/npeop(:) !/P_a
+         ! where((mask_pop(:)) .and. (npeop(:)>0)) EIR(:) = EIR(:)/npeop(:)
           !
         end if
       end if ! End agent methods -------------------------------------------------

@@ -86,9 +86,7 @@ USE mo_constants
           !------------------------------------------------
           rlarv(:,ixy)=MAX(rlarv(:,ixy),0.0)
           rvect(:,ixy)=MAX(rvect(:,ixy),0.0)
-!
-       !   where (mask_pop) rvect(0,:)=MAX(rvect(0,:),rvect_min)
-      !
+       !
        !   ! copy rvect for diffusion calculation
        !   
        !   !------------------------------------------------
@@ -108,7 +106,8 @@ USE mo_constants
               ! zoophilic rates - well actually is anthropophilic rate.
               rzoophilic(ixy)=1.0-(1.0-rzoophilic_min*EXP(-rpopdensity(ixy)/rzoophilic_tau))
               !
-              rvect(0,ixy)=MAX(rvect(0,ixy),rvect_min)
+              !rvect(0,ixy)=MAX(rvect(0,ixy),rvect_min)
+              rlarv(0,ixy)=MAX(rlarv(0,ixy),rvect_min)
               !
            end if
 

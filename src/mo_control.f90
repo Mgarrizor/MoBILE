@@ -16,7 +16,7 @@ MODULE mo_control
     logical :: random   =.true.  ! Disease initialization - if .true. and rand_seed = .false. random S,I,A,R,B everywhere
                                  !                        - if .true. and rand_seed = .true.  f0 SIAR and random seed for B
                                  !                        - if .false. then f0 SIARB
-    logical :: rand_seed=.true.  ! Disease initialization - if .true. random B at a seed and input S,I,A,R
+    logical :: rand_seed=.false.  ! Disease initialization - if .true. random B at a seed and input S,I,A,R
 
     ! [Non-functional flags]
     logical :: network  =.false. ! Empirical network flag

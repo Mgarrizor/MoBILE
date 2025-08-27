@@ -128,9 +128,13 @@ MODULE mo_const
 
     real :: b_rate                      ! Mosquito biting rate (bites/mosquito/day)
 
-    real :: e_0, e1, e2, e_th, mat_rate   ! Immunity
+    real :: e_0, e1, e2, A1, e_th, mat_rate ! Immunity - immunity acquisition parametrization
+    real :: d_sig,d_mu,sig_1,mu_1         ! Immunity - clearance times parametrization
+    real :: fA_chr                          ! Fraction of chronic asymptomatics
+    real :: tau_chr                         ! Duration of chronic parasitaemia
  
     real :: alph_max, alph_min          ! Symptomatics
+    real :: sig_m, e_m
 
     !--- VECTRI/Malaria ---
     ! mo_vectri.f90
@@ -225,19 +229,20 @@ MODULE mo_const
         bite_day   = 0.       ! Base daily probability to get bitten during day (relevant for short daily trips and vectors that are active during day hours)
         P_v0 = 0.3            ! Base vector to human transmission probability  Ermert et al. 2011 [DOI:]
         P_h0 = 0.2            ! Base human to vector transmission probability          "  "
-        P_max= 0.2            ! Maximum transsion probability ~ 0.2 +- 0.15 Churcher et al. 2013 [DOI:]
-                              !                               ~ 0.125       Bousema  et al. 2011 [DOI:] ---> and references therein | Ouedraogo 2009 [DOI:]
-                              !                                                                                                     | Schneider 2007 [DOI:]
+        P_max= 0.2            ! Maximum transmission probability ~ 0.2 +- 0.15 Churcher et al. 2013 [DOI:]
+                              !                                  ~ 0.125       Bousema  et al. 2011 [DOI:] ---> and references therein | Ouedraogo 2009 [DOI:]
+                              !                                                                                                        | Schneider 2007 [DOI:]
 
-        b_rate = 20.          ! Vector biting rate - mean of 1.6 bites/person/hour from 18:00 - 6:30 (~ 1.6*12.5) Nzioki et al. 2023 [DOI:]
+        b_rate = 5            ! Vector biting rate - mean of 1.6 bites/person/hour from 18:00 - 6:30 (~ 1.6*12.5) Nzioki et al. 2023 [DOI:]
 
         mu  = 1./(61.*365)    ! Background human mortality rate [day^-1]
 
         ! Immunity
 
-        e_0    = 0.01     ! Base increase in endemicity level [per infectious bite]                  [x]
-        e1     = 2*e_0    ! e-folding factor in boosted maternal/naive immunity acquisition (fast) [e_0]
-        e2     = 100*e_0  ! e-folding factor in gradual immunity acquisition (slow)                [e_0]
+        e_0    = 0.09     ! Base increase in endemicity level [per infectious bite]                  [x]
+        e1     = 0.5*e_0  ! e-folding factor in boosted maternal/naive immunity acquisition (fast) [e_0]
+        e2     = 10*e_0   ! e-folding factor in gradual immunity acquisition (slow)                [e_0]
+        A1     = 0.9      ! Coefficient weighting each time scale
         e_th   = 0.001    ! Threshold endemicity level value for R --> S transition                  [x]
 
         mat_rate = log(2.)/(6.*30)  ! Loss rate of maternal immunity = ln(2)/(Half-life of maternal immunity) [day^-1] 
@@ -246,9 +251,18 @@ MODULE mo_const
                                   ! 3   months Ghani 2009 [DOI:]
         rho = log(2.)/(6.*365)    ! Decay rate of endemicity/immunity level = ln(2)/(Half-life of clinical immunity) 5   [yr] Filipe 2007 [DOI:]
                                   !                                                                                  6.9 [yr] Ghani 2009  [DOI:]
+        !-- Clearance times
+        d_mu    = -3.54           ! mu_1 = 5.2  (MT (PfPR ~ 0 %) [Sama et al. 2006a]), mu_2 = 1.66 (Ghana (PfPR ~ 75%) [Bretscher et al. 2011])
+        d_sig   =  0.47           ! sig1 = 0.73 (MT (PfPR ~ 0 %) [Sama et al. 2006a]), sig2 = 1.20 (Ghana (PfPR ~ 75%) [Bretscher et al. 2011])
+        sig_1   =  0.73           ! 
+        mu_1    =  5.2            !
+
         ! Symptomatics 
 
-        alph_min = 0.28   !    We take the lowest we can find in literature from highly endemic areas reporting adult prevalence
+        fA_chr   = 0.05   ! Fraction of chronic asymptomatics [unkown]
+        tau_chr  = 365    ! Duration of chronic parasitaemia  [unkown]
+                          ! 
+        alph_min = 0.28   !    We take the lowest we can find from literature focusing on highly endemic areas reporting adult prevalence
                           !    1-0.311 (Malawi) Topazian    2020 [DOI:]
                           !    1-0.482 (DCR)    Mvumbi      2015 [DOI:]
                           !    1-0.520 (Gabon)  Dal-Bianco  2007 [DOI:]
@@ -256,6 +270,8 @@ MODULE mo_const
         ! So far this one ---> 1-0.721 (Ghana)  Owusu-Agyei 2002 [DOI:] 
         alph_max = 1.    !
 
+        sig_m  = 20.     ! Sigmoidal curve param ~ slope
+        e_m    = 0.35    ! Sigmoidal curve param ~ inflection point
 
         ! Mobility ---------------------------------------------------
 
