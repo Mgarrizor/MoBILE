@@ -10,12 +10,12 @@ MODULE mo_grid
 
   !===================== Subroutines =================================
 
-  subroutine grid_dis(idis,nxy,S,E,I,A,A_old,R,EIR)
+  subroutine grid_dis(idis,nxy,S,E,I,A,A_old,R,EIR,imm)
       implicit none
 
       integer, intent(in) :: idis
       integer, intent(in) :: nxy
-      real, allocatable, intent(out) :: S(:),E(:),I(:),A(:),A_old(:),R(:),EIR(:)
+      real, allocatable, intent(out) :: S(:),E(:),I(:),A(:),A_old(:),R(:),EIR(:),imm(:)
 
       SELECT case(idis)
       case (0) ! Cholera (SIAR)
@@ -34,6 +34,7 @@ MODULE mo_grid
         allocate(A(nxy))
         allocate(R(nxy))
         allocate(EIR(nxy))
+        allocate(imm(nxy))
 
       case (2) ! Dengue [Non-functional]
 

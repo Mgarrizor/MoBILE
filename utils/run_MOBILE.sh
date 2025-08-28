@@ -33,7 +33,7 @@ fi
                              # 1: Malaria [non-functional]
                              # 2: Dengue  [non-functional]
             nstep=1095        # [days]       #  -n
-            nstep=2000
+            #nstep=2000
             seed=12345                       #  -s
 #          |
 #          |

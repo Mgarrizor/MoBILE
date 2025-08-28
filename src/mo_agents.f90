@@ -384,20 +384,20 @@ USE, INTRINSIC :: ISO_C_BINDING
             deallocate(A_cell)
         end subroutine agents_init
 
-        subroutine agents_diagnostics(idis,scale,counter)
+        subroutine agents_diagnostics(idis,scale)
         !===
             ! Calculate bulk statistics to feed into the disease source integration
             !
-            integer, intent(in) :: idis ! 0 = Cholera: SIAR  ; 1 = Malaria: SEIR [Non-functional]
+            integer, intent(in) :: idis ! 0 = Cholera: SIAR  ; 1 = Malaria: SEIAR ; 2 = Dengue [Non-functional]
             real, allocatable, intent(in)    :: scale(:)
-            integer, intent(out):: counter ! Number of alive agents
+            !integer, intent(out):: counter ! Number of alive agents
             !
             ! Local use only
             integer :: iagent, stat
             logical :: active
     
             !
-            counter = 0
+            !counter = 0
 
             SELECT case(idis)
             case (0) ! Cholera
@@ -408,7 +408,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             R(:) = 0.
             do iagent = 1,nagent
                 stat =  people(iagent)%health_status%cholera_status%status
-                active  =  people(iagent)%health_status%active_status%status
+                !active  =  people(iagent)%health_status%active_status%status
                 if (stat == 1 .and. active) then
                     S(people(iagent)%location_status%currloc) = S(people(iagent)%location_status%currloc) + 1.
                 elseif (stat == 2 .and. active) then
@@ -419,9 +419,9 @@ USE, INTRINSIC :: ISO_C_BINDING
                     R(people(iagent)%location_status%currloc) = R(people(iagent)%location_status%currloc) + 1.
                 end if 
 
-                if (active) then
-                    counter = counter + 1
-                end if
+                !if (active) then
+                !    counter = counter + 1
+                !end if
 
             end do 
             S(:) = scale(:)*S(:)
@@ -429,7 +429,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             A(:) = scale(:)*A(:)
             R(:) = scale(:)*R(:)
             !
-            case (1) ! Malaria [Non-functional]
+            case (1) ! Malaria
             !
             S(:) = 0.
             E(:) = 0.
@@ -437,9 +437,10 @@ USE, INTRINSIC :: ISO_C_BINDING
             A(:) = 0.
             R(:) = 0.
             EIR(:) = 0.
+            imm(:) = 0.
             do iagent = 1,nagent
                 stat =  people(iagent)%health_status%malaria_status%status
-                active  =  people(iagent)%health_status%active_status%status
+                !active  =  people(iagent)%health_status%active_status%status
                 if (stat == 1 .and. active) then
                     S(people(iagent)%location_status%currloc) = S(people(iagent)%location_status%currloc) + 1.
                 elseif (stat == 2 .and. active) then
@@ -452,11 +453,12 @@ USE, INTRINSIC :: ISO_C_BINDING
                     R(people(iagent)%location_status%currloc) = R(people(iagent)%location_status%currloc) + 1.
                 end if 
 
-                if (active) then
-                    counter = counter + 1
-                end if
+                !if (active) then
+                !    counter = counter + 1
+                !end if
 
                 EIR(people(iagent)%location_status%currloc) = EIR(people(iagent)%location_status%currloc) + people(iagent)%health_status%malaria_status%EIR_att
+                imm(people(iagent)%location_status%currloc) = imm(people(iagent)%location_status%currloc) + people(iagent)%health_status%malaria_status%e_l
 
             end do 
             S(:) = scale(:)*S(:)
@@ -772,6 +774,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                              end if
                              cyc=.true.
                              n_attempt(i) = n_attempt(i) + 1
+                             npeop(i) = npeop(i) + 1
                         else
                              n_attempt(i) = n_attempt(i) + 1
                         end if 
@@ -1096,6 +1099,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                              end if
                              cyc=.true.
                              n_attempt(i) = n_attempt(i) + 1
+                             npeop(i) = npeop(i) + 1
                         else
                              n_attempt(i) = n_attempt(i) + 1
                         end if 
@@ -1276,7 +1280,7 @@ USE, INTRINSIC :: ISO_C_BINDING
 
         end function prob_symp
         !
-        function mean_logtimes(e_l,d_mu,mu_1) result(mu_e)
+        function mean_normtimes(e_l,d_mu,mu_1) result(mu_e)
 
         implicit none
 
@@ -1286,9 +1290,9 @@ USE, INTRINSIC :: ISO_C_BINDING
 
             mu_e = d_mu*e_l + mu_1
 
-        end function mean_logtimes
+        end function mean_normtimes
         !
-        function sig_logtimes(e_l,d_sig,sig_1) result(sig_e)
+        function sig_normtimes(e_l,d_sig,sig_1) result(sig_e)
 
         implicit none
 
@@ -1298,7 +1302,7 @@ USE, INTRINSIC :: ISO_C_BINDING
 
             sig_e = d_sig*e_l + sig_1
 
-        end function sig_logtimes
+        end function sig_normtimes
         !
         function r4_normal_cd (c, d) result(r4_normal)
 
@@ -1397,12 +1401,15 @@ USE, INTRINSIC :: ISO_C_BINDING
           ! Local use
           real :: a,b,c,d
 
+          ! The reported mean and std are those of the corresponding normal distribution.
+          !a = mean_logtimes(e_l,d_mu,mu_1)
+          !b = sig_logtimes(e_l,d_sig,sig_1)
 
-          a = mean_logtimes(e_l,d_mu,mu_1)
-          b = sig_logtimes(e_l,d_sig,sig_1)
+          c = mean_normtimes(e_l,d_mu,mu_1)
+          d = sig_normtimes(e_l,d_sig,sig_1)
 
-          c = mean_log_to_norm(a,b)
-          d = std_log_to_norm(a,b)
+          !c = mean_log_to_norm(a,b)
+          !d = std_log_to_norm(a,b)
 
           tau = exp(r4_normal_cd(c,d))
 

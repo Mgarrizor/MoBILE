@@ -22,7 +22,7 @@ MODULE mo_const
     integer :: nagent       ! Number of agents
     real, allocatable    :: scale(:)   ! Scale factor to transform numbers into a densities
     real, allocatable    :: scaleI(:)  ! Inverse of scale
-    integer :: nalive       ! Number of alive agents
+    !integer :: nalive       ! Number of alive agents
     real    :: dt = 1.      ! Time step (fixed)
     integer :: ncid_out     ! ID of output NetCDF file
     integer :: ncid_in      ! ID of input NetCDF files
@@ -117,7 +117,8 @@ MODULE mo_const
 
     !--- Malaria ---
 
-    real, allocatable :: EIR(:) ! 1D long array for Entomological Inoculation Rate
+    real, allocatable :: EIR(:)   ! 1D long array for Entomological Inoculation Rate
+    real, allocatable :: imm(:)   ! 1D long array for Endemicity level / Immunity
     ! Malaria parameters
 
     integer :: iip 
@@ -251,14 +252,14 @@ MODULE mo_const
                                   ! 3   months Ghani 2009 [DOI:]
         rho = log(2.)/(6.*365)    ! Decay rate of endemicity/immunity level = ln(2)/(Half-life of clinical immunity) 5   [yr] Filipe 2007 [DOI:]
                                   !                                                                                  6.9 [yr] Ghani 2009  [DOI:]
-        !-- Clearance times
+        !-- Clearance times       ! The reported mean and std are those of the corresponding normal distribution.
         d_mu    = -3.54           ! mu_1 = 5.2  (MT (PfPR ~ 0 %) [Sama et al. 2006a]), mu_2 = 1.66 (Ghana (PfPR ~ 75%) [Bretscher et al. 2011])
         d_sig   =  0.47           ! sig1 = 0.73 (MT (PfPR ~ 0 %) [Sama et al. 2006a]), sig2 = 1.20 (Ghana (PfPR ~ 75%) [Bretscher et al. 2011])
         sig_1   =  0.73           ! 
         mu_1    =  5.2            !
 
         ! Symptomatics 
-
+                          ! These values are only relevant when 
         fA_chr   = 0.05   ! Fraction of chronic asymptomatics [unkown]
         tau_chr  = 365    ! Duration of chronic parasitaemia  [unkown]
                           ! 

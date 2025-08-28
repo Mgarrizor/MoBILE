@@ -43,6 +43,7 @@ MODULE mo_control
     logical :: out_F    =.true.  ! Force of infection
     !--- Malaria ----
     logical :: out_EIR  =.true.  ! Entomological Inoculation Rate
+    logical :: out_imm  =.true.  ! Endemicity level / Immunity
     !
     ! Defined in mo_vectri.f90
     !

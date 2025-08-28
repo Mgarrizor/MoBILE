@@ -245,6 +245,7 @@ PROGRAM MOBILE
         coupling =.false.
         out_t2m  =.false.
         out_EIR  =.false.
+        out_imm  =.false.
 #endif
 !=======!
         !
@@ -252,7 +253,7 @@ PROGRAM MOBILE
         call mob_dist_init(nxy,x_coord_1d,y_coord_1d,lon_coord,lat_coord,dx,dy,input,Re,Pi,mask_pop,dist)
         !
         ! Allocate arrays of disease "disID" (SEIAR)
-        call grid_dis(disID,nxy,S,E,I,A,A_old,R,EIR)
+        call grid_dis(disID,nxy,S,E,I,A,A_old,R,EIR,imm)
         !
         !**********************************
         !
@@ -309,7 +310,7 @@ PROGRAM MOBILE
               print *, '-- Random initial disease profiles --'
            end if
            call agents_init(nxy,disID,nagent,npeop,nattempt,mask_pop,pop_dens,scale,dist,A_cell)
-           call agents_diagnostics(disID,scale,nalive)
+           call agents_diagnostics(disID,scale)
           !
         ! 0.4.2 Density
         elseif ((.not. agents)) then 
@@ -490,14 +491,17 @@ PROGRAM MOBILE
         end if
         !
         ! 3.3) Calculate bulk SEIAR
-        call agents_diagnostics(disID,scale,nalive)  ! Compute bulk stats
+        call agents_diagnostics(disID,scale)  ! Compute bulk stats
         !
         ! Post-diagnostics calculations
         !
         if (disID == 1) then  
           ! Calculate average daily EIR
           where(mask_pop(:).and. (npeop(:)>0)) EIR(:) = EIR(:)/npeop(:) !/P_a
-         ! where((mask_pop(:)) .and. (npeop(:)>0)) EIR(:) = EIR(:)/npeop(:)
+
+          ! Calculate average daily e_l (endemicity level)
+          imm(:) = imm(:)/npeop(:)
+          !where((mask_pop(:)) .and. (npeop(:)>0)) imm(:) = imm(:)/npeop(:)
           !
         end if
       end if ! End agent methods -------------------------------------------------
