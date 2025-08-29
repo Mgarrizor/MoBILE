@@ -316,7 +316,7 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
                     ! Sporogonic cycle
                     !---------------------
                     !
-                    zprobhost2vect = dble(nbites(ixy))/npeop(ixy)
+                    zprobhost2vect = real(nbites(ixy))/npeop(ixy)
                     ! 
                     call sporo(ixy,ztemp,zprobhost2vect,zgonof,rvect,zsporof,zdel,nnumeric,ninfv,dt,iounit)
                     !

@@ -4,6 +4,9 @@ MODULE mo_grid
   ! Miguel Garrido Zornoza 2024 
   ! mgarrizoraca@gmail.com
   !
+  USE mo_const
+  !
+  !
   implicit none
   
   CONTAINS
@@ -15,7 +18,8 @@ MODULE mo_grid
 
       integer, intent(in) :: idis
       integer, intent(in) :: nxy
-      real, allocatable, intent(out) :: S(:),E(:),I(:),A(:),A_old(:),R(:),EIR(:),imm(:)
+      real, allocatable, target, intent(out) :: S(:),E(:),I(:),A(:),R(:)
+      real, allocatable, intent(out) :: A_old(:),EIR(:),imm(:)
 
       SELECT case(idis)
       case (0) ! Cholera (SIAR)
@@ -26,6 +30,12 @@ MODULE mo_grid
         allocate(A_old(nxy))
         allocate(R(nxy))
 
+        ! Look up table for pointer approach to gather bulk diagnostics
+        status_pointer(1)%arr_p => S
+        status_pointer(2)%arr_p => I
+        status_pointer(3)%arr_p => A
+        status_pointer(4)%arr_p => R
+
       case (1) ! Malaria (SEIR)
 
         allocate(S(nxy))
@@ -35,6 +45,14 @@ MODULE mo_grid
         allocate(R(nxy))
         allocate(EIR(nxy))
         allocate(imm(nxy))
+
+        ! Look up table for pointer approach to gather bulk diagnostics
+        status_pointer(1)%arr_p => S
+        status_pointer(2)%arr_p => E
+        status_pointer(3)%arr_p => I 
+        status_pointer(4)%arr_p => A
+        status_pointer(5)%arr_p => R
+
 
       case (2) ! Dengue [Non-functional]
 

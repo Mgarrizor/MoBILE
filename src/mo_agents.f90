@@ -79,7 +79,7 @@ USE, INTRINSIC :: ISO_C_BINDING
 
     CONTAINS
 
-        subroutine agents_init(nxy,idis,nagent,npeop,n_attempt,mask_pop,pop_dens,scale,dist,A_cell)
+        subroutine agents_init(nxy,idis,nagent,npeop,n_attempt,mask_pop,pop_dens,scale,A_cell)
             ! 
             ! 
             !
@@ -93,7 +93,6 @@ USE, INTRINSIC :: ISO_C_BINDING
             real, allocatable, intent(in) :: pop_dens(:)      ! Human population density (len=nxy)
             logical, allocatable, intent(in) :: mask_pop(:)   ! (nxy)
 
-            real, allocatable, intent(in)   :: dist(:,:)     ! Distance matrix
             real, allocatable, intent(inout)   :: A_cell(:)     ! Grid cell area
 
             real, allocatable, intent(inout) :: scale(:) ! Scale factor to translate number of excretion events into density
@@ -132,7 +131,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                 STOP 
             end if 
             !
-            P_a = norm/nagent
+            P_a = int(norm/nagent)
             print *, 'Human to agent ratio ~', P_a
             !
             ! Initialize array of types "agent"
@@ -227,13 +226,15 @@ USE, INTRINSIC :: ISO_C_BINDING
                                 !
                             else 
                                 !
+                                stat_health = 1 !(Susceptible)
+                                people(indx)%health_status%malaria_status%infc_dur=0
+                                !
                                 if (idis == 1) then  ! For malaria we generate a low percentage of chronic asymptomatics (1%)
                                     if (generate_random() < fA_chr) then 
+                                        !
                                         stat_health = 4 !(Asymptomatic)
                                         people(indx)%health_status%malaria_status%infc_dur=tau_chr
-                                    else 
-                                        stat_health = 1 !(Susceptible)
-                                        people(indx)%health_status%malaria_status%infc_dur=0
+                                        !
                                     end if
                                 end if
                                 !
@@ -251,13 +252,13 @@ USE, INTRINSIC :: ISO_C_BINDING
                             !
                             ! Short/daily contact rates
                             call random_number(rand) ! Asign visiting location based on mobility scheme
-                            j = find_masked_face(ixy,rand,Q_short(:,ixy),nxy,mask_grav(:,ixy),mask_pop(:)) ! If agent is mobile j /= 0
+                            j = find_masked_face(rand,Q_short(:,ixy),nxy,mask_grav(:,ixy),mask_pop(:)) ! If agent is mobile j /= 0
                             !
                             people(indx)%location_status%shortloc=j
                             !
                             ! Long overnight trips
                             call random_number(rand) ! Asign long term trips based on mobility scheme
-                            j = find_masked_face_2(ixy,rand,Q_long(:,ixy),nxy,mask_pop(:)) ! If agent is mobile j /= 0
+                            j = find_masked_face_2(rand,Q_long(:,ixy),nxy,mask_pop(:)) ! If agent is mobile j /= 0
 
                             people(indx)%location_status%longloc=j
                             people(indx)%location_status%longdur=0
@@ -332,14 +333,16 @@ USE, INTRINSIC :: ISO_C_BINDING
                        end if
                        !
                    else 
-                       !
+                        !
+                        stat_health = 1 !(Susceptible)
+                        people(indx)%health_status%malaria_status%infc_dur=0
+                        !
                         if (idis == 1) then  ! For malaria we generate a low percentage of chronic asymptomatics (10%)
                             if (generate_random() < fA_chr) then 
+                                !
                                 stat_health = 4 !(Asymptomatic)
                                 people(indx)%health_status%malaria_status%infc_dur=tau_chr
-                            else 
-                                stat_health = 1 !(Susceptible)
-                                people(indx)%health_status%malaria_status%infc_dur=0
+                                !
                             end if
                         end if
                         !
@@ -359,13 +362,13 @@ USE, INTRINSIC :: ISO_C_BINDING
                    !
                    !
                    ! Short/daily contact rates
-                   j = find_masked_face(loc,rand,Q_short(:,loc),nxy,mask_grav(:,loc),mask_pop(:)) ! If agent is mobile j /= 0
+                   j = find_masked_face(rand,Q_short(:,loc),nxy,mask_grav(:,loc),mask_pop(:)) ! If agent is mobile j /= 0
                    !
                    people(indx)%location_status%shortloc=j   
                    !
                    ! Long overnight trips
                    call random_number(rand) ! Asign long term trips based on mobility scheme
-                   j = find_masked_face_2(loc,rand,Q_long(:,loc),nxy,mask_pop(:)) ! If agent is mobile j /= 0
+                   j = find_masked_face_2(rand,Q_long(:,loc),nxy,mask_pop(:)) ! If agent is mobile j /= 0
    
                    people(indx)%location_status%longloc=j
                    people(indx)%location_status%longdur=0
@@ -393,84 +396,80 @@ USE, INTRINSIC :: ISO_C_BINDING
             !integer, intent(out):: counter ! Number of alive agents
             !
             ! Local use only
-            integer :: iagent, stat
-            logical :: active
+            integer :: iagent, istat, iloc
+            logical :: iactive
     
             !
             !counter = 0
 
             SELECT case(idis)
-            case (0) ! Cholera
+            case (0) ! Cholera -------------------------------
             !
             S(:) = 0.
             I(:) = 0.
             A(:) = 0.
             R(:) = 0.
             do iagent = 1,nagent
-                stat =  people(iagent)%health_status%cholera_status%status
-                !active  =  people(iagent)%health_status%active_status%status
-                if (stat == 1 .and. active) then
-                    S(people(iagent)%location_status%currloc) = S(people(iagent)%location_status%currloc) + 1.
-                elseif (stat == 2 .and. active) then
-                    I(people(iagent)%location_status%currloc) = I(people(iagent)%location_status%currloc) + 1.
-                elseif (stat == 3 .and. active) then
-                    A(people(iagent)%location_status%currloc) = A(people(iagent)%location_status%currloc) + 1.
-                elseif (stat == 4 .and. active) then
-                    R(people(iagent)%location_status%currloc) = R(people(iagent)%location_status%currloc) + 1.
-                end if 
-
-                !if (active) then
-                !    counter = counter + 1
-                !end if
-
+                !
+                istat    =  people(iagent)%health_status%cholera_status%status
+                iactive  =  people(iagent)%health_status%active_status%status
+                iloc     =  people(iagent)%location_status%currloc
+                !
+                ! Pointer approach to allow vectorization (discarded old branching if ... elseif ...)
+                if (iactive) then
+                    status_pointer(istat)%arr_p(iloc) = &
+                    status_pointer(istat)%arr_p(iloc) + 1.
+                end if
+                !
             end do 
+            !
             S(:) = scale(:)*S(:)
             I(:) = scale(:)*I(:)
             A(:) = scale(:)*A(:)
             R(:) = scale(:)*R(:)
+            !=================================================
+
             !
-            case (1) ! Malaria
+            case (1) ! Malaria -------------------------------
             !
             S(:) = 0.
             E(:) = 0.
             I(:) = 0.
             A(:) = 0.
             R(:) = 0.
+            !
             EIR(:) = 0.
             imm(:) = 0.
+            !
             do iagent = 1,nagent
-                stat =  people(iagent)%health_status%malaria_status%status
-                !active  =  people(iagent)%health_status%active_status%status
-                if (stat == 1 .and. active) then
-                    S(people(iagent)%location_status%currloc) = S(people(iagent)%location_status%currloc) + 1.
-                elseif (stat == 2 .and. active) then
-                    E(people(iagent)%location_status%currloc) = E(people(iagent)%location_status%currloc) + 1.
-                elseif (stat == 3 .and. active) then
-                    I(people(iagent)%location_status%currloc) = I(people(iagent)%location_status%currloc) + 1.
-                elseif (stat == 4 .and. active) then
-                    A(people(iagent)%location_status%currloc) = A(people(iagent)%location_status%currloc) + 1.
-                elseif (stat == 5 .and. active) then
-                    R(people(iagent)%location_status%currloc) = R(people(iagent)%location_status%currloc) + 1.
-                end if 
-
-                !if (active) then
-                !    counter = counter + 1
-                !end if
-
-                EIR(people(iagent)%location_status%currloc) = EIR(people(iagent)%location_status%currloc) + people(iagent)%health_status%malaria_status%EIR_att
-                imm(people(iagent)%location_status%currloc) = imm(people(iagent)%location_status%currloc) + people(iagent)%health_status%malaria_status%e_l
-
+                !
+                istat   =  people(iagent)%health_status%malaria_status%status
+                iactive =  people(iagent)%health_status%active_status%status
+                iloc    =  people(iagent)%location_status%currloc
+                !
+                ! Pointer approach to allow vectorization (discarded old branching if ... elseif ...)
+                if (iactive) then
+                    status_pointer(istat)%arr_p(iloc) = &
+                    status_pointer(istat)%arr_p(iloc) + 1.
+                end if
+                !
+                EIR(iloc) = EIR(iloc) + people(iagent)%health_status%malaria_status%EIR_att
+                imm(iloc) = imm(iloc) + people(iagent)%health_status%malaria_status%e_l
+                !
             end do 
+            !
             S(:) = scale(:)*S(:)
             E(:) = scale(:)*E(:)
             I(:) = scale(:)*I(:)
             A(:) = scale(:)*A(:)
             R(:) = scale(:)*R(:)
+            !===================================================
+
             !
             case (2) ! Dengue [Non-functional]
             !
             case default
-                print *, "Incorrect case, choose disID between: 0 (cholera)"
+                print *, "Incorrect case, choose disID between: 0 (cholera) & 1 (malaria)"
                 STOP
             end SELECT
             !
@@ -515,7 +514,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             case (1) ! Malaria [Non-functional]
             ! 
-            call agents_malaria(iagent,itime,n_attempt,npeop,nbites,m_0,m_1) 
+            call agents_malaria(iagent,n_attempt,npeop,nbites,m_0,m_1) 
             !
             case (2) ! Dengue [Non-functional]
             !
@@ -785,11 +784,10 @@ USE, INTRINSIC :: ISO_C_BINDING
         end subroutine agents_cholera
         !
         !
-        subroutine agents_malaria(iagent,itime,n_attempt,npeop,nbites,m_0,m_1)
+        subroutine agents_malaria(iagent,n_attempt,npeop,nbites,m_0,m_1)
 
             implicit none
             integer, intent(in) :: iagent            ! Agent ID (integer number)
-            integer, intent(in) :: itime             ! Time step
             integer, allocatable, intent(inout) :: n_attempt(:)   ! (nxy) Number of growth attempts at location of iagent at time itime
             integer, allocatable, intent(inout) :: npeop(:)       ! (nxy) Number of agents in each grid cell 
             integer, allocatable, intent(inout) :: nbites(:)      ! (nlon*nlat) Infective bites
@@ -799,7 +797,6 @@ USE, INTRINSIC :: ISO_C_BINDING
             real, allocatable, intent(in) :: m_1(:)  ! Infective   vector to host ratio times the vector biting rate
 
             ! Local use only
-            real :: rand    ! Uniformly distributed random number to throw dices
             integer :: stat ! Agent health status
             integer :: i    ! Agent location
             integer :: j    ! Location where agent moves
@@ -807,13 +804,9 @@ USE, INTRINSIC :: ISO_C_BINDING
             logical :: active ! Is the agent alive?
             logical :: cyc    ! Cycle flag for growth event
 
-            integer :: k ! dummy summation index
-
-
             ! Disease transmission 
             ! 0: Human to vector  1: Vector to human
             !
-            real :: hbr_0, hbr_1
             real :: lambda_0, lambda_1
             real :: P_0                     ! Human to vector
             real :: P_1                     ! Vector to human
@@ -1143,6 +1136,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             ! Local use only
             integer :: j
+            roll = 0 
             !
             do j = 1, sides
                 if (r <= cum_distr(j)) then
@@ -1155,7 +1149,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
         end function find_face
         !
-        function find_masked_face(i,r,cum_distr,sides,mask_grav,mask_pop) result(roll)
+        function find_masked_face(r,cum_distr,sides,mask_grav,mask_pop) result(roll)
             ! r: uniformly distributed random number, [0,1)
             ! cum_distr: cumulative distribution (not normalized) of probabilities (the weights of each face of the dice)
             ! sides: number of dice sides
@@ -1166,7 +1160,6 @@ USE, INTRINSIC :: ISO_C_BINDING
             logical, intent(in) :: mask_pop(sides)
             integer, intent(in) :: sides
             integer             :: roll
-            integer, intent(in) :: i
             !
             ! Local use only
             integer :: j
@@ -1186,7 +1179,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
         end function find_masked_face
 
-        function find_masked_face_2(i,r,cum_distr,sides,mask_pop) result(roll)
+        function find_masked_face_2(r,cum_distr,sides,mask_pop) result(roll)
             ! r: uniformly distributed random number, [0,1)
             ! cum_distr: cumulative distribution (not normalized) of probabilities (the weights of each face of the dice)
             ! sides: number of dice sides
@@ -1196,7 +1189,6 @@ USE, INTRINSIC :: ISO_C_BINDING
             logical, intent(in) :: mask_pop(sides)
             integer, intent(in) :: sides
             integer             :: roll
-            integer, intent(in) :: i
             !
             ! Local use only
             integer :: j
@@ -1261,7 +1253,7 @@ USE, INTRINSIC :: ISO_C_BINDING
 
         real              :: p          ! Probability to be symptomatic
 
-            p = alph_max*(1-1./(alph_max/(alph_max-alph_min)+exp(-m*(e_l-e_m))))
+            p = alph_max*(1-1./(alph_max/(alph_max-alph_min)+exp(-sig_m*(e_l-e_m))))
 
         end function prob_symp_sig
         !
@@ -1392,14 +1384,15 @@ USE, INTRINSIC :: ISO_C_BINDING
           implicit none
           ! 
           ! Result
-          real :: tau
+          integer :: tau
           !
           ! Input
           real, intent(in) :: e_l
           real, intent(in) :: d_mu, mu_1, d_sig, sig_1
           !
           ! Local use
-          real :: a,b,c,d
+          real :: c,d
+          !real :: a,b
 
           ! The reported mean and std are those of the corresponding normal distribution.
           !a = mean_logtimes(e_l,d_mu,mu_1)
@@ -1411,7 +1404,7 @@ USE, INTRINSIC :: ISO_C_BINDING
           !c = mean_log_to_norm(a,b)
           !d = std_log_to_norm(a,b)
 
-          tau = exp(r4_normal_cd(c,d))
+          tau = ceiling(exp(r4_normal_cd(c,d)))
 
           end function tau_log
 

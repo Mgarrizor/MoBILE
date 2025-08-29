@@ -93,11 +93,17 @@ MODULE mo_const
 
     integer, parameter :: K_h = 1000 
 
-    real, allocatable :: S(:) ! 1D long array for Sensitive density
-    real, allocatable :: E(:) ! 1D long array for Exposed density
-    real, allocatable :: I(:) ! 1D long array for Infected density
-    real, allocatable :: A(:) ! 1D long array for Asymptomatic density
-    real, allocatable :: R(:) ! 1D long array for Recovered density
+    real, allocatable, target :: S(:) ! 1D long array for Sensitive density
+    real, allocatable, target :: E(:) ! 1D long array for Exposed density
+    real, allocatable, target :: I(:) ! 1D long array for Infected density
+    real, allocatable, target :: A(:) ! 1D long array for Asymptomatic density
+    real, allocatable, target :: R(:) ! 1D long array for Recovered density
+
+    type array_pointers
+      real, pointer :: arr_p(:)
+    end type array_pointers
+    
+    type(array_pointers) :: status_pointer(5)
 
     !--- Cholera ---
     real, allocatable :: B(:) ! 1D long array for Bacterial density
@@ -132,7 +138,7 @@ MODULE mo_const
     real :: e_0, e1, e2, A1, e_th, mat_rate ! Immunity - immunity acquisition parametrization
     real :: d_sig,d_mu,sig_1,mu_1         ! Immunity - clearance times parametrization
     real :: fA_chr                          ! Fraction of chronic asymptomatics
-    real :: tau_chr                         ! Duration of chronic parasitaemia
+    integer :: tau_chr                      ! Duration of chronic parasitaemia
  
     real :: alph_max, alph_min          ! Symptomatics
     real :: sig_m, e_m

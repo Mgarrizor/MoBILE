@@ -309,7 +309,7 @@ PROGRAM MOBILE
            if (random .and. (.not. rand_seed)) then
               print *, '-- Random initial disease profiles --'
            end if
-           call agents_init(nxy,disID,nagent,npeop,nattempt,mask_pop,pop_dens,scale,dist,A_cell)
+           call agents_init(nxy,disID,nagent,npeop,nattempt,mask_pop,pop_dens,scale,A_cell)
            call agents_diagnostics(disID,scale)
           !
         ! 0.4.2 Density

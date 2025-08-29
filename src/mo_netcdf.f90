@@ -247,23 +247,22 @@ MODULE mo_netcdf
       end subroutine
 
 
-      subroutine read_slice(itime)
+      !subroutine read_slice(itime)
         ! Test subroutine for better performance (read drivers each time-step)
-        implicit none 
+      !  implicit none 
 
-        integer, intent(in) :: itime
+      !  integer, intent(in) :: itime
 
-        integer :: status
+        !integer :: status
 
-        print*, "You're using a subroutine that does nothing!"
+      !  print*, "You're using a subroutine that does nothing!"
 
       !  status = nf90_get_var(ncTempID, TempVarID, point_t2m, start=(/1,1,itime/),count=(/nlon,nlat,1/))
       !  status = nf90_get_var(ncRainID, RainVarID, rain_2d, start=(/1,1,itime/),count=(/nlon,nlat,1/))
 
       !  point_rain = reshape(rain_2d, (/nxy/))
 
-
-      end subroutine read_slice
+      !end subroutine read_slice
 
       subroutine netcdf_init(nlon,nlat,nsteps,lon_coord,lat_coord,Var3D)
         implicit none
