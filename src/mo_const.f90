@@ -64,6 +64,7 @@ MODULE mo_const
     real :: SU_annual(365) ! Array with daily averages to test convergence
     logical :: SU_conv ! Convergende flag
     real :: SU_tol     ! Tolerance for convergence
+    real :: SU_old     ! 
 
     !********** Grid *****************************
     integer :: nlon  ! Number of longitude points

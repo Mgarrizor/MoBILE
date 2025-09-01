@@ -56,7 +56,7 @@ fi
 #           --------------------------------
             
             nagent=500000                 #  -a
-            spin_up=0                     #  -u
+            spin_up=1                     #  -u
 
             # Example path for test run (Senegal CHIRXS processed driving files 2012-2014)
             #rain_file=$MOBILE'/utils/test_run/rain.nc'  #  -r

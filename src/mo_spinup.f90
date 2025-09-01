@@ -16,7 +16,7 @@ subroutine DI(x_d,tol_SU,conv,SU_old)
     implicit none
 
     real, intent(inout) :: SU_old ! Convergence test from last time step
-    real, allocatable, intent(in) :: x_d(:) ! Array with values averaged over the whole spatial domain (daily time step)
+    real, intent(in) :: x_d(365) ! Array with values averaged over the whole spatial domain (daily time step)
     real, intent(in) :: tol_SU              ! Tolerance of convergence
     logical, intent(out) :: conv            ! Convergence boolean
 
@@ -28,7 +28,7 @@ subroutine DI(x_d,tol_SU,conv,SU_old)
     ! To Do: Annual mean for different age categories
 
     eps_SU = abs(SU_new-SU_old) 
-    WRITE(*,'(1a1,A11,F6.1,A2)', advance='no') char(13),'Spin-up convergence',eps_SU,' %'
+    WRITE(*,'(1a1,A20,F6.4,A5,F6.4)', advance='no') char(13),'Spin-up convergence ',eps_SU,' <=? ',tol_SU
 
     if (eps_SU <= tol_SU) then
         conv = .true.
@@ -38,11 +38,19 @@ subroutine DI(x_d,tol_SU,conv,SU_old)
 
 end subroutine DI
 
+! Anderson acceleration method
+subroutine AA()
+
+    implicit none
+
+end subroutine AA
+
+
 function mean(x) result(m)
     
     implicit none
 
-    real, allocatable, intent(in) :: x(:)
+    real, intent(in) :: x(365)
     real :: m ! Mean of array x(:)
 
     ! Local use only
@@ -57,13 +65,5 @@ function mean(x) result(m)
     end if
 
 end function mean
-
-
-! Anderson acceleration method
-subroutine AA()
-
-    implicit none
-
-end subroutine AA
 
 end MODULE mo_spinup
