@@ -1,4 +1,4 @@
-# Makefile MOBILE
+# Makefile MoBILE
 #
 # Miguel Garrido Zornoza 2024
 # mgarrizoraca@gmail.com
@@ -18,7 +18,7 @@ BUILD_DIR := ./build    # Location to build the program
 INC_FLAGS := $(shell nf-config --fflags)  # Flags needed to compile a FORTRAN program (NetCDF)
 #INC_LIBS  := $(shell nf-config --flibs)  # Libraries needed to link a FORTRAN program (NetCDF)
 INC_LIBS  := -L/opt/homebrew/Cellar/netcdf_both/lib -lnetcdff -lnetcdf -lnetcdf # For my weird Mac set up
-#PROF_LIB  := -L/opt/homebrew/Cellar/gperftools/2.16/lib -lprofiler -ltcmalloc  # Profiling library (Google performance tools)
+PROF_LIB  := -L/opt/homebrew/Cellar/gperftools/2.16/lib -lprofiler -ltcmalloc  # Profiling library (Google performance tools)
 #-----------------------------------------
 # (https://stackoverflow.com/questions/3676322/what-flags-to-set-for-gfortran-compiler-to-catch-faulty-code)
 DEBUG     := -Og -fbacktrace -Wall -fcheck=all \
@@ -37,7 +37,16 @@ ifeq ($(ENABLE_COUPLING),1)
 else
   COUPLING_FLAG := -cpp
 endif
-#===== Will create the following hierarchy in the folder were is run
+
+# Mobility flag
+# Conditional definition of MOBILITY_FLAG
+ifeq ($(ENABLE_MOBILITY),1)
+	MOBILITY_FLAG := -cpp -DMOBILITY
+else
+  MOBILITY_FLAG := -cpp
+endif
+
+#===== The following hierarchy will be created in the folder were is run
 #
 #         |-src (source code)
 # build --

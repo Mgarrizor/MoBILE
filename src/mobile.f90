@@ -25,9 +25,9 @@ PROGRAM MOBILE
 
 
 ! --------- Malaria --------------------
-! [ref:m1] Sama et al. 2006a (https://doi.org/10.1016/j.trstmh.2005.11.001)
+! [ref:m1] Sama et al. 2006a     (https://doi.org/10.1016/j.trstmh.2005.11.001)
 ! [ref:m2] Bretscher et al. 2011 (https://doi.org/10.1016/j.epidem.2011.03.002)
-! [ref:m3] Nzioki et al. 2023 (https://doi.org/10.1186/s13071-023-05944-5)
+! [ref:m3] Nzioki et al. 2023    (https://doi.org/10.1186/s13071-023-05944-5)
 
 
 ! --------- Dengue ---------------------
@@ -63,7 +63,7 @@ PROGRAM MOBILE
 
 !  USE omp_lib ! Not in use
 
-  implicit none
+implicit none
 
 !************************************************
 !=======================================================================
@@ -106,7 +106,7 @@ PROGRAM MOBILE
 !    2.1) Cholera                 |   /<<bulk_integrate_SIAR_cholera>> #
 !                                 |                                    # 
 !                                 |- mo_????.f90                       #
-!    2.2) Malaria                 |   /<<bulk_integrate_SEIR_Malaria>>  [Non-functional]
+!    2.2) Malaria                 |   /<<bulk_integrate_SEIR_malaria>>  [Non-functional]
 !                                 |                                    #
 !====== Agent loop ===============|====================================#
 ! --> agents=.true.               |                                    #
@@ -136,232 +136,240 @@ PROGRAM MOBILE
   real :: conv1, conv2
   ! Get time 
   real :: t_start
+  real :: t_spin
   real :: t_finish
   call cpu_time(t_start)
 
-  !******************************************************************
+!******************************************************************
+!
+! Get basic information for the current run
+call namelist_inout(run_name,disID,nsteps,seed,spin_up)
+!
+! Initialization of the grid and agent worlds
+itime = 1
+  print '("Pi = ",f6.4)', pi
   !
-  ! Get basic information for the current run
-  call namelist_inout(run_name,disID,nsteps,seed,spin_up)
+  ! ************** 0.1 Grid & params **************
+  ! If .input.=true then read gridded fields (population density and forcings - rainfall, air temperature)
+  ! and new disease parameters from namelist. Otherwise fall back to idealized world 
   !
-  print '("Spin up: ",i6," days.")', spin_up
+  ! init default constants for disease "disID"
+  call const_disease(disID)
   !
-  print '("Integrate: ",i6," days.")', nsteps
   !
-  time_loop: do itime=1,nsteps+spin_up
-  !=
+  ! 0.1.1 Input
+  if ((input)) then
+    ! Namelists
     !=
-      if((itime==1)) then
-        print '("Pi = ",f6.4)', pi
-      !=
-        ! ************** 0.1 Grid & params **************
-        ! If .input.=true then read gridded fields (population density and forcings - rainfall, air temperature)
-        ! and new disease parameters from namelist. Otherwise fall back to idealized world 
-        !
-        ! init default constants for disease "disID"
-        call const_disease(disID)
-        !
-        !
-        ! 0.1.1 Input
-        if ((input)) then
-          ! Namelists
-          !=
-            !--Human input
-            call namelist_human(pop_file,nagent)
-            !
-            !--Climate input
-            call namelist_clima(rain_file,t2m_file,area_file)
-            !
-            !--Init namelist constants, overriding default --> New parameter values from input
-            call namelist_const()
-            !
-            !--Init grid, pop and forcing fields
-            call netcdf_read_grid(pop_file,grid,nlon,nlat,nxy,pop_dens,lon_coord,lat_coord,mask_pop)
-
+      !--Human input
+      call namelist_human(pop_file,nagent)
+      !
+      !--Climate input
+      call namelist_clima(rain_file,t2m_file,area_file)
+      !
+      !--Init namelist constants, overriding default --> New parameter values from input
+      call namelist_const()
+      !
+      !--Init grid, pop and forcing fields
+      call netcdf_read_grid(pop_file,grid,nlon,nlat,nxy,pop_dens,lon_coord,lat_coord,mask_pop,nsteps)
+      !
 #ifdef COUPLED
-            ! Declarations or interfaces related to the coupled mode
-            !=
-              call init_constants() ! VECTRI-specific constants
-              wurbn_ratio = 1e-6    ! 
-              call init_vectri(pop_dens,mask_pop,nlon,nlat)
-
-            !=
-            !
+      ! Declarations or interfaces related to the coupled mode
+      !=
+        call init_constants() ! VECTRI-specific constants
+        wurbn_ratio = 1e-6    ! 
+        call init_vectri(pop_dens,mask_pop,nlon,nlat)
+      !=
+      !
 #endif
-            
-          !=
-          ! Safety check
-          !=
-            if ((nsteps >= ntime) .and. out_rain) then
-              print *, 'Number of simulation steps exceeds length of forcing --> STOP'
-              STOP
-            end if
-          !=
-          ! 
-          !=
-            call grid_allocate(nxy,nlon,nlat,y_coord_1d,x_coord_1d)
-          !=
-          !
-        ! 0.1.2 No input
-        elseif ((.not. input)) then !--> Idealized world
-          ! Namelists
-          !=
-            !--Init namelist constants, overwritting default --> New parameter values from input
-            call namelist_const()
-            !
-          !=
-          ! init grid and pop
-          !=
-            nlon =51       ! Number of longitude points
-            nlat =51       ! Number of latitude points
-            nxy  =nlon*nlat
-            call grid_allocate(nxy,nlon,nlat,y_coord_1d,x_coord_1d)
-            call grid_no_input(nxy,dx,dy,ncity,seed,H_0,D_pop,pop_dens,D,x_coord_1d,y_coord_1d,radial &
-                                ,nlon,nlat,lat_coord,lon_coord,L)
-            allocate(mask_pop(nxy))
-            mask_pop(:)=.true.
-          !=
-          !
-        else
-          print *, 'Check point: Input --> STOP'
-          STOP 
-        end if !----------------------------------------
-        ! By now the following should be defined:
-        ! - Disease parameters
-        ! - Grid parameters : nxy,x_coord_1,y_coord_1d,dx,dy,pop_dens
-        ! - Population density and forcing fields
+      !
+      !=
+        call grid_allocate(nxy,nlon,nlat,y_coord_1d,x_coord_1d)
+      !=
+      !
+    ! 0.1.2 No input
+    elseif ((.not. input)) then !--> Idealized world
+      ! Namelists
+      !=
+        !--Init namelist constants, overwritting default --> New parameter values from input
+        call namelist_const()
         !
-        ! ************** 0.2 Common information **************
+      !=
+      ! init grid and pop
+      !=
+        nlon =51       ! Number of longitude points
+        nlat =51       ! Number of latitude points
+        nxy  =nlon*nlat
+        call grid_allocate(nxy,nlon,nlat,y_coord_1d,x_coord_1d)
+        call grid_no_input(nxy,dx,dy,ncity,seed,H_0,D_pop,pop_dens,D,x_coord_1d,y_coord_1d,radial &
+                            ,nlon,nlat,lat_coord,lon_coord,L)
+        allocate(mask_pop(nxy))
+        mask_pop(:)=.true.
+      !=
+      !
+    else
+      print *, 'Check point: Input --> STOP'
+      STOP 
+    end if !----------------------------------------
+    !=
+    ! Safety check
+    !=
+      if ((nsteps > ntime) .and. out_rain) then
+        print *, nsteps, ntime
+        print *, 'Number of simulation steps exceeds length of forcing --> STOP'
+        STOP
+      end if
+    !=
+    ! By now the following should be defined:
+    ! - Disease parameters
+    ! - Grid parameters : nxy,x_coord_1,y_coord_1d,dx,dy,pop_dens
+    ! - Population density and forcing fields
+    !
+    ! ************** 0.2 Common information **************
 ! Safety ===============
 #ifdef COUPLED     
-        out_D    =.false.
-        out_Q    =.false.
-        out_B    =.false.
-        out_F    =.false.
-        out_A    =.true.
-        out_E    =.true.
-        coupling =.true.
+    out_D    =.false.
+    out_Q    =.false.
+    out_B    =.false.
+    out_F    =.false.
+    out_A    =.true.
+    out_E    =.true.
+    coupling =.true.
 #else 
-        coupling =.false.
-        out_t2m  =.false.
-        out_EIR  =.false.
-        out_imm  =.false.
+    coupling =.false.
+    out_t2m  =.false.
+    out_EIR  =.false.
+    out_imm  =.false.
 #endif
 !=======!
-        !
-        ! Initialize distance matrix
-        call mob_dist_init(nxy,x_coord_1d,y_coord_1d,lon_coord,lat_coord,dx,dy,input,Re,Pi,mask_pop,dist)
-        !
-        ! Allocate arrays of disease "disID" (SEIAR)
-        call grid_dis(disID,nxy,S,E,I,A,A_old,R,EIR,imm)
-        !
-        !**********************************
-        !
-        ! Open NetCDF dataset for output
-        if (agents) then
-          out_F = .false. ! There is no explicit force of infection with agent method
-        end if
-        if (.not. rand_seed) then
-          out_Q = .false.
-        end if
-        call netcdf_init(nlon,nlat,nsteps+1,lon_coord,lat_coord,Var3D)
-        !
-        ! Save some memory
-        deallocate(lon_coord) 
-        deallocate(lat_coord)
-        !
-        ! 0.3 Mobility scheme -------------------------
-        !
-        ! 0.3.1 Empirical network
-        if ((network)) then ! [Non-functional]
-          print *, 'Mobility scheme: empirical network'
-        !
-        ! 0.3.2 Gravity model
-        elseif ((gravity)) then
-          print *, 'Mobility scheme: gravity model'
-          !
-          call mob_gravity_init(nxy,agents,eps,mask_pop,mask_grav,mask_mob,D_grav,pop_dens,dist,Q,Q_2,Q_short,Q_long,m_short,m_long)
-          !
-        ! 0.3.3 Radiation model
-        elseif ((radiation)) then ! [Non-functional]
-          print *, 'Mobility scheme: radiation model'
-          !
-          ! call init_radiation  
-          !
-        end if !-----------------------------------
-        !
-        ! Save some memory
-        if ((agents) .and. (.not. out_Q)) then
-            deallocate(Q) ! Safe some memory
-        end if
-        !
-        if (.not. out_D) then 
-          deallocate(dist)
-        end if
-        !
-        ! 0.4 People representation ------------------- 
-        !
-        ! 0.4.1 Agents
-        print *, '------------------------'
-        if ((agents)) then ![Non-functional]
-          print *, "People representation: Agents"
-          !'("Pi = ",f4.2)', pi
-           if (random .and. (.not. rand_seed)) then
-              print *, '-- Random initial disease profiles --'
-           end if
-           call agents_init(nxy,disID,nagent,npeop,nattempt,mask_pop,pop_dens,scale,A_cell)
-           call agents_diagnostics(disID,scale)
-          !
-        ! 0.4.2 Density
-        elseif ((.not. agents)) then 
-          print *, 'People representation: Density (No agents)'
-          !
-          ! Bulk S(E)I(A)R if no agents 
-          call bulk_init(S,I,A,A_old,R,pop_dens,fS_0,fI_0,fA_0,fR_0,nxy,mask_pop,random,rand_seed)
-          !
-        end if !-----------------------------------
-        !
-        ! 0.5 Disease source 
-        !
-        ! 0.5.1 Cholera
-        if ((.not. coupling)) then
-          !
-          A_old = A
-          call source_init(Q,B_0,beta,m,nxy,agents,seed,random,rand_seed,exc,out_rain,exc_clim,B,B_old,F,radial,pop_dens,mask_pop,xy_seed)
-          !
-          if (random .and. rand_seed) then
-              print '("Number of neighbours connected to source: ",i6," ")', sum(merge(1,0,(mask_grav(xy_seed,:))))
-          end if
-          !     
+  !
+  ! Initialize distance matrix
+  call mob_dist_init(nxy,x_coord_1d,y_coord_1d,lon_coord,lat_coord,dx,dy,input,Re,Pi,mask_pop,dist)
+  !
+  ! Allocate arrays of disease "disID" (SEIAR)
+  call grid_dis(disID,nxy,S,E,I,A,A_old,R,EIR,imm)
+  !
+  !**********************************
+  !
+  ! Open NetCDF dataset for output
+  if (agents) then
+    out_F = .false. ! There is no explicit force of infection with agent method
+  end if
+  if (.not. rand_seed) then
+    out_Q = .false.
+  end if
+  !
+  call netcdf_init(nlon,nlat,nsteps,lon_coord,lat_coord,Var3D)
+  !
+  ! Save some memory
+  deallocate(lon_coord) 
+  deallocate(lat_coord)
+  !
+  ! 0.3 Mobility scheme -------------------------
+  !
+  ! 0.3.1 Empirical network
+  if ((network)) then ! [Non-functional]
+    print *, 'Mobility scheme: empirical network'
+  !
+  ! 0.3.2 Gravity model
+  elseif ((gravity)) then
+    print *, 'Mobility scheme: gravity model'
+    !
+    call mob_gravity_init(nxy,agents,eps,mask_pop,mask_grav,mask_mob,D_grav,pop_dens,dist,Q,Q_2,Q_short,Q_long,m_short,m_long)
+    !
+  ! 0.3.3 Radiation model
+  elseif ((radiation)) then ! [Non-functional]
+    print *, 'Mobility scheme: radiation model'
+    !
+    ! call init_radiation  
+    !
+  end if !-----------------------------------
+  !
+  ! Save some memory
+  if ((agents) .and. (.not. out_Q)) then
+      deallocate(Q) ! Safe some memory
+  end if
+  !
+  if (.not. out_D) then 
+    deallocate(dist)
+  end if
+  !
+  ! 0.4 People representation ------------------- 
+  !
+  ! 0.4.1 Agents
+  print *, '------------------------'
+  if ((agents)) then ![Non-functional]
+    print *, "People representation: Agents"
+    !'("Pi = ",f4.2)', pi
+     if (random .and. (.not. rand_seed)) then
+        print *, '-- Random initial disease profiles --'
+     end if
+     call agents_init(nxy,disID,nagent,npeop,nattempt,mask_pop,pop_dens,scale,A_cell)
+     call agents_diagnostics(disID,scale)
+    !
+  ! 0.4.2 Density
+  elseif ((.not. agents)) then 
+    print *, 'People representation: Density (No agents)'
+    !
+    ! Bulk S(E)I(A)R if no agents 
+    call bulk_init(S,I,A,A_old,R,pop_dens,fS_0,fI_0,fA_0,fR_0,nxy,mask_pop,random,rand_seed)
+    !
+  end if !-----------------------------------
+  !
+  ! 0.5 Disease source 
+  !
+  ! 0.5.1 Cholera
+  if ((.not. coupling)) then
+    !
+    A_old = A
+    call source_init(Q,B_0,beta,m,nxy,agents,seed,random,rand_seed,exc,out_rain,exc_clim,B,B_old,F,radial,pop_dens,mask_pop,xy_seed)
+    !
+    if (random .and. rand_seed) then
+        print '("Number of neighbours connected to source: ",i6," ")', sum(merge(1,0,(mask_grav(xy_seed,:))))
+    end if
+    !     
+  ! 0.5.2 Malaria
+  else
+    ! Do nothing as source of disease (vector density) has been initialized in the above call to init_vectri
+  end if
+  !
+  if (agents) then
+    deallocate(mask_grav)
+    deallocate(Q_short)
+    deallocate(Q_long)
+  end if
+  !
+call cpu_time(t_finish)
+print '("Getting ready took = ",f6.3," minutes.")',(t_finish-t_start)/60.
+print *, '------------------------'
+! 
+!********************************************************
+! Spin-up methods
+!=
+  if (spin_up==1) then
+    print '("Starting Spin-up")'
+    
 
+    ! Methods
 
-        ! 0.5.2 Malaria
-        else ![Non-functional]
-          ! Do nothing as source of disease (vector density) has been initialized in the above call to init_vectri
-        end if
-        !
-        if (agents) then
-          deallocate(mask_grav)
-          deallocate(Q_short)
-          deallocate(Q_long)
-        end if
-        !
-      call cpu_time(t_finish)
-      print '("Getting ready took = ",f6.3," minutes.")',(t_finish-t_start)/60.
-      print *, '------------------------'
-      !
-      !=  
-      endif ! End If time==1 *******************
-      
-      !
-      if(itime==(spin_up+1)) then
-        ! Write initial conditions 
-        call netcdf_3D_output(itime-spin_up,Var3D)
-        !
-        write(*,*) ' '
-        !
-      end if  
-      !
+    call cpu_time(t_spin)
+    print '("Spin up took = ",f6.3," minutes.")',(t_spin-t_finish)/60.
+    print *, '------------------------'
+  end if 
+  !
+!=
+!
+! Write initial conditions (after spin-up)
+call netcdf_3D_output(itime,Var3D)
+write(*,*) ' '
+!
+! 
+print '("Integrate: ",i6," days.")', nsteps
+print *, '------------------------'
+!
+!********************************************************
+time_loop: do itime=2,nsteps
+  !=
       ! 1) Integrate source of disease --> dt_B/dt, dt_V/dt, ...  ==================================================================================
       ! 2) Update health status --> .agents.=false
       spatial_loop: do ixy=1,nxy 
@@ -394,7 +402,7 @@ PROGRAM MOBILE
             !
 ! Declarations or interfaces related to the coupled mode
 #ifdef COUPLED
-          
+            !
             ! Update point meteo drivers
             !
              point_rain = rainfall(ixy,itime)
@@ -407,13 +415,13 @@ PROGRAM MOBILE
                !                            
                rgonof(ixy) = zgonof
                ! **Input from agent methods**
-     
-               !   1) nbites(:) - "Success" fraction of infective bites (human to vector). 
-               !                  This (nbites calculation) is handled in the agent methods and thus benefits from agent attributes.
+               !
+               !   1) nbites(:)/npeop(:) - "Success" fraction of infective bites (human to vector). 
+               !                  The nbites(:) calculation is handled in the agent methods and thus benefits from agent attributes.
                !                  We then feed it to VECTRI to inform the sporogonic cycle routine.
-               
+               !
                ! **Output from VECTRI**
-
+               !
                !   Updated vector and larval densities as well as sporogony state, V(t + dt, ixy, sporo_new):
                !
                !   1) rvect(ixy)  - vector density array 
@@ -423,8 +431,8 @@ PROGRAM MOBILE
             ! 2.2) Update health status (bulk)
               if (.not. agents) then ! [Non-functional]
                 ! Densities S(t) --> S(t + dt), ...
-                !call bulk_integrate_SEIR_Malaria(ixy,V,...) --> this is the way malaria is currently handled in VECTRI
-                print*, "Bulk malaria subroputine is non-functional yet --> Stop"
+                !call bulk_integrate_SEIR_malaria(ixy,V,...) --> this is the way malaria is currently handled in VECTRI
+                print*, "Bulk (VECTRI) malaria subroutine is non-functional yet --> Stop"
                 STOP
               end if
               !
@@ -471,7 +479,7 @@ PROGRAM MOBILE
           !
           call agents_update(disID,iagent,itime,nattempt,npeop,nbites,m_0,m_1)
 
-          if (MOD(itime,365)==0) then ! Ignore calendar type
+          if (MOD(itime,365)==0) then ! Ignore leap years
             !
             ! 3.2) Update population age
             call agents_age(iagent)
@@ -497,7 +505,8 @@ PROGRAM MOBILE
         !
         if (disID == 1) then  
           ! Calculate average daily EIR
-          where(mask_pop(:).and. (npeop(:)>0)) EIR(:) = EIR(:)/npeop(:) !/P_a
+          EIR(:) = EIR(:)/npeop(:)
+          !where(mask_pop(:).and. (npeop(:)>0)) EIR(:) = EIR(:)/npeop(:) !/P_a
 
           ! Calculate average daily e_l (endemicity level)
           imm(:) = imm(:)/npeop(:)
@@ -525,20 +534,10 @@ PROGRAM MOBILE
         !
       end if
       !
-      if (itime > spin_up) then
-      !=
-        !
-        WRITE(*,'(1a1,A11,F6.1,A2)', advance='no') char(13),'Integrating',(real(itime-spin_up)/(nsteps)*100.),' %'
-        !
-        ! Write 3D fields (x,y,t) here
-        call netcdf_3D_output(itime+1-spin_up,Var3D)
-        !
-      !=
-      else
-        !
-        WRITE(*,'(1a1,A7,F6.1,A2)', advance='no') char(13),'Spin Up',(real(itime)/(spin_up)*100.),' %'
-        !
-      end if
+      WRITE(*,'(1a1,A11,F6.1,A2)', advance='no') char(13),'Integrating',(real(itime)/(nsteps)*100.),' %'
+      !
+      ! Write 3D fields (x,y,t) here
+      call netcdf_3D_output(itime,Var3D)
       !
   !===
   !

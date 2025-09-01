@@ -61,7 +61,7 @@ fi
 
 if ( ${heap} ) ; then
     echo 'Heap Profiling ; Analyze memory allocation.'
-    for dump in 1 2 3 4 5 6; do
+    for dump in $(seq 1 1 13); do
         if ( ${text} ) ; then
             echo 'Text' ${dump}
             pprof --text ${output_name}/mobile.out heap_profile.*${dump}.heap > ${prof_folder}/heap_profile.*${dump}.txt 2>/dev/null 

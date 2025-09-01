@@ -679,7 +679,7 @@ MODULE mo_netcdf
         
       end subroutine netcdf_init
 
-      subroutine netcdf_read_grid(pop_file,grid,nlon,nlat,nxy,pop_dens,lon_coord,lat_coord,mask_pop)
+      subroutine netcdf_read_grid(pop_file,grid,nlon,nlat,nxy,pop_dens,lon_coord,lat_coord,mask_pop,nsteps)
       ! Read input files on humans and get frid characteristics following
       ! https://docs.unidata.ucar.edu/netcdf-fortran/current/f90-use-of-the-netcdf-library.html#f90-reading-a-netcdf-dataset-with-known-names
       !
@@ -705,6 +705,7 @@ MODULE mo_netcdf
         real, allocatable, intent(out) :: lat_coord(:)
         real, allocatable, intent(out) :: grid(:,:)
         logical, allocatable, intent(out) :: mask_pop(:)
+        integer, intent(out) :: nsteps
 
         ! Rainfall definitions --------------------------
         !character(len=100), intent(in) :: rain_file
@@ -846,6 +847,9 @@ MODULE mo_netcdf
                   print *, 'NetCDF Status: found rainfall forcing file of len --> ', ntime
                   allocate(grid_clim(nlon,nlat,ntime))
                   allocate(rainfall(nxy,ntime))
+                  if (nsteps == 0) then
+                    nsteps = ntime
+                  end if
                   exit
                 elseif((indx == size(time_names)) .and. (status /= nf90_noerr)) then
                   print *, 'NetCDF Status: time dimension not indentified'
@@ -926,6 +930,9 @@ MODULE mo_netcdf
                   print *, 'NetCDF Status: found temperature forcing file of len --> ', ntime
                   allocate(grid_clim(nlon,nlat,ntime))
                   allocate(t2m(nxy,ntime))
+                  if (nsteps == 0) then 
+                    nsteps = ntime
+                  end if 
                   exit
                 elseif((indx == size(time_names)) .and. (status /= nf90_noerr)) then
                   print *, 'NetCDF Status: time dimension not indentified'

@@ -33,7 +33,7 @@ fi
                              # 1: Malaria [non-functional]
                              # 2: Dengue  [non-functional]
             nstep=1095        # [days]       #  -n
-            #nstep=500
+            #nstep=2000
             seed=12345                       #  -s
 #          |
 #          |
@@ -128,7 +128,7 @@ EOM
 
 echo 'Command:' ${command} > ${output_name}.info
 echo 'Version:' >> ${output_name}.info
-echo 'Retrieved from:' >> ${output_name}.info
+echo 'Retrieved from:' $(git -C ${MOBILE} remote get-url origin) >> ${output_name}.info
 echo 'Date:' $(date) >> ${output_name}.info
 
 #---------------

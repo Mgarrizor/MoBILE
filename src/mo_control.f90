@@ -8,7 +8,7 @@ MODULE mo_control
 
     ! Control flags *******************************************
     ! These are overwritten by the input command when running MOBILE (when namelist_inout is called)
-    logical :: input    =.true.  ! (from flag) [Non-functional]
+    logical :: input    =.true.  ! External population, driving files and model parameters
     logical :: agents   =.true.  ! Use agents, if false the program falls back to density
     logical :: coupling =.true. ! Use VECTRI
     logical :: gravity  =.true.  ! Use gravity model

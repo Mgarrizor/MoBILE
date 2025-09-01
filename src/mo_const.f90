@@ -58,7 +58,12 @@ MODULE mo_const
     real, allocatable :: D(:)           ! Dilution factor
     integer           :: P_a             ! Number of agents per person in the simulation
     real, allocatable :: A_cell(:)      ! Area of grid cells
-    
+
+    !********* Spin Up ***************************
+
+    real :: SU_annual(365) ! Array with daily averages to test convergence
+    logical :: SU_conv ! Convergende flag
+    real :: SU_tol     ! Tolerance for convergence
 
     !********** Grid *****************************
     integer :: nlon  ! Number of longitude points
@@ -69,8 +74,8 @@ MODULE mo_const
     real    :: dx  ! Horizontal discretization
     real    :: dy  ! Vertical discretization
 
-    integer :: seed=1234           ! 
-    integer :: spin_up=0           ! Spin up time [days]
+    integer :: seed=1234      ! 
+    integer :: spin_up=1      ! Spin-up 
 
     ! Conceptual case
     integer, parameter :: ncity=1  ! Number of radial cities in the grid
@@ -240,7 +245,7 @@ MODULE mo_const
                               !                                  ~ 0.125       Bousema  et al. 2011 [DOI:] ---> and references therein | Ouedraogo 2009 [DOI:]
                               !                                                                                                        | Schneider 2007 [DOI:]
 
-        b_rate = 5            ! Vector biting rate - mean of 1.6 bites/person/hour from 18:00 - 6:30 (~ 1.6*12.5) Nzioki et al. 2023 [DOI:]
+        b_rate = 5            ! Vector biting rate - mean of 1.6 bites/person/hour from 18:00 - 6:30 (~ 1.6*12.5=20) Nzioki et al. 2023 [DOI:]
 
         mu  = 1./(61.*365)    ! Background human mortality rate [day^-1]
 
@@ -252,7 +257,7 @@ MODULE mo_const
         A1     = 0.9      ! Coefficient weighting each time scale
         e_th   = 0.001    ! Threshold endemicity level value for R --> S transition                  [x]
 
-        mat_rate = log(2.)/(6.*30)  ! Loss rate of maternal immunity = ln(2)/(Half-life of maternal immunity) [day^-1] 
+        mat_rate = log(2.)/(6.*30)  ! Loss rate of maternal immunity = ln(2)/(Half-life of maternal immunity) [day^-1] (~ 6 months)
                                   !
                                   ! 3-9 months Gupta 1999 [DOI:]
                                   ! 3   months Ghani 2009 [DOI:]

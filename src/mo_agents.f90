@@ -398,9 +398,6 @@ USE, INTRINSIC :: ISO_C_BINDING
             ! Local use only
             integer :: iagent, istat, iloc
             logical :: iactive
-    
-            !
-            !counter = 0
 
             SELECT case(idis)
             case (0) ! Cholera -------------------------------

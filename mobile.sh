@@ -116,14 +116,18 @@ if [[ ${vectri} == 1 ]]; then
                                                                # These are the necessary VECTRI source files to
   ln -sf ${VECTRI}/source/mo_constants.f90 ${path}/src         # couple it to the AB model.
   ln -sf ${VECTRI}/source/mo_advect.f90 ${path}/src
-
   ln -sf ${MOBILE}/utils/vectri/mo_methods.f90 ${path}/src
+  #-------------------------------------------------------------------------------------------------------------------
+
   ln -sf ${MOBILE}/utils/vectri/mo_vectri.f90  ${path}/src     # This is the file that declares, allocates and 
                                                                # initializes VECTRI's fields and wraps all subroutines 
                                                                # necessary for integrating the vector density.
+  #-------------------------------------------------------------------------------------------------------------------
 
   ln -sf ${MOBILE}/utils/vectri/mo_vectri.d ${path}/src/deps   # Dependency files to ensure right compilation order.
   ln -sf ${MOBILE}/utils/vectri/mo_methods.d ${path}/src/deps  
+
+  #-------------------------------------------------------------------------------------------------------------------
 
 elif  [[ ${vectri} == 0 ]]; then
   echo '================= VECTRI inactive ================'
@@ -148,13 +152,13 @@ fi
 #-------------------------------
 
 # 2) Compile program
-(cd $path && make ENABLE_COUPLING=${vectri})
+(cd $path && make ENABLE_COUPLING=${vectri} ENABLE_MOBILITY=0)
 exit=$? # Save exit status of 'make'.
 
 # $? = Exit status of last executed command 
 
-# For BASH zero means a successful execution, while non-zero values are 
-# mapped to different  numbers depending on the exit reason. Exit statuses 
+# For BASH, zero means a successful execution, while non-zero values are 
+# mapped to different numbers depending on the exit reason. Exit statuses 
 # fall between [0,255].
 # (https://www.gnu.org/software/bash/manual/html_node/Exit-Status.html)
 
