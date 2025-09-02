@@ -32,7 +32,7 @@ fi
             disID=1          # 0: Cholera      -d
                              # 1: Malaria [non-functional]
                              # 2: Dengue  [non-functional]
-            nstep=1095        # [days]       #  -n
+            nstep=1096        # [days]       #  -n
             #nstep=2000
             seed=12345                       #  -s
 #          |

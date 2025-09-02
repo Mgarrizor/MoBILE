@@ -475,7 +475,7 @@ USE, INTRINSIC :: ISO_C_BINDING
 
         subroutine agents_update(idis,iagent,itime,n_attempt,npeop,nbites,m_0,m_1)
         !===
-            ! This subroutine takes one time step with agent method
+            ! This subroutine updates agent disease and mobility statuses (mobility non-functional - to be implemented if Marie-Curie is funded)
             implicit none
 
             real, allocatable, intent(in) :: m_0(:)  ! Susceptible vector to host ratio times the vector biting rate
@@ -487,20 +487,6 @@ USE, INTRINSIC :: ISO_C_BINDING
             integer, allocatable, intent(inout) :: n_attempt(:)   ! (nxy) Number of growth attempts at location of iagent at time itime
             integer, allocatable, intent(inout) :: npeop(:)       ! (nxy) Number of agents in each grid cell 
             integer, allocatable, intent(inout) :: nbites(:)      ! (nxy) Infective bites (vectors that were infected upon bitting a human)
-
-
-            ! "Implicit" input (from mo_const):
-
-            ! logical, allocatable, intent(in) :: mask_pop(:) !
-            ! logical, allocatable, intent(in) :: mask_mob(:) !
-            ! 
-            ! Cholera =================================
-            !
-            ! real, allocatable, intent(in) :: B(:)    ! Bacterial load for infection probability
-            ! real, allocatable, intent(out):: c(:)    ! Infected people travels and contaminates - this is the excretion counter
-                                                       ! fed later into the subroutine that integrates B 
-            ! real, allocatable, intent(in) :: D(:)    ! Dilution factor for excretion events
-            ! real, intent(in) :: "All cholera parameters"
 
             ! *************** Start subroutine *******************
             ! 
@@ -818,7 +804,7 @@ USE, INTRINSIC :: ISO_C_BINDING
 
         ! ToC ===========================
         !
-        ! 1) Mobility
+        ! 1) Mobility [non-functional]
         ! 2) Disease
         !   2.0) Maternal immunity
         !   2.1) Transmission probabilities
@@ -828,7 +814,6 @@ USE, INTRINSIC :: ISO_C_BINDING
 
         if (mask_pop(i)) then ! Check if location is populated and driving fields are not missing
                 if (active) then  ! If agent is alive
-                    !
                     !
                     ! Since vector-human interactions are (for now) overnight we can neglect the effect of daily trips
                     ! and therefore treat mobility first and then disease  
@@ -972,6 +957,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                             people(iagent)%health_status%malaria_status%infc_dur=people(iagent)%health_status%malaria_status%infc_dur - 1
                             !
                         end if
+                        !
                     !===  
                     !
                     elseif (stat == 3) then ! If infected symptomatic (I) *****************************
@@ -992,7 +978,6 @@ USE, INTRINSIC :: ISO_C_BINDING
                             people(iagent)%health_status%malaria_status%infc_dur=people(iagent)%health_status%malaria_status%infc_dur - 1
                         end if
                     !===                  
-                    !
                     !
                     elseif (stat == 4) then ! If infected asymptomatic (A) *****************************
                     !
@@ -1164,13 +1149,14 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             do j = 1, sides
                 if (mask_grav(j) .and. mask_pop(j)) then ! Efficiency
-                    
+                    !
                     if (r <= cum_distr(j)) then
                         !
                         roll = j
                         !
                         exit
                     end if 
+                    !
                 end if
             end do
             !
@@ -1193,13 +1179,14 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             do j = 1, sides
                 if (mask_pop(j)) then ! Efficiency
-                    
+                    !
                     if (r <= cum_distr(j)) then
                         !
                         roll = j
                         !
                         exit
                     end if 
+                    !
                 end if
             end do
             !
@@ -1329,7 +1316,8 @@ USE, INTRINSIC :: ISO_C_BINDING
 
           end function r4_normal_cd
 
-          function mean_log_to_norm(a,b) result(c)
+          ! ** Not in use **
+          function mean_log_to_norm(a,b) result(c) 
           !
           ! Returns mean, c, of normal distribution N(c,d) from log-normal distribution logN(a,b)
           !
@@ -1346,7 +1334,8 @@ USE, INTRINSIC :: ISO_C_BINDING
             c = log(a) - 0.5*b**2
 
           end function mean_log_to_norm
-
+          !
+          ! ** Not in use **
           function std_log_to_norm(a,b) result(d)
           !
           ! Returns standard deviation (std), d, of normal distribution N(c,d) from log-normal distribution logN(a,b)
@@ -1404,6 +1393,5 @@ USE, INTRINSIC :: ISO_C_BINDING
           tau = ceiling(exp(r4_normal_cd(c,d)))
 
           end function tau_log
-
 
 end MODULE mo_agents

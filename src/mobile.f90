@@ -351,6 +351,7 @@ if (spin_up==1) then
   SU_conv=.false.
   SU_tol=0.005
   SU_old=0.
+  allocate(SU_annual(365))
   SU_annual(:) = 0.
   ispinup = 0
   !
@@ -375,7 +376,7 @@ if (spin_up==1) then
     !
     end do spin_up_loop
     !
-    ! Convergence to equilibrium by Direct Integration (SI) --> To Do: Select method from flag
+    ! Convergence to equilibrium by Direct Integration (SI) --> To Do: Implement Anderson Acceleration (AA) and select method from flag
     call DI(SU_annual(:),SU_tol,SU_conv,SU_old)
     ispinup = ispinup + 1
     !
@@ -409,14 +410,11 @@ time_loop: do itime=2,nsteps
   !
 end do time_loop
   !
-  !
-  !
-  WRITE(*,*) ' '
-  !
   ! Write 2D fields (x,y) here and close NetCDF file
   call netcdf_2D_output()
   !
   call cpu_time(t_finish)
+  WRITE(*,*) ' '
   print '("Program finished successfully after = ",f6.3," minutes.")',(t_finish-t_start)/60.
   !
 end PROGRAM MOBILE

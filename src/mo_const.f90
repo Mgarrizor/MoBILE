@@ -61,7 +61,7 @@ MODULE mo_const
 
     !********* Spin Up ***************************
 
-    real :: SU_annual(365) ! Array with daily averages to test convergence
+    real, allocatable :: SU_annual(:) ! Array with daily averages to test convergence
     logical :: SU_conv ! Convergende flag
     real :: SU_tol     ! Tolerance for convergence
     real :: SU_old     ! 

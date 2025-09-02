@@ -16,7 +16,7 @@ subroutine DI(x_d,tol_SU,conv,SU_old)
     implicit none
 
     real, intent(inout) :: SU_old ! Convergence test from last time step
-    real, intent(in) :: x_d(365) ! Array with values averaged over the whole spatial domain (daily time step)
+    real, allocatable, intent(in) :: x_d(:) ! Array with values averaged over the whole spatial domain (daily time step)
     real, intent(in) :: tol_SU              ! Tolerance of convergence
     logical, intent(out) :: conv            ! Convergence boolean
 
@@ -50,7 +50,7 @@ function mean(x) result(m)
     
     implicit none
 
-    real, intent(in) :: x(365)
+    real, allocatable, intent(in) :: x(:)
     real :: m ! Mean of array x(:)
 
     ! Local use only
