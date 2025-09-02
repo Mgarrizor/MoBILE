@@ -61,10 +61,11 @@ MODULE mo_const
 
     !********* Spin Up ***************************
 
-    real, allocatable :: SU_annual(:) ! Array with daily averages to test convergence
-    logical :: SU_conv ! Convergende flag
+    real, allocatable :: SU_new(:) ! (nxy) Array with year average to test convergence
+    real, allocatable :: SU_old(:) ! (nxy) Array with year average to test convergence
+    logical :: SU_conv ! Convergence flag
     real :: SU_tol     ! Tolerance for convergence
-    real :: SU_old     ! 
+  !  real :: SU_old     ! 
 
     !********** Grid *****************************
     integer :: nlon  ! Number of longitude points
@@ -251,8 +252,8 @@ MODULE mo_const
         mu  = 1./(61.*365)    ! Background human mortality rate [day^-1]
 
         ! Immunity
-
-        e_0    = 0.09     ! Base increase in endemicity level [per infectious bite]                  [x]
+        e_0    = 0.11
+        !e_0    = 0.09     ! Base increase in endemicity level [per infectious bite]                  [x]
         e1     = 0.5*e_0  ! e-folding factor in boosted maternal/naive immunity acquisition (fast) [e_0]
         e2     = 10*e_0   ! e-folding factor in gradual immunity acquisition (slow)                [e_0]
         A1     = 0.9      ! Coefficient weighting each time scale

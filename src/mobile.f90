@@ -349,15 +349,20 @@ print *, '------------------------'
 if (spin_up==1) then
   !
   SU_conv=.false.
-  SU_tol=0.005
-  SU_old=0.
-  allocate(SU_annual(365))
-  SU_annual(:) = 0.
+  SU_tol=0.01
+
+  allocate(SU_old(nxy))
+  allocate(SU_new(nxy))
+  SU_old(:) = 0.
+  SU_new(:) = 0.
   ispinup = 0
   !
   print '("Starting Spin-up")'
   
   do while (.not. SU_conv)
+    !
+    SU_old(:) = SU_new(:)
+    !
     spin_up_loop: do itime=1,365
     !
     call time_step(disID,itime)
@@ -367,7 +372,7 @@ if (spin_up==1) then
 
     case (1) ! Malaria
       !
-      SU_annual(itime) = sum(imm(:))/size(imm(:))
+      SU_new(:) = SU_new(:) + imm(:)
       !
     case default
       print *, "Incorrect case, choose disID between: 0 (cholera) and 1 (malaria)"
@@ -376,11 +381,17 @@ if (spin_up==1) then
     !
     end do spin_up_loop
     !
+    SU_new(:) = SU_new(:)/365
+    print *, sum(SU_new(:)), sum(SU_old(:))
+    !
     ! Convergence to equilibrium by Direct Integration (SI) --> To Do: Implement Anderson Acceleration (AA) and select method from flag
-    call DI(SU_annual(:),SU_tol,SU_conv,SU_old)
+    call DI(SU_new,SU_old,SU_tol,SU_conv)
     ispinup = ispinup + 1
     !
   end do
+  !
+  deallocate(SU_new)
+  deallocate(SU_old)
   !
   call cpu_time(t_spin)
   write(*,*) ' '
