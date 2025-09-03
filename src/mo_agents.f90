@@ -11,6 +11,8 @@ MODULE mo_agents
 USE mo_const
 USE mo_control
 
+USE omp_lib
+
 USE, INTRINSIC :: ISO_C_BINDING
 !
     implicit none
@@ -833,8 +835,10 @@ USE, INTRINSIC :: ISO_C_BINDING
                                 j = home
 
                                 ! Update number of agents in either grid cell
+                                !$OMP ATOMIC
                                 npeop(i) = npeop(i) - 1 
                                 npeop(j) = npeop(j) + 1
+                                !$END OMP ATOMIC
                             else 
                                 ! Update duration of trip counter --> useful if we implement not exponential travelling times
                                 people(iagent)%location_status%longdur = people(iagent)%location_status%longdur + 1
@@ -855,9 +859,10 @@ USE, INTRINSIC :: ISO_C_BINDING
                                 people(iagent)%location_status%longdur = 1     ! Counter in case trip durations are not exponentially distributed
 
                                 ! Update number of agents in either grid cell
+                                !$OMP ATOMIC
                                 npeop(i) = npeop(i) - 1 
                                 npeop(j) = npeop(j) + 1
-    
+                                !$END OMP ATOMIC
                             !
                             ! else agent does not move
                             !
@@ -967,7 +972,9 @@ USE, INTRINSIC :: ISO_C_BINDING
                         ! Human to vector transmission
                         if ((generate_random() < P_0)) then    ! If infected by human
                             !
+                            !$OMP ATOMIC
                             nbites(j) = nbites(j) + 1
+                            !$END OMP ATOMIC
                             !
                         end if
                         !
@@ -986,7 +993,9 @@ USE, INTRINSIC :: ISO_C_BINDING
                         ! Human to vector transmission
                         if ((generate_random() < P_0)) then    ! If infected by human
                             !
+                            !$OMP ATOMIC
                             nbites(j) = nbites(j) + 1
+                            !$END OMP ATOMIC
                             !
                         end if
                         !
@@ -1048,7 +1057,9 @@ USE, INTRINSIC :: ISO_C_BINDING
                             people(iagent)%health_status%active_status%status=.false.
                             people(iagent)%health_status%malaria_status%EIR_att=0.
                             people(iagent)%health_status%malaria_status%e_l=0.
+                            !$OMP ATOMIC
                             npeop(j) = npeop(j) - 1
+                            !$END OMP ATOMIC
                             !
                         end if
                         !
@@ -1073,10 +1084,14 @@ USE, INTRINSIC :: ISO_C_BINDING
                                  people(iagent)%agent_ID%sex=1   ! Male = 0
                              end if
                              cyc=.true.
+                             !$OMP ATOMIC
                              n_attempt(i) = n_attempt(i) + 1
                              npeop(i) = npeop(i) + 1
+                             !$END OMP ATOMIC
                         else
+                             !$OMP ATOMIC
                              n_attempt(i) = n_attempt(i) + 1
+                             !$END OMP ATOMIC
                         end if 
                     end do
                 end if ! If (active)

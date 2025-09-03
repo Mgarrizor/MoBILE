@@ -136,7 +136,7 @@ PROGRAM MOBILE
 #endif
 !----------------------
 
-!  USE omp_lib ! Not in use
+  USE omp_lib ! Not in use
 
 implicit none
 
@@ -144,12 +144,19 @@ implicit none
   ! Loop counters
   integer :: itime     ! Time    (nsteps)
   integer :: ispinup   ! Number of needed spin-up years 
-  ! Get time 
-  real :: t_start
-  real :: t_spin
-  real :: t_finish
-  call cpu_time(t_start)
 
+  ! CPU time 
+  real(kind=8) :: t_start
+  real(kind=8) :: t_spin
+  real(kind=8) :: t_finish
+
+  ! Wall-clock time
+  real(kind=4) :: elapsed_time
+  integer      :: start_count, end_count, spin_count, count_rate
+  !
+  call cpu_time(t_start)
+  !t_start = OMP_GET_WTIME()
+  CALL SYSTEM_CLOCK(COUNT=start_count, COUNT_RATE=count_rate)
 !******************************************************************
 !
 ! Get basic information for the current run
@@ -349,12 +356,23 @@ itime = 1
     deallocate(Q_long)
   end if
   !
+!=
+! CPU stats
 call cpu_time(t_finish)
-print '("Getting ready took = ",f6.3," minutes.")',(t_finish-t_start)/60.
+print *, '-- Initialisation took --'
+print '("CPU:       ",f6.3," seconds")',(t_finish-t_start)
+
+! OMP Wall-clock stats
+!t_finish = OMP_GET_WTIME()
+
+! Wall-clock stats
+CALL SYSTEM_CLOCK(COUNT=end_count)
+elapsed_time = REAL(end_count - start_count) / REAL(count_rate)
+print '("Wall time: ",f6.3," seconds")',elapsed_time
 print *, '------------------------'
 ! 
 !********************************************************
-! Spin-up methods
+! 0.6 Spin-up
 !=
 if (spin_up==1) then
   !
@@ -392,7 +410,6 @@ if (spin_up==1) then
     end do spin_up_loop
     !
     SU_new(:) = SU_new(:)/365
-    print *, sum(SU_new(:)), sum(SU_old(:))
     !
     ! Convergence to equilibrium by Direct Integration (SI) --> To Do: Implement Anderson Acceleration (AA) and select method from flag
     call DI(SU_new,SU_old,SU_tol,SU_conv)
@@ -403,11 +420,22 @@ if (spin_up==1) then
   deallocate(SU_new)
   deallocate(SU_old)
   !
+  ! CPU stats
   call cpu_time(t_spin)
   write(*,*) ' '
+  print *, '-- Spin-up took --'
+  print '("CPU:      ",f6.3," minutes")',(t_spin-t_finish)/60.
+  
+  ! OMP Wall-clock stats
+  !t_finish = OMP_GET_WTIME()
+  
+  ! Wall-clock stats
+  CALL SYSTEM_CLOCK(COUNT=spin_count)
+  elapsed_time = REAL(spin_count - end_count) / REAL(count_rate)
+  print '("Wall time:",f6.3," minutes")',elapsed_time/60.
   print *, 'Number of spin-up years: ', ispinup
-  print '("Spin up took = ",f6.3," minutes.")',(t_spin-t_finish)/60.
   print *, '------------------------'
+!=
 end if 
 !
 !=
@@ -434,9 +462,23 @@ end do time_loop
   ! Write 2D fields (x,y) here and close NetCDF file
   call netcdf_2D_output()
   !
+  !t_finish = OMP_GET_WTIME()
+
+  ! CPU stats
   call cpu_time(t_finish)
-  WRITE(*,*) ' '
-  print '("Program finished successfully after = ",f6.3," minutes.")',(t_finish-t_start)/60.
+  write(*,*) ' '
+  print *, '-- Program finished successfully after --'
+  print '("CPU:      ",f6.3," minutes")',(t_finish-t_start)/60.
+  
+  ! OMP Wall-clock stats
+  !t_finish = OMP_GET_WTIME()
+  
+  ! Wall-clock stats
+  CALL SYSTEM_CLOCK(COUNT=end_count)
+  elapsed_time = REAL(end_count - start_count) / REAL(count_rate)
+  print '("Wall time:",f6.3," minutes")',elapsed_time/60.
+  print *, '------------------------'
+  write(*,*) ' '
   !
 end PROGRAM MOBILE
 

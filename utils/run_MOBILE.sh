@@ -4,17 +4,18 @@
 
 profiler=false     # Flag to profile model performance (time spent at each subroutine,... and memory usage at different simulation stages)
 freq=110           # Sampling frequency for profiler (default is 100 per second)
-parallel=false     # Flag to run MoBILE in parallel mode using Open MP [Non-functional]
+parallel=true      # Flag to run MoBILE in parallel mode using Open MP [Non-functional]
 
-# Open MP parallelisation [Non-functional]
+# Open MP parallelisation
 if ( $parallel ) ; then
+    echo '-- MoBILE being run in parallel mode --'
     export NPROC=$(getconf _NPROCESSORS_ONLN)
-    #export OMP_NUM_THREADS=$(getconf _NPROCESSORS_ONLN)
-    export OMP_NUM_THREADS=1
+    export OMP_NUM_THREADS=$(getconf _NPROCESSORS_ONLN)
+    #export OMP_NUM_THREADS=6
     #export NPROC=2
-    #echo 'Number of processors =' ${NPROC}
-    #echo 'Number of threads = ' ${OMP_NUM_THREADS}
-    #echo $NPROC
+    echo 'Number of available processors =' ${NPROC}
+    echo 'Number of used threads = ' ${OMP_NUM_THREADS}
+    echo '---------------------------------------'
 fi
 
 # Profiler
@@ -46,7 +47,7 @@ fi
 #           -a Number of agents 
             nagent=500000     
 #           -u Spin Up (0: no spin-up ; 1: automatic spin-up) 
-            spin_up=1
+            spin_up=0
 #           -p Population file 
             pop_file='Data/CHIRXS/pop.nc'
 #           -r Rainfall file 

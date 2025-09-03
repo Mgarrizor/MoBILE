@@ -17,7 +17,7 @@ MODULE mo_timestep
 ! USE mo_namelist
 
   !USE, INTRINSIC :: ISO_C_BINDING
-  
+  USE omp_lib
 !----- VECTRI
 #ifdef COUPLED
   ! Declarations or interfaces related to the coupled mode
@@ -157,6 +157,7 @@ subroutine time_step(disID,itime)
         ! "Re-initialise" random number generator
         call random_seed()
         !
+!$OMP PARALLEL DO
         agent_loop: do iagent=1,nagent   
         !
         ! 3.1) Update health status
@@ -171,6 +172,7 @@ subroutine time_step(disID,itime)
           end if
         !
         end do agent_loop
+!$OMP END PARALLEL DO
         !
         call agents_diagnostics(disID,scale)  ! Compute bulk stats
         !

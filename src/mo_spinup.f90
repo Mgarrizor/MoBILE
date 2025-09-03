@@ -37,6 +37,7 @@ subroutine DI(x_new,x_old,tol_SU,conv)
         eps_SU = sum(dummy(:))/n!*100 ! Deviation expressed in percentage
         !
         WRITE(*,'(1a1,A20,F6.4,A5,F6.4)', advance='no') char(13),'Spin-up convergence ',eps_SU,' <=? ',tol_SU
+        print *, sum(x_new(:)), sum(x_old(:))
     else 
         print*, 'Cannot compute mean during Spin-up --> Exit'
         STOP
@@ -50,6 +51,10 @@ end subroutine DI
 
 ! Anderson acceleration method
 subroutine AA()
+    ! https://www.youtube.com/watch?v=fU_Ey5haF_M 
+    ! Problem is the convergence is measured on a diagnostic variable (year and grid average of immunity level)
+    ! instead of the prognostic e_l of each agent. How do we deal with this?
+    ! Should we look for explicit convergence of each e_l attribute?
 
     implicit none
 
