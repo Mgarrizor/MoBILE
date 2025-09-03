@@ -1,20 +1,26 @@
 PROGRAM MOBILE
 !
 !
-! --------- ICTP's agent-based (AB) model --------
-!
 ! Mobility-Based Integrated Landscape Epidemiology
 !
 !                       MoBILE
 !
 !                      (model) by
+!          A. M. Tompkins      (tompkins@ictp.it)
+!
+!                    (2014,2024)
+!
+!                         &
 ! 
 !          M. Garrido Zornoza  (mgarrizoraca@gmail.com)
 !          
 !                      (2024)
 !
-! License: GNU General Public License v3.0
+! Developed at The Abdus Salam ICTP, Trieste, Italy 
 !
+! ========================================
+! License: GNU General Public License v3.0
+! ========================================
 !
 ! Referenced sources in MoBILE
 !
@@ -35,9 +41,76 @@ PROGRAM MOBILE
 ! [d2]
 ! [d3]
 !
-
-
-!********************************************************************
+!============================================================================================
+! Index                           |- mo_dules                          | Performance (profiler.sh)
+!                                 |   /<<subroutine>>                  |        
+!                                 |                                    |
+! 0) Initialization --------------|------------------------------------|-----------------------------                              
+!     0.1 Grid & params           |                                    |
+!     0.1.1 Input                 |                                    |
+!     0.1.2 No input              |                                    |
+!                                 |                                    |
+!     0.2 Common information      |                                    |
+!                                 |                                    |
+!     0.3 Mobility scheme         | [non-functional] --> Dev. with Marie Curie!
+!     0.3.1 Empirical network     |                                    |
+!     0.3.2 Gravity model         |                                    |
+!     0.3.3 Radiation model       |                                    |
+!                                 |                                    |
+!     0.4 People representation   |                                    |
+!     0.4.1 Agents                |                                    |
+!     0.4.2 Density               |                                    |
+!                                 |                                    |
+!     0.5 Disease source          |                                    |
+!     0.5.1 Cholera               |                                    |
+!     0.5.2 Malaria               |                                    |
+!     0.5.3 Dengue [n-func.]      |                                    |
+!                                 |                                    |
+!     0.6 Spin-up                 |                                    |
+!                                 |                                    |
+!      **************             |                                    |
+!====== Spatial loop =============|====================================|=======================
+!      **************             |                                    |
+! 1) Integrate source of disease -|------------------------------------|
+!                                 |                                    |
+!                                 |- mo_source.f90                     |
+!    1.1) Bacteria (cholera)      |   /<<source_integrate_B>>          |
+!                                 |                                    |
+!                                 |- mo_vectri.f90                     |
+!    1.2) Vectors (malaria,VECTRI)|   /<<source_integrate_VECTRI>>     |
+!                                 |                                    |
+! 2) Update health status (bulk) -|------------------------------------|
+! --> agents=.false.              |                                    |
+!                                 |                                    |
+!                                 |- mo_bulk.f90                       |
+!    2.1) Cholera                 |   /<<bulk_integrate_SIAR_cholera>> |
+!                                 |                                    | 
+!                                 |- mo_????.f90                       |
+!    2.2) Malaria                 |   /<<bulk_integrate_SEIR_malaria>>  [Non-functional]
+!                                 |                                    |
+!      ************               |                                    |
+!====== Agent loop ===============|====================================|========================
+!      ************               |                                    |
+! --> agents=.true.               |                                    |
+!                                 |                                    |
+! 3) Disease ---------------------|------------------------------------|
+!                                 |                                    |
+!                                 |-mo_agents.f90                      |
+!    3.1) Update health status    |   /<<agents_update>>               |
+!       - Cholera                 |   //<<agents_cholera>> (SIAR)      |
+!       - Malaria                 |   //<<agents_malaria>> (SEIR)      |
+!       - Dengue                  |   //<<agents_dengue>>  (SIAR)      |
+!                                 |                                    |
+!                                 |-mo_agents.f90                      |
+!    3.2) Update population age   |   /<<agents_age>>                  |            
+!                                 |                                    | 
+!                                 |-mo_agents.f90                      |
+!    3.3) Calculate bulk stats    |   /<<agents_diagnostics>>          |
+!       - Cholera                 |   disID=0 (SIAR)                   |
+!       - Malaria                 |   disID=1 (SEIR)                   |
+!       - Dengue                  |   disID=2 (????)                   |
+!                                 |                                    |
+!================================================================================================
 !
 !-------------------------------------------------------
 ! Import modules
@@ -66,69 +139,6 @@ PROGRAM MOBILE
 !  USE omp_lib ! Not in use
 
 implicit none
-
-!************************************************
-!=======================================================================
-! Index                           |- mo_dules                          #        
-!                                 |   /<<subroutine>>                  #        
-!                                 |                                    #
-! 0) Initialization --------------|------------------------------------#                                   
-!     0.1 Grid & params           |                                    #
-!     0.1.1 Input                 |                                    #
-!     0.1.2 No input              |                                    #
-!                                 |                                    #
-!     0.2 Common information      |                                    #
-!                                 |                                    #
-!     0.3 Mobility scheme         |                                    #
-!     0.3.1 Empirical network     |                                    #
-!     0.3.2 Gravity model         |                                    #
-!     0.3.3 Radiation model       |                                    #
-!                                 |                                    #
-!     0.4 People representation   |                                    #
-!     0.4.1 Agents                |                                    #
-!     0.4.2 Density               |                                    #
-!                                 |                                    #
-!     0.5 Disease source          |                                    #
-!     0.5.1 Cholera               |                                    #
-!     0.5.2 Malaria               |                                    #
-!                                 |                                    #
-!====== Spatial loop =============|====================================#
-! 1) Integrate source of disease -|------------------------------------#
-!                                 |                                    #
-!                                 |- mo_source.f90                     #
-!    1.1) Bacteria (cholera)      |   /<<source_integrate_B>>          #
-!                                 |                                    #
-!                                 |- mo_vectri.f90                     #
-!    1.2) Vectors (malaria,VECTRI)|   /<<source_integrate_VECTRI>>     #
-!                                 |                                    #
-! 2) Update health status (bulk) -|------------------------------------#
-! --> agents=.false.              |                                    #
-!                                 |                                    #
-!                                 |- mo_bulk.f90                       #
-!    2.1) Cholera                 |   /<<bulk_integrate_SIAR_cholera>> #
-!                                 |                                    # 
-!                                 |- mo_????.f90                       #
-!    2.2) Malaria                 |   /<<bulk_integrate_SEIR_malaria>>  [Non-functional]
-!                                 |                                    #
-!====== Agent loop ===============|====================================#
-! --> agents=.true.               |                                    #
-!                                 |                                    #
-! 3) Disease ---------------------|------------------------------------#
-!                                 |                                    #
-!                                 |-mo_agents.f90                      #
-!    3.1) Update health status    |   /<<agents_update>>               #
-!       - Cholera                 |   disID=0 (SIAR)                   #
-!       - Malaria (non-func.)     |   disID=1 (SEIR)                   #
-!                                 |                                    #
-!                                 |-mo_agents.f90                      #
-!    3.2) Update population age   |   /<<agents_age>>                  #            
-!                                 |                                    # 
-!                                 |-mo_agents.f90                      #
-!    3.3) Calculate bulk stats    |   /<<agents_diagnostics>>          #
-!       - Cholera                 |   disID=0 (SIAR)                   #
-!       - Malaria                 |   disID=1 (SEIR)                   #
-!                                 |                                    #
-!=======================================================================
 
   !******************************************************************
   ! Loop counters

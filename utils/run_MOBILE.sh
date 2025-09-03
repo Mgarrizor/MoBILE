@@ -1,79 +1,91 @@
 #!/bin/bash
 
-profiler=false
-freq=110
 # Script to run MOBILE
-export NPROC=$(getconf _NPROCESSORS_ONLN)
-#export OMP_NUM_THREADS=$(getconf _NPROCESSORS_ONLN)
-export OMP_NUM_THREADS=1
-#export NPROC=2
-#echo 'Number of processors =' ${NPROC}
-#echo 'Number of threads = ' ${OMP_NUM_THREADS}
 
+profiler=false     # Flag to profile model performance (time spent at each subroutine,... and memory usage at different simulation stages)
+freq=110           # Sampling frequency for profiler (default is 100 per second)
+parallel=false     # Flag to run MoBILE in parallel mode using Open MP [Non-functional]
+
+# Open MP parallelisation [Non-functional]
+if ( $parallel ) ; then
+    export NPROC=$(getconf _NPROCESSORS_ONLN)
+    #export OMP_NUM_THREADS=$(getconf _NPROCESSORS_ONLN)
+    export OMP_NUM_THREADS=1
+    #export NPROC=2
+    #echo 'Number of processors =' ${NPROC}
+    #echo 'Number of threads = ' ${OMP_NUM_THREADS}
+    #echo $NPROC
+fi
+
+# Profiler
 if ( $profiler ) ; then
     export CPUPROFILE=$PWD/profile.prof
-    export CPUPROFILE_FREQUENCY=${freq} # Sampling frequency (default is 100 per second)
+    export CPUPROFILE_FREQUENCY=${freq} 
     export HEAPPROFILE=$PWD/heap_profile
 fi
 
-#echo $NPROC
-# Flags:
-#--------------------------------
+# ======================= FLAGS ==========
+# ----------------------------------------
 # -h Help! [Non-functional]
-#          | 
+#          ------------------------------- 
 #          |===============
 #          |Mandatory flags:
+#          |===============
 #           -o Output file name
-#           -d Disease ID (Cholera: 0)
-#           -n Number of integrated days
+            output_name='gravity'
+#           -d Disease ID                       (0: Cholera ; 1: Malaria ; 2: Dengue [non-functional])
+            disID=1 
 #           -s Seed for random number generator (reproducibility)
-#           --------------------------------
-            output_name='gravity'           #  -o
-            disID=1          # 0: Cholera      -d
-                             # 1: Malaria [non-functional]
-                             # 2: Dengue  [non-functional]
-            nstep=1096        # [days]       #  -n
-            #nstep=2000
-            seed=12345                       #  -s
-#          |
-#          |
+            seed=12345             
+#          -------------------------------
 #          |==============
 #          |Optional flags:
+#          |==============
+#           -n Number of integrated days [days] (If n = 0 then nsteps=lenght of driving fields)
+            nstep=1096
 #           -a Number of agents 
-#           -u Spin Up 
+            nagent=500000     
+#           -u Spin Up (0: no spin-up ; 1: automatic spin-up) 
+            spin_up=1
 #           -p Population file 
+            pop_file='Data/CHIRXS/pop.nc'
 #           -r Rainfall file 
+            rain_file='Data/CHIRXS/rainfall/Senegal/rain.nc'
 #           -t Temperature file
+            temp_file='Data/CHIRXS/temperature/Senegal/t2m.nc'
+#           -x Area file
+            area_file='Data/CHIRXS/area.nc'
 #           -c Constants/parameters file (example in params.txt)
-#           -m Mobility file   [Non-functional]
-#           -w Hydrology file  [Non-functional]
+            const='params.txt'
 #           -v VECTRI          0: Inactive 1: Coupled
-#           -i vectorID        0: Anopheles gambiae s. s. [Non-functional]
+            vectri=$disID
+#           -i vectorID        [Non-functional]
+#                               -- Anophelines --
+            vectorID=0       # 0: An. gambiae s. s. 
 #                              1: An. funestus
-#                              2: An. sacharovi     
-#                             10: Aedes albopictus [Dengue non-functional]
-#                             11: Ae. aegypti      [In development]
-#           --------------------------------
-            
-            nagent=500000                 #  -a
-            spin_up=1                     #  -u
+#                              2: An. sacharovi
+#                                 -- Aedes --     
+#                             10: Ae. albopictus [Dengue non-functional]
+#                             11: Ae. aegypti    [Dengue --> in development]
 
+#           -d vectorDis       [Non-functional]
+            vectorDis=0       
+
+#          -------------------------------
+#          |==============
+#          Future developments
+#          |==============
+#          -d Vector disease  [Non-functional] (Dengue + Yellow Fever?)
+#          -m Mobility file   [Non-functional]
+#          -w Hydrology file  [Non-functional]
+#          --------------------------------
+
+#          --------------------------------
             # Example path for test run (Senegal CHIRXS processed driving files 2012-2014)
             #rain_file=$MOBILE'/utils/test_run/rain.nc'  #  -r
             #pop_file=$MOBILE'/utils/test_run/pop.nc'    #  -p
             #temp_file=$MOBILE'/utils/test_run/t2m.nc'   #  -t
             #area_file=$MOBILE'/utils/test_run/area.nc'  #  -x
-
-
-            rain_file='Data/CHIRXS/rainfall/Senegal/rain.nc'
-            temp_file='Data/CHIRXS/temperature/Senegal/t2m.nc'
-            pop_file='Data/CHIRXS/pop.nc'
-            area_file='Data/CHIRXS/area.nc'  #  -x
-
-            
-            const='params.txt'            #  -c
-            vectri=$disID
-            vectorID=0         # [non-functional]
 
 # Environmental variables
 #--------------------------------
@@ -85,6 +97,7 @@ fi
 #var_1="-h" 
 var_2="${MOBILE}/mobile.sh"
 
+# Flags in their namelist category
 # INOUT
 var_3="-o ${output_name}"
 var_4="-d ${disID}"
@@ -131,13 +144,13 @@ echo 'Version:' >> ${output_name}.info
 echo 'Retrieved from:' $(git -C ${MOBILE} remote get-url origin) >> ${output_name}.info
 echo 'Date:' $(date) >> ${output_name}.info
 
-#---------------
-# Run MOBILE
+#----------------
+# == Run MoBILE =
 
 bash $command
 
-#---------------
-
+#----------------
+# == Profiler ===
 if ( $profiler ) ; then
     bash profiler.sh -n ${output_name}
 fi
