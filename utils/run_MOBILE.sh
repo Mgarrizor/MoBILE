@@ -11,11 +11,14 @@ if ( $parallel ) ; then
     echo '-- MoBILE being run in parallel mode --'
     export NPROC=$(getconf _NPROCESSORS_ONLN)
     export OMP_NUM_THREADS=$(getconf _NPROCESSORS_ONLN)
-    #export OMP_NUM_THREADS=6
-    #export NPROC=2
+    #export OMP_NUM_THREADS=3
+    #export NPROC=1
     echo 'Number of available processors =' ${NPROC}
     echo 'Number of used threads = ' ${OMP_NUM_THREADS}
     echo '---------------------------------------'
+else
+    echo '-- MoBILE being run in serial mode --'
+    export OMP_NUM_THREADS=1
 fi
 
 # Profiler
@@ -47,7 +50,7 @@ fi
 #           -a Number of agents 
             nagent=500000     
 #           -u Spin Up (0: no spin-up ; 1: automatic spin-up) 
-            spin_up=0
+            spin_up=1
 #           -p Population file 
             pop_file='Data/CHIRXS/pop.nc'
 #           -r Rainfall file 
