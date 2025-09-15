@@ -56,8 +56,11 @@ MODULE mo_const
     real, allocatable :: pop_dens(:)    ! 1D long array for human population density 
     real, allocatable :: Ipop_dens(:)   ! Inverse of 1D long array for human population density 
     real, allocatable :: D(:)           ! Dilution factor
-    integer           :: P_a             ! Number of agents per person in the simulation
+    integer           :: P_a            ! Number of agents per person in the simulation
     real, allocatable :: A_cell(:)      ! Area of grid cells
+
+    real, allocatable :: age_weights(:) ! Array with age structure
+    integer, allocatable :: age_counts(:) ! 1D array of age structure (for output)
 
     !********* Spin Up ***************************
 
@@ -176,7 +179,7 @@ MODULE mo_const
     real                 :: fill_pop       !
     ! NetCDF IDs
     integer, allocatable :: VarId(:)
-    integer :: DimId(3) = [1,2,3] !(lon,lat,time)
+    integer :: DimId(4) = [1,2,3,4] !(lon,lat,time,age)
     integer :: Var3D
     ! Attribute list
     character(len=100), allocatable ::  att_list(:)     ! List of NetCDF file attributes (system params)
@@ -252,8 +255,8 @@ MODULE mo_const
         mu  = 1./(61.*365)    ! Background human mortality rate [day^-1]
 
         ! Immunity
-        e_0    = 0.11
-        !e_0    = 0.09     ! Base increase in endemicity level [per infectious bite]                  [x]
+        !e_0    = 0.11
+        e_0    = 0.09     ! Base increase in endemicity level [per infectious bite]                  [x]
         e1     = 0.5*e_0  ! e-folding factor in boosted maternal/naive immunity acquisition (fast) [e_0]
         e2     = 10*e_0   ! e-folding factor in gradual immunity acquisition (slow)                [e_0]
         A1     = 0.9      ! Coefficient weighting each time scale

@@ -59,6 +59,13 @@ MODULE mo_netcdf
             var_out = var_out + 1
         end if 
 
+        if ((out_age)) then            
+            
+            status = nf90_put_var(ncid = ncid_out, varid = VarId(var_out), & 
+                                 values = age_counts(:))
+            var_out = var_out + 1
+        end if 
+
 
 #ifdef COUPLED
         ! Declarations or interfaces related to the coupled mode
@@ -307,7 +314,8 @@ MODULE mo_netcdf
                                       +merge(1, 0, out_B)+merge(1, 0, out_F) &
                                       +merge(1, 0, out_A)+merge(1, 0, out_Q) &
                                       +merge(1, 0, out_D)+merge(1, 0, out_rain) &
-                                      +merge(1, 0, out_t2m)
+                                      +merge(1, 0, out_t2m) &
+                                      +merge(1, 0, out_age)
                                       
 
 #ifdef COUPLED
@@ -330,6 +338,8 @@ MODULE mo_netcdf
         status = nf90_def_dim(ncid = ncid_out, name = "lon", len = nlon,   dimid = DimId(1))
         status = nf90_def_dim(ncid = ncid_out, name = "lat", len = nlat,   dimid = DimId(2))
         status = nf90_def_dim(ncid = ncid_out, name = "time",len = nsteps, dimid = DimId(3))
+        
+        status = nf90_def_dim(ncid = ncid_out, name = "age",len = size(age_weights), dimid = DimId(4))
         
         ! See below "About coordinate systems"
 
@@ -408,6 +418,16 @@ MODULE mo_netcdf
             status = nf90_def_var(ncid = ncid_out, name = "D", xtype = nf90_double, &
                       dimids = (/ DimId(1), DimId(2) /), varid = VarId(var_out))
             status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "units", values = "[km]")
+            var_out = var_out + 1
+
+        end if
+
+        if ((out_age)) then
+
+            VarId(var_out)=var_out
+            status = nf90_def_var(ncid = ncid_out, name = "Age", xtype = nf90_double, &
+                     dimids = DimId(4), varid = VarId(var_out))
+            status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "units", values = "[counts]")
             var_out = var_out + 1
 
         end if

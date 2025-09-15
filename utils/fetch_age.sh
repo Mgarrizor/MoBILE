@@ -1,8 +1,18 @@
 #!/bin/bash
 
 # Bash script to download an analyse age structure
-
-
+# =========================================================
+# It creates 
+# - A folder 'age_structure' with the original GeoTiff
+#   files (in 'GeoTiff'folder) of the rasterized age structures 
+#   in a givne country & a corresponding NetCDF file (in 'NetCDF' 
+#   folder).
+# - 3 figures to asses the sex ratios, spatial
+#   homogeneity assumption and the interpolation between
+#   age caterogories.
+# - a 'cumm_age.txt' file with the weights of each age in
+#   intervals of 1 year (ABM resolution).
+# ==========================================================
 
 # Country codes - Senegal: 'sen'
 
@@ -42,7 +52,7 @@ if [ ! -d "$DIRECTORY" ]; then
     cd ..
 fi
 
-
+if [ ! -f "$DIRECTORY/cumm_age.txt" ]; then
 echo ' Processing age structure'
 
 cd ${DIRECTORY}
@@ -143,7 +153,7 @@ plt.close()
 #================= Save cummulative array =======
 np.savetxt('cumm_age.txt', y_new, fmt='%.3f', delimiter=' ', newline='\n', header='', footer='', comments='# ', encoding=None)
 EOF
-
+fi
 
 
 

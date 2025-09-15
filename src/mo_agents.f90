@@ -184,7 +184,8 @@ USE, INTRINSIC :: ISO_C_BINDING
                         do ipeo = 1,npeop(ixy)
                             !
                             ! Initialize main agent attributes
-                            people(indx)%agent_ID%age=20        ! Fixed for now. To Do: pick based on distribution
+                            people(indx)%agent_ID%age=find_face(generate_random(),age_weights(:),size(age_weights(:)))
+                            age_counts(people(indx)%agent_ID%age) = age_counts(people(indx)%agent_ID%age) + 1
                             people(indx)%agent_ID%name=indx     !
                             people(indx)%agent_ID%sex=0         ! F = 0, M = 1 [Not in use]
                             people(indx)%agent_ID%wealth=0      ! L = 0, M = 1, H = 2 [Not in use]
@@ -252,13 +253,13 @@ USE, INTRINSIC :: ISO_C_BINDING
                             people(indx)%location_status%homeloc=ixy
                             people(indx)%location_status%currloc=ixy
                             !
-                            ! Short/daily contact rates
+                            ! Short/daily contact rates [non-functional --> wait for Marie-Curie]
                             call random_number(rand) ! Asign visiting location based on mobility scheme
                             j = find_masked_face(rand,Q_short(:,ixy),nxy,mask_grav(:,ixy),mask_pop(:)) ! If agent is mobile j /= 0
                             !
                             people(indx)%location_status%shortloc=j
                             !
-                            ! Long overnight trips
+                            ! Long overnight trips [non-functional --> wait for Marie-Curie]
                             call random_number(rand) ! Asign long term trips based on mobility scheme
                             j = find_masked_face_2(rand,Q_long(:,ixy),nxy,mask_pop(:)) ! If agent is mobile j /= 0
 
@@ -292,7 +293,8 @@ USE, INTRINSIC :: ISO_C_BINDING
                    npeop(loc) = npeop(loc) + 1
                    !
                    ! Initialize main agent attributes
-                   people(indx)%agent_ID%age=20        ! Fixed for now. To Do: pick based on distribution
+                   people(indx)%agent_ID%age=find_face(generate_random(),age_weights(:),size(age_weights(:)))
+                   age_counts(people(indx)%agent_ID%age) = age_counts(people(indx)%agent_ID%age) + 1
                    people(indx)%agent_ID%name=indx     !
                    people(indx)%agent_ID%sex=0         ! F = 0, M = 1
                    people(indx)%agent_ID%wealth=0      ! L = 0, M = 1, H = 2
@@ -363,12 +365,12 @@ USE, INTRINSIC :: ISO_C_BINDING
                    people(indx)%location_status%currloc=loc
                    !
                    !
-                   ! Short/daily contact rates
+                   ! Short/daily contact rates [non-functional --> wait for Marie-Curie]
                    j = find_masked_face(rand,Q_short(:,loc),nxy,mask_grav(:,loc),mask_pop(:)) ! If agent is mobile j /= 0
                    !
                    people(indx)%location_status%shortloc=j   
                    !
-                   ! Long overnight trips
+                   ! Long overnight trips [non-functional --> wait for Marie-Curie]
                    call random_number(rand) ! Asign long term trips based on mobility scheme
                    j = find_masked_face_2(rand,Q_long(:,loc),nxy,mask_pop(:)) ! If agent is mobile j /= 0
    
@@ -388,6 +390,52 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             deallocate(A_cell)
         end subroutine agents_init
+
+        subroutine agents_read_age(age_weights,age_counts)
+        !===
+            ! Reads file 'cumm_age.txt' into an array
+            !
+            implicit none
+            real, allocatable, intent(out) :: age_weights(:)
+            integer, allocatable, intent(out) :: age_counts(:)
+
+            ! Local use only
+            real :: dummy(100)
+            integer :: num_elements
+            integer :: i, io_status
+
+            ! Open the file ; status = 'old' means the file must already exist
+            OPEN(UNIT=10, FILE='age_structure/cumm_age.txt', STATUS='OLD', ACTION='READ')
+
+            !Read the numbers into the array
+            num_elements = 0
+            do
+                READ(UNIT=10, FMT=*, IOSTAT=io_status) dummy(num_elements + 1)
+                if (io_status /= 0) then
+                    EXIT
+                end if
+                num_elements = num_elements + 1
+                ! Optional: Check for array overflow
+                if (num_elements >= size(dummy)) then
+                   print *, "Warning: The age array is full. Some data may not have been read."
+                   EXIT
+                end if
+            end do
+            ! Close the file
+            CLOSE(UNIT=10)
+
+            allocate(age_weights(num_elements))
+            allocate(age_counts(num_elements))
+            age_counts(:) = 0
+            do i = 1, num_elements
+                age_weights(i) = dummy(i)
+            end do
+            WRITE(*,*) '=========================='
+            WRITE(*,*) 'Age weights'
+            WRITE(*, '(5F8.4)') age_weights
+            WRITE(*,*) '=========================='
+
+        end subroutine agents_read_age
 
         subroutine agents_diagnostics(idis,scale)
         !===
@@ -874,7 +922,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                     !
                     ! ! 2) Disease ===========================
 
-                    ! 2.0) Maternal immunity 
+                    ! 2.0) Maternal immunity [Non-functional]
                     !
                     ! 2.1) Transmission probabilities --------
                     !

@@ -150,7 +150,9 @@ else
   exit 1
 fi
 #-------------------------------
-
+#
+bash fetch_age.sh # Create age weights 
+#
 # 2) Compile program
 (cd $path && make ENABLE_COUPLING=${vectri} ENABLE_MOBILITY=0)
 exit=$? # Save exit status of 'make'.

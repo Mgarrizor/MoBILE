@@ -276,6 +276,10 @@ itime = 1
     out_Q = .false.
   end if
   !
+  ! We need to know the lenght of the age structure before creating the NetCDF
+  ! output file.
+  call agents_read_age(age_weights,age_counts)
+  !
   call netcdf_init(nlon,nlat,nsteps,lon_coord,lat_coord,Var3D)
   !
   ! Save some memory

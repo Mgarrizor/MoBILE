@@ -28,8 +28,9 @@ MODULE mo_control
     ! 2D (x,y) Fields
     logical :: out_pop  =.true.   ! Output the steady-state human population density
     logical :: out_Q    =.true.   ! Output connectivity matrix for a given point ixy
-    logical :: out_D    =.true.  ! Output distance matrix for source
-
+    logical :: out_D    =.true.   ! Output distance matrix for source
+    logical :: out_age  =.true.   ! Output age structure
+    !
     ! 3D (x,y,t) Fields
     !
     !======= Disease

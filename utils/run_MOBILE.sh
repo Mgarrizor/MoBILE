@@ -4,7 +4,7 @@
 
 profiler=false     # Flag to profile model performance (time spent at each subroutine,... and memory usage at different simulation stages)
 freq=110           # Sampling frequency for profiler (default is 100 per second)
-parallel=true      # Flag to run MoBILE in parallel mode using Open MP [Non-functional]
+parallel=true      # Flag to run MoBILE in parallel mode using Open MP
 
 # Open MP parallelisation
 if ( $parallel ) ; then
