@@ -26,6 +26,7 @@ MODULE mo_const
     real    :: dt = 1.      ! Time step (fixed)
     integer :: ncid_out     ! ID of output NetCDF file
     integer :: ncid_in      ! ID of input NetCDF files
+    integer :: ncid_grp(4)  ! ID of groups: 1 - Vector ; 2 - Human ; 3 - Climate ; 4 - Hydro
 
     integer :: TempVarID, ncTempID
     integer :: RainVarID, ncRainID
@@ -59,9 +60,9 @@ MODULE mo_const
     integer           :: P_a            ! Number of agents per person in the simulation
     real, allocatable :: A_cell(:)      ! Area of grid cells
 
-    real, allocatable :: age_weights(:) ! Array with age structure
+    real, allocatable :: age_weights(:)   ! Array with age structure
     integer, allocatable :: age_counts(:) ! 1D array of age structure (for output)
-
+    integer :: age_blocks(8) = (/ 1, 5, 10, 15, 20, 40, 60, 80 /)  ! Age intervals to disaggreate diagnostics
     !********* Spin Up ***************************
 
     real, allocatable :: SU_new(:) ! (nxy) Array with year average to test convergence
