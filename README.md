@@ -1,8 +1,8 @@
-Mobility-Based Integrated Landscape Epidemiology (MoBILE) model
+
+
+Mobility [Non-functional]: agent mobility is to be implemented with further funding (Mobility-Based Integrated Landscape Epidemiology (MoBILE) model)
 
 Authors in alphabetic order: 
-
-        Adrian M. Tompkins
         
         Miguel Garrido Zornoza 
 
@@ -11,4 +11,5 @@ Authors in alphabetic order:
 
 
 # Documentation
+
 
