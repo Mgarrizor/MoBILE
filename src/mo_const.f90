@@ -11,7 +11,7 @@ MODULE mo_const
 ! 1) Parameters
 ! 2) Cases
 !    0 - Cholera
-!    1 - Malaria (VECTRI) [non-functional]
+!    1 - Malaria (VECTRI)
 !    2 - ??
 
 
@@ -27,7 +27,7 @@ MODULE mo_const
     integer :: ncid_out     ! ID of output NetCDF file
     integer :: ncid_in      ! ID of input NetCDF files
     integer :: ncid_grp(4)  ! ID of groups: 1 - Vector ; 2 - Human ; 3 - Climate ; 4 - Hydro
-
+    integer :: ncid_sbgrp(5)! ID of disease subgroups: 1 - Susceptible ; 2 - Exposed ; 3 - Infected ; 4 - Asymptomatic ; 5 - Recovered
     integer :: TempVarID, ncTempID
     integer :: RainVarID, ncRainID
     integer :: AreaVarID, ncAreaID
@@ -63,6 +63,10 @@ MODULE mo_const
     real, allocatable :: age_weights(:)   ! Array with age structure
     integer, allocatable :: age_counts(:) ! 1D array of age structure (for output)
     integer :: age_blocks(8) = (/ 1, 5, 10, 15, 20, 40, 60, 80 /)  ! Age intervals to disaggreate diagnostics
+    ! Labels of disaggregated age structure (to improve --> automatise based on age_blocks(:))
+    character(len=100) ::  I_age_names(8)= [character(len=20) :: "I_0<","I_1-4","I_5-9","I_10-14","I_15-19","I_20-39","I_40-59","I_60>"]
+    character(len=100) ::  A_age_names(8)= [character(len=20) :: "A_0<","A_1-4","A_5-9","A_10-14","A_15-19","A_20-39","A_40-59","A_60>"]
+    
     !********* Spin Up ***************************
 
     real, allocatable :: SU_new(:) ! (nxy) Array with year average to test convergence
@@ -105,16 +109,22 @@ MODULE mo_const
     integer, parameter :: K_h = 1000 
 
     real, allocatable, target :: S(:) ! 1D long array for Sensitive density
+    real, allocatable, target :: Sa(:,:)! (nxy,nage_blocks)
     real, allocatable, target :: E(:) ! 1D long array for Exposed density
+    real, allocatable, target :: Ea(:,:)! (nxy,nage_blocks)
     real, allocatable, target :: I(:) ! 1D long array for Infected density
+    real, allocatable, target :: Ia(:,:)! (nxy,nage_blocks) 
     real, allocatable, target :: A(:) ! 1D long array for Asymptomatic density
+    real, allocatable, target :: Aa(:,:)! (nxy,nage_blocks)
     real, allocatable, target :: R(:) ! 1D long array for Recovered density
+    real, allocatable, target :: Ra(:,:)! (nxy,nage_blocks)
 
     type array_pointers
       real, pointer :: arr_p(:)
     end type array_pointers
     
     type(array_pointers) :: status_pointer(5)
+    type(array_pointers), allocatable :: Iage_stat_ptr(:,:)  !(istatus,iage)
 
     !--- Cholera ---
     real, allocatable :: B(:) ! 1D long array for Bacterial density
@@ -220,7 +230,7 @@ MODULE mo_const
         alpha=0.004       ! Death rate (infection or other causes) [day^-1]
         !    
         ! Mobility ---------------------------------------------------
-        m_short=0.6   ! Fraction of mobile population (could be an array to account for age, ... but is set to one constant for now)
+        m_short=0.0   ! Fraction of mobile population (could be an array to account for age, ... but is set to one constant for now)
         D_grav=2.     ! e-folding distance for gravity model [km] ; Rinaldo et al. (2012) gives 100km for Haiti's epidemic --> not very realistic
         beta=1.       ! Contact rate [day^-1]
         
@@ -250,14 +260,14 @@ MODULE mo_const
         P_max= 0.2            ! Maximum transmission probability ~ 0.2 +- 0.15 Churcher et al. 2013 [DOI:]
                               !                                  ~ 0.125       Bousema  et al. 2011 [DOI:] ---> and references therein | Ouedraogo 2009 [DOI:]
                               !                                                                                                        | Schneider 2007 [DOI:]
-
-        b_rate = 5            ! Vector biting rate - mean of 1.6 bites/person/hour from 18:00 - 6:30 (~ 1.6*12.5=20) Nzioki et al. 2023 [DOI:]
+                              ! Vector biting rate [day^(-1)]
+        b_rate = 5            ! 20 - mean of 1.6 bites/person/hour from 18:00 - 6:30 (~ 1.6*12.5=20) Nzioki et al. 2023 [DOI:]
 
         mu  = 1./(61.*365)    ! Background human mortality rate [day^-1]
 
         ! Immunity
-        !e_0    = 0.11
-        e_0    = 0.09     ! Base increase in endemicity level [per infectious bite]                  [x]
+        e_0    = 0.2
+        !e_0    = 0.09     ! Base increase in endemicity level [per infectious bite]                  [x]
         e1     = 0.5*e_0  ! e-folding factor in boosted maternal/naive immunity acquisition (fast) [e_0]
         e2     = 10*e_0   ! e-folding factor in gradual immunity acquisition (slow)                [e_0]
         A1     = 0.9      ! Coefficient weighting each time scale
@@ -280,7 +290,7 @@ MODULE mo_const
         fA_chr   = 0.05   ! Fraction of chronic asymptomatics [unkown]
         tau_chr  = 365    ! Duration of chronic parasitaemia  [unkown]
                           ! 
-        alph_min = 0.28   !    We take the lowest we can find from literature focusing on highly endemic areas reporting adult prevalence
+        alph_min = 0.28   !    We take the lowest we can find from literature focusing on highly endemic areas reporting (with PCR) adult prevalence
                           !    1-0.311 (Malawi) Topazian    2020 [DOI:]
                           !    1-0.482 (DCR)    Mvumbi      2015 [DOI:]
                           !    1-0.520 (Gabon)  Dal-Bianco  2007 [DOI:]
@@ -291,7 +301,7 @@ MODULE mo_const
         sig_m  = 20.     ! Sigmoidal curve param ~ slope
         e_m    = 0.35    ! Sigmoidal curve param ~ inflection point
 
-        ! Mobility ---------------------------------------------------
+        ! Mobility [non-functional ; wait for funding (Marie-Curie!)]---------------------------------------------------
 
         m_short=0.    ! Fraction of mobile population making short daily trips (could be an array to account for age, ... but is set to one constant for now)
         m_long =0.    ! Fraction of mobile population starting long overnight trips

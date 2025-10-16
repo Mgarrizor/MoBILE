@@ -1,5 +1,6 @@
 MODULE mo_timestep
-! This module contains one time step of the model
+! This module contains one time step of the model, this is
+! the spatial and agent loops.
 
 ! Miguel Garrido Zornoza 2025
 ! mgarrizoraca@gmail.com

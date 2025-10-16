@@ -34,11 +34,15 @@ MODULE mo_control
     ! 3D (x,y,t) Fields
     !
     !======= Disease
-    logical :: out_S    =.true.  ! Susceptible
-    logical :: out_E    =.true.  ! Exposed
+    logical :: out_S    =.false.  ! Susceptible
+    logical :: out_E    =.false.  ! Exposed
     logical :: out_I    =.true.  ! Infected
+    logical :: out_Ia   =.true.  ! Age-disaggregated Infected
     logical :: out_A    =.true.  ! Asymptomatic
+    logical :: out_Aa   =.true.  ! Age-disaggregated Asymptomatic
     logical :: out_R    =.true.  ! Recovered
+
+    logical :: diag_age = .true. ! Create age-stratified diagnostics
     !--- Cholera ----
     logical :: out_B    =.true.  ! Bacterial density (could be changed to generic source of disease, e.g., B, V,...)
     logical :: out_F    =.true.  ! Force of infection

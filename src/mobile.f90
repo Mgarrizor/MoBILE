@@ -263,6 +263,10 @@ itime = 1
   ! Initialize distance matrix
   call mob_dist_init(nxy,x_coord_1d,y_coord_1d,lon_coord,lat_coord,dx,dy,input,Re,Pi,mask_pop,dist)
   !
+  ! We need to know the lenght of the age structure before creating the NetCDF
+  ! output file.
+  call agents_read_age(age_weights,age_counts)
+  !
   ! Allocate arrays of disease "disID" (SEIAR)
   call grid_dis(disID,nxy,S,E,I,A,A_old,R,EIR,imm)
   !
@@ -276,9 +280,6 @@ itime = 1
     out_Q = .false.
   end if
   !
-  ! We need to know the lenght of the age structure before creating the NetCDF
-  ! output file.
-  call agents_read_age(age_weights,age_counts)
   !
   call netcdf_init(nlon,nlat,nsteps,lon_coord,lat_coord,Var3D)
   !
@@ -394,6 +395,7 @@ if (spin_up==1) then
   do while (.not. SU_conv)
     !
     SU_old(:) = SU_new(:)
+    SU_new(:) = 0.
     !
     spin_up_loop: do itime=1,365
     !
@@ -405,6 +407,7 @@ if (spin_up==1) then
     case (1) ! Malaria
       !
       SU_new(:) = SU_new(:) + imm(:)
+      !SU_new(:) = imm(:)
       !
     case default
       print *, "Incorrect case, choose disID between: 0 (cholera) and 1 (malaria)"

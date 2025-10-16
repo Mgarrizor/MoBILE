@@ -2,7 +2,7 @@ MODULE mo_agents
 ! This module contains methods on agents
 !
 ! 
-! Adrian M. Tompkins 2014,2024 
+! Adrian M. Tompkins 2014 
 ! tompkins@ictp.it
 
 ! Miguel Garrido Zornoza 2024
@@ -426,6 +426,8 @@ USE, INTRINSIC :: ISO_C_BINDING
 
             allocate(age_weights(num_elements))
             allocate(age_counts(num_elements))
+            allocate(Iage_stat_ptr(5,num_elements))
+            !
             age_counts(:) = 0
             do i = 1, num_elements
                 age_weights(i) = dummy(i)
@@ -446,7 +448,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             !integer, intent(out):: counter ! Number of alive agents
             !
             ! Local use only
-            integer :: iagent, istat, iloc
+            integer :: iagent, istat, iloc, iage, j
             logical :: iactive
 
             SELECT case(idis)
@@ -488,16 +490,31 @@ USE, INTRINSIC :: ISO_C_BINDING
             EIR(:) = 0.
             imm(:) = 0.
             !
+            Sa(:,:) = 0.
+            Ea(:,:) = 0.
+            Ia(:,:) = 0.
+            Aa(:,:) = 0.
+            Ra(:,:) = 0.
+            !
             do iagent = 1,nagent
                 !
                 istat   =  people(iagent)%health_status%malaria_status%status
                 iactive =  people(iagent)%health_status%active_status%status
                 iloc    =  people(iagent)%location_status%currloc
+                iage    =  min(people(iagent)%agent_ID%age,80)
                 !
                 ! Pointer approach to allow vectorization (discarded old branching if ... elseif ...)
                 if (iactive) then
+                    ! bulk
                     status_pointer(istat)%arr_p(iloc) = &
                     status_pointer(istat)%arr_p(iloc) + 1.
+                    !
+                    if (diag_age) then
+                        ! Disaggregated by age
+                        Iage_stat_ptr(istat,iage+1)%arr_p(iloc) = &
+                        Iage_stat_ptr(istat,iage+1)%arr_p(iloc) + 1.
+                        !
+                    end if
                 end if
                 !
                 EIR(iloc) = EIR(iloc) + people(iagent)%health_status%malaria_status%EIR_att
@@ -510,6 +527,13 @@ USE, INTRINSIC :: ISO_C_BINDING
             I(:) = scale(:)*I(:)
             A(:) = scale(:)*A(:)
             R(:) = scale(:)*R(:)
+            !
+            if (diag_age) then
+                do j = 1, size(age_blocks(:))
+                    Ia(:,j) = scale(:)*Ia(:,j)
+                    Aa(:,j) = scale(:)*Aa(:,j)
+                end do
+            end if
             !===================================================
 
             !
@@ -545,7 +569,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             call agents_cholera(iagent,itime,n_attempt)
             !
-            case (1) ! Malaria [Non-functional]
+            case (1) ! Malaria
             ! 
             call agents_malaria(iagent,n_attempt,npeop,nbites,m_0,m_1) 
             !
@@ -868,7 +892,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                     ! Since vector-human interactions are (for now) overnight we can neglect the effect of daily trips
                     ! and therefore treat mobility first and then disease  
                     !
-                    ! 1) Mobility ==============================
+                    ! 1) Mobility [non-functional] ==============================
                     !
                     if (stat /= 3) then ! If not in symptomatic state
                     !===
@@ -924,6 +948,7 @@ USE, INTRINSIC :: ISO_C_BINDING
 
                     ! 2.0) Maternal immunity [Non-functional]
                     !
+
                     ! 2.1) Transmission probabilities --------
                     !
                     !===

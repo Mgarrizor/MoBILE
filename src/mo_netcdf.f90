@@ -121,6 +121,7 @@ MODULE mo_netcdf
 
         ! Local use
         integer :: var_out  !,status
+        integer :: k
 
         ! 3D Fields
         var_out = Var3D
@@ -131,15 +132,39 @@ MODULE mo_netcdf
           !
         end if 
 
-        if ((out_I)) then
+        if ((out_I) .and. (out_Ia)) then
+            !
+            call write_check_3D(itime,I,var_out,'NetCDF Status I',ncid_sbgrp(3))
+            !
+        else if (out_I) then
             !
             call write_check_3D(itime,I,var_out,'NetCDF Status I',ncid_grp(2))
             !
         end if
 
-        if ((out_A)) then
+        if (out_Ia) then
+            !
+            do k = 1, size(age_blocks(:))
+                call write_check_3D(itime,Ia(:,k),var_out,'NetCDF Status Ia',ncid_sbgrp(3))
+            end do
+            !
+        end if
+
+        if ((out_A) .and. (out_Aa)) then
+            !
+            call write_check_3D(itime,A,var_out,'NetCDF Status A',ncid_sbgrp(4))
+            !
+        else if (out_A) then
             !
             call write_check_3D(itime,A,var_out,'NetCDF Status A',ncid_grp(2))
+            !
+        end if
+
+        if (out_Aa) then
+            !
+            do k = 1, size(age_blocks(:))
+                call write_check_3D(itime,Aa(:,k),var_out,'NetCDF Status Aa',ncid_sbgrp(4))
+            end do
             !
         end if
 
@@ -305,7 +330,7 @@ MODULE mo_netcdf
         real, allocatable, intent(in) :: lon_coord(:) 
         integer, intent(out) :: Var3D
 
-        integer :: status, indx
+        integer :: status, indx, k
         integer :: var_out=1, dim
 
 
@@ -318,6 +343,13 @@ MODULE mo_netcdf
                                       +merge(1, 0, out_D)+merge(1, 0, out_rain) &
                                       +merge(1, 0, out_t2m) &
                                       +merge(1, 0, out_age)
+
+        if (out_Ia) then
+            dim = dim + size(age_blocks(:))
+        end if
+        if (out_Aa) then
+            dim = dim + size(age_blocks(:))
+        end if
                                       
 
 #ifdef COUPLED
@@ -478,6 +510,25 @@ MODULE mo_netcdf
         
 
         ! 3D Fields (x,y,t)
+        !
+        if ((out_Ia)) then
+            status = nf90_def_grp(parent_ncid = ncid_out, name = 'I', new_ncid = ncid_sbgrp(3))
+            if(status /= nf90_noerr) then
+              print *, 'NetCDF Status: error creating subgroup <<I>> ; status =', status
+              STOP
+            end if
+        end if
+        !
+        !
+        if ((out_Aa)) then
+            status = nf90_def_grp(parent_ncid = ncid_out, name = 'A', new_ncid = ncid_sbgrp(4))
+            if(status /= nf90_noerr) then
+              print *, 'NetCDF Status: error creating subgroup <<A>> ; status =', status
+              STOP
+            end if
+        end if
+        !
+        !==================
         Var3D = var_out
 
         ! ============================== Disease ======================================
@@ -492,10 +543,19 @@ MODULE mo_netcdf
 
         end if
 
-        if ((out_I)) then
+        if ((out_I) .and. (out_Ia)) then
 
             VarId(var_out)=var_out
-            status = nf90_def_var(ncid = ncid_grp(2), name = "I_bulk", xtype = nf90_double, &
+            status = nf90_def_var(ncid = ncid_sbgrp(3), name = "I_bulk", xtype = nf90_double, &
+                      dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
+            status = nf90_put_att(ncid = ncid_sbgrp(3), varid = VarId(var_out), name = "units", values = "km^-2")
+            status = nf90_put_att(ncid = ncid_sbgrp(3), varid = VarId(var_out), name = "long_name", values = "Infected symptomatic population density")
+            var_out = var_out + 1
+
+        else if (out_I) then
+
+            VarId(var_out)=var_out
+            status = nf90_def_var(ncid = ncid_grp(2), name = "I", xtype = nf90_double, &
                       dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
             status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "units", values = "km^-2")
             status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "long_name", values = "Infected symptomatic population density")
@@ -503,7 +563,27 @@ MODULE mo_netcdf
 
         end if
 
-        if ((out_A)) then
+        if ((out_Ia)) then
+            do k = 1, size(age_blocks(:))
+                VarId(var_out)=var_out
+                status = nf90_def_var(ncid = ncid_sbgrp(3), name = I_age_names(k), xtype = nf90_double, &
+                          dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
+                status = nf90_put_att(ncid = ncid_sbgrp(3), varid = VarId(var_out), name = "units", values = "km^-2")
+                status = nf90_put_att(ncid = ncid_sbgrp(3), varid = VarId(var_out), name = "long_name", values = "Age-disaggregated Infected symptomatic population density")
+                var_out = var_out + 1
+            end do
+        end if
+
+        if ((out_A) .and. (out_Aa)) then
+
+            VarId(var_out)=var_out
+            status = nf90_def_var(ncid = ncid_sbgrp(4), name = "A_bulk", xtype = nf90_double, &
+                      dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
+            status = nf90_put_att(ncid = ncid_sbgrp(4), varid = VarId(var_out), name = "units", values = "km^-2")
+            status = nf90_put_att(ncid = ncid_sbgrp(4), varid = VarId(var_out), name = "long_name", values = "Infected asymptomatic population density")
+            var_out = var_out + 1
+
+        else if (out_A) then
 
             VarId(var_out)=var_out
             status = nf90_def_var(ncid = ncid_grp(2), name = "A", xtype = nf90_double, &
@@ -512,6 +592,17 @@ MODULE mo_netcdf
             status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "long_name", values = "Infected asymptomatic population density")
             var_out = var_out + 1
 
+        end if
+
+        if ((out_Aa)) then
+            do k = 1, size(age_blocks(:))
+                VarId(var_out)=var_out
+                status = nf90_def_var(ncid = ncid_sbgrp(4), name = A_age_names(k), xtype = nf90_double, &
+                          dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
+                status = nf90_put_att(ncid = ncid_sbgrp(4), varid = VarId(var_out), name = "units", values = "km^-2")
+                status = nf90_put_att(ncid = ncid_sbgrp(4), varid = VarId(var_out), name = "long_name", values = "Age-disaggregated Infected symptomatic population density")
+                var_out = var_out + 1
+            end do
         end if
 
         if ((out_R)) then

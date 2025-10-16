@@ -42,11 +42,11 @@ subroutine DI(x_new,x_old,tol_SU,conv)
         print*, 'Cannot compute mean during Spin-up --> Exit'
         STOP
     end if
-
+    !
     if (eps_SU <= tol_SU) then
         conv = .true.
     end if
-
+    !
 end subroutine DI
 
 ! Anderson acceleration method

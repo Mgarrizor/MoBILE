@@ -106,9 +106,12 @@ plt.close()
 # ============= Figure 2 ====================
 #print('Sex ratios ...')
 
-ages_shift = 0.5*(np.roll(np.array(ages),-1)+np.array(ages))#[:-1]
-ages_shift[-1] = ages_shift[-1]*2
-ages_shift[0] = 0
+#ages_shift = 0.5*(np.roll(np.array(ages),-1)+np.array(ages))#[:-1]
+#ages_shift[-1] = ages_shift[-1]*2
+#ages_shift[0] = 0
+
+ages_shift = np.roll(ages,-1)-1
+ages_shift[-1] = 80
 
 plt.plot(ages_shift,stats[:,0],"-o", label = "Female")
 plt.plot(ages_shift,stats[:,1],"-o", label = "Male")

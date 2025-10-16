@@ -5,6 +5,7 @@ MODULE mo_grid
   ! mgarrizoraca@gmail.com
   !
   USE mo_const
+  USE mo_control
   !
   !
   implicit none
@@ -20,6 +21,9 @@ MODULE mo_grid
       integer, intent(in) :: nxy
       real, allocatable, target, intent(out) :: S(:),E(:),I(:),A(:),R(:)
       real, allocatable, intent(out) :: A_old(:),EIR(:),imm(:)
+
+      ! Local use only
+      integer :: indx, k
 
       SELECT case(idis)
       case (0) ! Cholera (SIAR)
@@ -43,8 +47,33 @@ MODULE mo_grid
         allocate(I(nxy))
         allocate(A(nxy))
         allocate(R(nxy))
+        !
         allocate(EIR(nxy))
         allocate(imm(nxy))
+
+        if (diag_age) then
+          !
+          allocate(Sa(nxy,size(age_blocks(:))))
+          allocate(Ea(nxy,size(age_blocks(:))))
+          allocate(Ia(nxy,size(age_blocks(:))))
+          allocate(Aa(nxy,size(age_blocks(:))))
+          allocate(Ra(nxy,size(age_blocks(:))))
+          !
+          ! Look up table for age blocks
+          do indx = 0, size(Iage_stat_ptr(1,:))-1 ! Loop over ages, starting at 0
+            !
+            k = find_block(indx,age_blocks(:),size(age_blocks(:)))
+            !
+            Iage_stat_ptr(1,indx+1)%arr_p => Sa(:,k)
+            Iage_stat_ptr(2,indx+1)%arr_p => Ea(:,k)
+            Iage_stat_ptr(3,indx+1)%arr_p => Ia(:,k)
+            Iage_stat_ptr(4,indx+1)%arr_p => Aa(:,k)
+            Iage_stat_ptr(5,indx+1)%arr_p => Ra(:,k)
+            !
+          end do
+        else 
+          !allocate(I(nxy))
+        end if
 
         ! Look up table for pointer approach to gather bulk diagnostics
         status_pointer(1)%arr_p => S
@@ -62,7 +91,41 @@ MODULE mo_grid
       end SELECT
       
   end subroutine grid_dis
-
+  !
+  function find_block(iage,arr_blocks,nblocks) result(b)
+            ! iage: age [years]
+            ! arr_blocks: array with age intervals delimiting blocks
+            ! nblocks: number of blocks
+            implicit none
+            !
+            integer, intent(in) :: arr_blocks(nblocks)
+            integer, intent(in) :: iage,nblocks
+            integer   :: b
+            !
+            ! Local use only
+            integer :: j
+            b = 0 
+            !
+            do j = 1, nblocks-1
+                if (iage < arr_blocks(1)) then  ! New-borns
+                    !
+                    b = 1
+                    !
+                    EXIT
+                else if (iage >= arr_blocks(nblocks)) then  ! Older than upper limit
+                    !
+                    b = nblocks
+                    !
+                    EXIT
+                else if ((iage < arr_blocks(j+1)) .and. (iage >= arr_blocks(j))) then
+                    !
+                    b = j+1
+                    !
+                    EXIT
+                end if 
+            end do
+            !
+        end function find_block
   !--------------------------------------------------------------------------------------
   subroutine grid_allocate(nxy,nlon,nlat,y_coord_1d,x_coord_1d)
       implicit none
@@ -89,6 +152,7 @@ MODULE mo_grid
       end do
       !
   end subroutine grid_allocate
+  
   !--------------------------------------------------------------------------------------
 
   subroutine grid_no_input(nxy,dx,dy,ncity,seed,H_0,D_pop,pop_dens,D, &
