@@ -382,7 +382,7 @@ print *, '------------------------'
 if (spin_up==1) then
   !
   SU_conv=.false.
-  SU_tol=0.01
+  SU_tol=0.002
 
   allocate(SU_old(nxy))
   allocate(SU_new(nxy))

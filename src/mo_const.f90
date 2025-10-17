@@ -272,7 +272,7 @@ MODULE mo_const
         e2     = 10*e_0   ! e-folding factor in gradual immunity acquisition (slow)                [e_0]
         A1     = 0.9      ! Coefficient weighting each time scale
         e_th   = 0.001    ! Threshold endemicity level value for R --> S transition                  [x]
-
+ 
         mat_rate = log(2.)/(6.*30)  ! Loss rate of maternal immunity = ln(2)/(Half-life of maternal immunity) [day^-1] (~ 6 months)
                                   !
                                   ! 3-9 months Gupta 1999 [DOI:]

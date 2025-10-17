@@ -199,6 +199,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                                 if (idis == 1) then
                                     !  
                                     people(indx)%health_status%malaria_status%e_l = 0.5
+                                    people(indx)%health_status%malaria_status%mat_im = .false. ! No agents initialised with maternal immunity (acquired during spin up)
                                     !
                                     if (stat_health == 1) then !(Susceptible)
                                         !
@@ -308,6 +309,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                            !  
                            !  
                            people(indx)%health_status%malaria_status%e_l = 0.5
+                           people(indx)%health_status%malaria_status%mat_im = .false.
                            !
                            if (stat_health == 1) then !(Susceptible)
                                !
@@ -945,10 +947,17 @@ USE, INTRINSIC :: ISO_C_BINDING
                     end if
                     !
                     ! ! 2) Disease ===========================
-
-                    ! 2.0) Maternal immunity [Non-functional]
                     !
-
+                    ! 2.0) Maternal immunity
+                    !
+                    if (people(iagent)%health_status%malaria_status%mat_im) then ! If maternal immunity is active
+                        if (generate_random() < mat_rate) then                   ! becomes inactive with a probability (mat_rate)
+                           !
+                            people(iagent)%health_status%malaria_status%mat_im = .false.
+                           !
+                        end if 
+                    end if 
+                                                                             !
                     ! 2.1) Transmission probabilities --------
                     !
                     !===
@@ -1002,18 +1011,18 @@ USE, INTRINSIC :: ISO_C_BINDING
                     !===
                         ! Check if IIP has finished
                         if (people(iagent)%health_status%malaria_status%infc_dur == 0) then
-
+                            !
                             ! Update immunity/endemicity level
                             people(iagent)%health_status%malaria_status%e_l = people(iagent)%health_status%malaria_status%e_l + endemicity(people(iagent)%health_status%malaria_status%e_l,e_0,e1,e2,A1)
                             !
-                            ! Transition to symptomatic with probability prob_symp()
-                            if (generate_random() < prob_symp_sig(people(iagent)%health_status%malaria_status%e_l,alph_max,alph_min,e_m,sig_m)) then 
-
+                            ! Transition to symptomatic with probability prob_symp() if maternal immunity 
+                            if ((generate_random() < prob_symp_sig(people(iagent)%health_status%malaria_status%e_l,alph_max,alph_min,e_m,sig_m)) .and. (.not. people(iagent)%health_status%malaria_status%mat_im)) then 
+                                !
                                 people(iagent)%health_status%malaria_status%status=3
                                 !
                                 ! Log-normally distributed times - function of e_l
                                 people(iagent)%health_status%malaria_status%infc_dur=tau_log(people(iagent)%health_status%malaria_status%e_l,d_mu,mu_1,d_sig,sig_1)
-
+                                !
                             else ! Otherwise asymptomatic 
                                 people(iagent)%health_status%malaria_status%status=4
 

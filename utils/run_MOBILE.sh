@@ -38,7 +38,7 @@ fi
 #           -o Output file name
             output_name='control'
 #           -d Disease ID                       (0: Cholera ; 1: Malaria ; 2: Dengue [non-functional])
-            disID=1 
+            disID=1
 #           -s Seed for random number generator (reproducibility)
             seed=12345             
 #          -------------------------------
@@ -50,7 +50,7 @@ fi
 #           -a Number of agents 
             nagent=500000     
 #           -u Spin Up (0: no spin-up ; 1: automatic spin-up to some tolerance) 
-            spin_up=0
+            spin_up=1
 #           -p Population file 
             pop_file='Data/CHIRXS/pop.nc'
 #           -r Rainfall file 
