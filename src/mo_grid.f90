@@ -14,13 +14,13 @@ MODULE mo_grid
 
   !===================== Subroutines =================================
 
-  subroutine grid_dis(idis,nxy,S,E,I,A,A_old,R,EIR,imm)
+  subroutine grid_dis(idis,nxy,S,E,I,A,A_old,R,EIR,imm,hbr)
       implicit none
 
       integer, intent(in) :: idis
       integer, intent(in) :: nxy
       real, allocatable, target, intent(out) :: S(:),E(:),I(:),A(:),R(:)
-      real, allocatable, intent(out) :: A_old(:),EIR(:),imm(:)
+      real, allocatable, intent(out) :: A_old(:),EIR(:),imm(:), hbr(:)
 
       ! Local use only
       integer :: indx, k
@@ -50,6 +50,7 @@ MODULE mo_grid
         !
         allocate(EIR(nxy))
         allocate(imm(nxy))
+        allocate(hbr(nxy))
 
         if (diag_age) then
           !

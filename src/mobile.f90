@@ -257,6 +257,7 @@ itime = 1
     out_t2m  =.false.
     out_EIR  =.false.
     out_imm  =.false.
+    out_hbr  =.false.
 #endif
 !=======!
   !
@@ -268,7 +269,7 @@ itime = 1
   call agents_read_age(age_weights,age_counts)
   !
   ! Allocate arrays of disease "disID" (SEIAR)
-  call grid_dis(disID,nxy,S,E,I,A,A_old,R,EIR,imm)
+  call grid_dis(disID,nxy,S,E,I,A,A_old,R,EIR,imm,hbr)
   !
   !**********************************
   !
@@ -382,7 +383,7 @@ print *, '------------------------'
 if (spin_up==1) then
   !
   SU_conv=.false.
-  SU_tol=0.002
+  SU_tol=0.01
 
   allocate(SU_old(nxy))
   allocate(SU_new(nxy))

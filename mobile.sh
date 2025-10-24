@@ -34,7 +34,7 @@ usage() { echo "Usage:              \n
 # Resources
 # https://stackoverflow.com/questions/16483119/an-example-of-how-to-use-getopts-in-bash
 # https://serverfault.com/questions/266867/bash-getops-allow-but-not-require-arg
-while getopts ":ho:p:r:t:d:n:s:a:c:u:v:x:" flag; do
+while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:x:" flag; do
  case $flag in
    h) # Handle the -h flag
    # Display script help information
@@ -58,6 +58,9 @@ while getopts ":ho:p:r:t:d:n:s:a:c:u:v:x:" flag; do
    ;;
    n) # Handle the -n flag
    nstep=$OPTARG
+   ;;
+   m) # Handle the -n flag
+   mob=$OPTARG
    ;;
    s) # Handle the -s flag
    seed=$OPTARG
@@ -149,12 +152,25 @@ else
   echo '<<vectri>> flag should be either 0 or 1! --> Stopping simulation'
   exit 1
 fi
+#
+if [[ ${mob} == 1 ]]; then
+  echo '================= MOBILITY active ================'
+elif [[ ${mob} == 0 ]]; then
+  echo '================= MOBILITY inactive ================'
+  if [[ ${disID} == 0 ]]; then
+    echo 'Cholera needs mobility to eb active ; set mob = 1 --> Stopping simulation'
+    exit 1
+  fi
+else
+  echo '<<mob>> flag should be either 0 or 1! --> Stopping simulation'
+  exit 1
+fi
 #-------------------------------
 #
 bash fetch_age.sh # Create age weights 
 #
 # 2) Compile program
-(cd $path && make ENABLE_COUPLING=${vectri} ENABLE_MOBILITY=0)
+(cd $path && make ENABLE_COUPLING=${vectri} ENABLE_MOBILITY=${mob})
 exit=$? # Save exit status of 'make'.
 
 # $? = Exit status of last executed command 

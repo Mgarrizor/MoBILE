@@ -144,8 +144,10 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
 
            allocate(m_0(nlon*nlat))
            allocate(m_1(nlon*nlat))
-           m_0(:) = 0.
-           m_1(:) = 0.
+           allocate(m_all(nlon*nlat))
+           m_0(:)   = 0.
+           m_1(:)   = 0.
+           m_all(:) = 0.
 
            !----- Larva biomass -------------------
            !=

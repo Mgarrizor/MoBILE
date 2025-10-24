@@ -145,10 +145,12 @@ subroutine time_step(disID,itime)
           !
           ! Compute base interaction rates
           !
-          ! Human to vector
-          m_0(:) = b_rate*rgonof(:)*rvect(0,:)/(npeop(:)+K_h)*scaleI!*P_a
-          ! Vector to human
-          m_1(:) = b_rate*rgonof(:)*rvect(ninfv,:)/(npeop(:)+K_h)*scaleI!*P_a
+          ! Human to vector transmission
+          m_0(:) = b_rate*rgonof(:)*rvect(0,:)/(npeop(:)+K_h)**srho*scaleI*P_a
+          ! Infected vector to human transmission
+          m_1(:) = b_rate*rgonof(:)*rvect(ninfv,:)/(npeop(:)+K_h)**srho*scaleI*P_a
+          ! All vector to human (human biting rate - hbr)
+          m_all(:) = b_rate*rgonof(:)*SUM(rvect(:,:), DIM=1)/(npeop(:)+K_h)**srho*scaleI*P_a
           !
         case default
           print *, "Incorrect case, choose disID between: 0 (cholera) and 1 (malaria)"
@@ -163,7 +165,7 @@ subroutine time_step(disID,itime)
         !
         ! 3.1) Update health status
           !
-          call agents_update(disID,iagent,itime,nattempt,npeop,nbites,m_0,m_1)
+          call agents_update(disID,iagent,itime,nattempt,npeop,nbites,m_0,m_1,m_all)
           !
           if (MOD(itime,365)==0) then ! Ignore leap years
             !
@@ -205,9 +207,14 @@ subroutine time_step(disID,itime)
           !
         case (1) ! Malaria
           !
-          ! Calculate average daily EIR
-          EIR(:) = EIR(:)/npeop(:)
-          !where(mask_pop(:).and. (npeop(:)>0)) EIR(:) = EIR(:)/npeop(:) !/P_a
+          ! Calculate average daily EIR on a per person basis (use human to agent ratio: P_a)
+          !EIR(:) = EIR(:)/npeop(:)
+          
+          where((mask_pop(:)) .and. (npeop(:)>0)) EIR(:) = EIR(:)/npeop(:)/P_a
+
+          ! Calculate average daily hbr
+          !hbr(:) = hbr(:)/npeop(:)
+          where((mask_pop(:)) .and. (npeop(:)>0)) hbr(:) = hbr(:)/npeop(:)/P_a
 
           ! Calculate average daily e_l (endemicity level)
           !imm(:) = imm(:)/npeop(:)

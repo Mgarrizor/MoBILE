@@ -29,6 +29,7 @@ USE, INTRINSIC :: ISO_C_BINDING
     type malaria
         integer :: status   ! S=1, E= 2, I=3, A=4, R=5 Susceptible-Exposed-Infected-Asymptomatic-Recovered (SEIAR)
         real    :: EIR_att  ! Entomological inoculation rate
+        real    :: hbr_att  ! Human biting rate
         real    :: e_l      ! Endemicity level [0,1]
         logical :: mat_im   ! Maternal immunity 
        ! real    :: par_load ! Parasite load [Gametocytes/microLiter] 
@@ -133,7 +134,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                 STOP 
             end if 
             !
-            P_a = int(norm/nagent)
+            P_a = norm/nagent
             print *, 'Human to agent ratio ~', P_a
             !
             ! Initialize array of types "agent"
@@ -254,6 +255,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                             people(indx)%location_status%homeloc=ixy
                             people(indx)%location_status%currloc=ixy
                             !
+#ifdef MOBILITY
                             ! Short/daily contact rates [non-functional --> wait for Marie-Curie]
                             call random_number(rand) ! Asign visiting location based on mobility scheme
                             j = find_masked_face(rand,Q_short(:,ixy),nxy,mask_grav(:,ixy),mask_pop(:)) ! If agent is mobile j /= 0
@@ -266,6 +268,7 @@ USE, INTRINSIC :: ISO_C_BINDING
 
                             people(indx)%location_status%longloc=j
                             people(indx)%location_status%longdur=0
+#endif
                             indx = indx + 1
                             !
                         end do
@@ -367,6 +370,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                    people(indx)%location_status%currloc=loc
                    !
                    !
+#ifdef MOBILITY
                    ! Short/daily contact rates [non-functional --> wait for Marie-Curie]
                    j = find_masked_face(rand,Q_short(:,loc),nxy,mask_grav(:,loc),mask_pop(:)) ! If agent is mobile j /= 0
                    !
@@ -378,6 +382,7 @@ USE, INTRINSIC :: ISO_C_BINDING
    
                    people(indx)%location_status%longloc=j
                    people(indx)%location_status%longdur=0
+#endif
                    !
                    indx = indx + 1
                end if
@@ -491,12 +496,15 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             EIR(:) = 0.
             imm(:) = 0.
+            hbr(:) = 0.
             !
-            Sa(:,:) = 0.
-            Ea(:,:) = 0.
-            Ia(:,:) = 0.
-            Aa(:,:) = 0.
-            Ra(:,:) = 0.
+            if (diag_age) then
+                Sa(:,:) = 0.
+                Ea(:,:) = 0.
+                Ia(:,:) = 0.
+                Aa(:,:) = 0.
+                Ra(:,:) = 0.
+            end if 
             !
             do iagent = 1,nagent
                 !
@@ -521,6 +529,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                 !
                 EIR(iloc) = EIR(iloc) + people(iagent)%health_status%malaria_status%EIR_att
                 imm(iloc) = imm(iloc) + people(iagent)%health_status%malaria_status%e_l
+                hbr(iloc) = hbr(iloc) + people(iagent)%health_status%malaria_status%hbr_att
                 !
             end do 
             !
@@ -549,13 +558,14 @@ USE, INTRINSIC :: ISO_C_BINDING
         !===
         end subroutine agents_diagnostics
 
-        subroutine agents_update(idis,iagent,itime,n_attempt,npeop,nbites,m_0,m_1)
+        subroutine agents_update(idis,iagent,itime,n_attempt,npeop,nbites,m_0,m_1,m_all)
         !===
             ! This subroutine updates agent disease and mobility statuses (mobility non-functional - to be implemented if Marie-Curie is funded)
             implicit none
 
             real, allocatable, intent(in) :: m_0(:)  ! Susceptible vector to host ratio times the vector biting rate
             real, allocatable, intent(in) :: m_1(:)  ! Infective   vector to host ratio times the vector biting rate
+            real, allocatable, intent(in) :: m_all(:)  ! Vector to host ratio times the vector biting rate
             
             integer, intent(in) :: idis              ! Disease ID (0: Cholera, 1: Malaria)
             integer, intent(in) :: iagent            ! Agent ID (integer number)
@@ -573,7 +583,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             case (1) ! Malaria
             ! 
-            call agents_malaria(iagent,n_attempt,npeop,nbites,m_0,m_1) 
+            call agents_malaria(iagent,n_attempt,npeop,nbites,m_0,m_1,m_all) 
             !
             case (2) ! Dengue [Non-functional]
             !
@@ -843,7 +853,7 @@ USE, INTRINSIC :: ISO_C_BINDING
         end subroutine agents_cholera
         !
         !
-        subroutine agents_malaria(iagent,n_attempt,npeop,nbites,m_0,m_1)
+        subroutine agents_malaria(iagent,n_attempt,npeop,nbites,m_0,m_1,m_all)
 
             implicit none
             integer, intent(in) :: iagent            ! Agent ID (integer number)
@@ -854,6 +864,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                                                      ! bitting a human)
             real, allocatable, intent(in) :: m_0(:)  ! Susceptible vector to host ratio times the vector biting rate
             real, allocatable, intent(in) :: m_1(:)  ! Infective   vector to host ratio times the vector biting rate
+            real, allocatable, intent(in) :: m_all(:)  ! Vector to host ratio times the vector biting rate
 
             ! Local use only
             integer :: stat ! Agent health status
@@ -866,7 +877,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             ! Disease transmission 
             ! 0: Human to vector  1: Vector to human
             !
-            real :: lambda_0, lambda_1
+            real :: lambda_0, lambda_1, lambda_all
             real :: P_0                     ! Human to vector
             real :: P_1                     ! Vector to human
  
@@ -894,6 +905,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                     ! Since vector-human interactions are (for now) overnight we can neglect the effect of daily trips
                     ! and therefore treat mobility first and then disease  
                     !
+#ifdef MOBILITY
                     ! 1) Mobility [non-functional] ==============================
                     !
                     if (stat /= 3) then ! If not in symptomatic state
@@ -945,6 +957,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                         !
                     !===
                     end if
+#endif  
                     !
                     ! ! 2) Disease ===========================
                     !
@@ -970,6 +983,10 @@ USE, INTRINSIC :: ISO_C_BINDING
                         !
                         !****************************************
                         !
+                        ! All-sporogonic-stages biting rate
+                        !
+                        lambda_all = m_all(j)*1. ! f(a,t) = 1
+                        !
                         ! Human to Vector transmission
                         !
                         lambda_0 = m_0(j)*1. ! f(a,t) = 1 
@@ -985,7 +1002,10 @@ USE, INTRINSIC :: ISO_C_BINDING
                         P_1 = min(real(floor(P_1/eps)),P_1)
                         ! 
                         ! Save agent-specific daily entomological inoculation rate
-                        people(iagent)%health_status%malaria_status%EIR_att = P_1
+                        people(iagent)%health_status%malaria_status%EIR_att = lambda_1
+
+                        ! Save agent-specific biting rate (hbr)
+                        people(iagent)%health_status%malaria_status%hbr_att = lambda_all
                     !===
                     !
                     ! 2.2) SEIAR update -----------
@@ -1138,6 +1158,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                             !
                             people(iagent)%health_status%active_status%status=.false.
                             people(iagent)%health_status%malaria_status%EIR_att=0.
+                            people(iagent)%health_status%malaria_status%hbr_att=0.
                             people(iagent)%health_status%malaria_status%e_l=0.
                             !$OMP ATOMIC
                             npeop(j) = npeop(j) - 1

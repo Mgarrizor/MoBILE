@@ -97,6 +97,7 @@ USE mo_constants
           zvect_one_d_density(ixy)=1.0/MAX(zvect_density(ixy),reps)
        !   
           zvecinfc(ixy)=rvect(ninfv,ixy)*zvect_one_d_density(ixy) ! CSPR for malaria
+        !  zvecinfc(ixy)=MAX(rvect(ninfv,ixy)*zvect_one_d_density(ixy),rvect_min) ! CSPR for malaria
        !        !   ! zoophilic rates - well actually is anthropophilic rate.
        !   WHERE (rpopdensity(:)>=0.0) &
        !        & rzoophilic=1.0-(1.0-rzoophilic_min)*EXP(-rpopdensity(:)/rzoophilic_tau)

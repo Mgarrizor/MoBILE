@@ -37,7 +37,7 @@ MODULE mo_netcdf
         ! 2D Fields
         if ((out_pop)) then
             !
-            call write_check_2D(pop_dens,var_out,'NetCDF Status Population',ncid_grp(2))
+            call write_check_2D(pop_dens*1e6,var_out,'NetCDF Status Population',ncid_grp(2))
             !
         end if 
 
@@ -235,6 +235,12 @@ MODULE mo_netcdf
             !
         end if
         !
+        if ((out_hbr)) then
+            !
+            call write_check_3D(itime,hbr,var_out,'NetCDF Status Human Biting Rate',ncid_grp(2))
+            !
+        end if
+        !
         if ((out_E)) then
             !
             call write_check_3D(itime,E,var_out,'NetCDF Status E',ncid_grp(2))
@@ -244,6 +250,12 @@ MODULE mo_netcdf
         if ((out_imm)) then
             !
             call write_check_3D(itime,imm,var_out,'NetCDF Status Endemicity level / Immunity',ncid_grp(2))
+            !
+        end if
+        !
+        if ((out_N)) then
+            !
+            call write_check_3D_int(itime,npeop,var_out,'NetCDF Status Agent field',ncid_grp(2))
             !
         end if
         !
@@ -279,6 +291,34 @@ MODULE mo_netcdf
       end if
 
       end subroutine write_check_3D
+
+      subroutine write_check_3D_int(itime,var,var_out,err_mes, ncID)
+      ! Put variable into NetCDf file and check for the status
+      ! If error then stop simulation.
+      !
+      implicit none 
+      !
+      integer, intent(in) :: var(nlon,nlat)
+      integer, intent(in) :: itime
+      integer, intent(inout):: var_out
+      character(len=*) :: err_mes
+      integer, intent(in) :: ncID 
+
+      ! Local use only
+      integer :: status
+
+      status = nf90_put_var(ncid = ncID, varid = VarId(var_out), & 
+                            values = reshape((var), shape = (/ nlon, nlat /)), &
+                            start = (/ 1, 1, itime /))
+      var_out = var_out + 1
+
+      if(status /= nf90_noerr) then
+       print *, err_mes
+       print *, itime
+       STOP
+      end if
+
+      end subroutine write_check_3D_int
 
 
       !subroutine read_slice(itime)
@@ -356,7 +396,8 @@ MODULE mo_netcdf
         ! Declarations or interfaces related to the coupled mode
         dim = dim +merge(1, 0, out_wurbn) +merge(1, 0, out_wperm)   +merge(1, 0, out_wpond) &
                   +merge(1, 0, out_vect)  +merge(1, 0, out_vecinfc) +merge(1, 0, out_larv)&
-                  +merge(1, 0, out_EIR)   +merge(1, 0, out_E)       +merge(1, 0, out_imm)
+                  +merge(1, 0, out_EIR)   +merge(1, 0, out_hbr)     +merge(1, 0, out_E)&
+                  +merge(1, 0, out_imm)   +merge(1,0, out_N)
         !
 #endif
 
@@ -759,6 +800,17 @@ MODULE mo_netcdf
           !
         end if
         !
+        if (out_hbr) then
+          !
+          VarId(var_out)=var_out
+          status = nf90_def_var(ncid = ncid_grp(2), name = "hbr", xtype = nf90_double, &
+                    dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
+          status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "units", values = "day^-1")
+          status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "long_name", values = "Human Biting Rate")
+          var_out = var_out + 1
+          !
+        end if
+        !
         if ((out_E)) then
 
             VarId(var_out)=var_out
@@ -777,6 +829,17 @@ MODULE mo_netcdf
                     dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
           status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "units", values = "adimensional")
           status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "long_name", values = "Endemicity level / Immunity")
+          var_out = var_out + 1
+          !
+        end if
+        !
+        if (out_N) then
+          !
+          VarId(var_out)=var_out
+          status = nf90_def_var(ncid = ncid_grp(2), name = "Nagent", xtype = nf90_double, &
+                    dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
+          status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "units", values = "adimensional")
+          status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "long_name", values = "Number of agents")
           var_out = var_out + 1
           !
         end if

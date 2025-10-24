@@ -33,6 +33,9 @@ MODULE mo_control
     !
     ! 3D (x,y,t) Fields
     !
+    !======= Agents
+    logical :: out_N    =.true.  ! Agent field
+    !
     !======= Disease
     logical :: out_S    =.false.  ! Susceptible
     logical :: out_E    =.false.  ! Exposed
@@ -40,7 +43,7 @@ MODULE mo_control
     logical :: out_Ia   =.true.  ! Age-disaggregated Infected
     logical :: out_A    =.true.  ! Asymptomatic
     logical :: out_Aa   =.true.  ! Age-disaggregated Asymptomatic
-    logical :: out_R    =.true.  ! Recovered
+    logical :: out_R    =.false.  ! Recovered
 
     logical :: diag_age = .true. ! Create age-stratified diagnostics
     !--- Cholera ----
@@ -48,7 +51,8 @@ MODULE mo_control
     logical :: out_F    =.true.  ! Force of infection
     !--- Malaria ----
     logical :: out_EIR  =.true.  ! Entomological Inoculation Rate
-    logical :: out_imm  =.true.  ! Endemicity level / Immunity
+    logical :: out_imm  =.false.  ! Endemicity level / Immunity
+    logical :: out_hbr  =.true.  ! Human Biting Rate
     !
     ! Defined in mo_vectri.f90
     !

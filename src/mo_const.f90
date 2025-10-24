@@ -57,7 +57,7 @@ MODULE mo_const
     real, allocatable :: pop_dens(:)    ! 1D long array for human population density 
     real, allocatable :: Ipop_dens(:)   ! Inverse of 1D long array for human population density 
     real, allocatable :: D(:)           ! Dilution factor
-    integer           :: P_a            ! Number of agents per person in the simulation
+    real              :: P_a            ! Number of agents per person in the simulation
     real, allocatable :: A_cell(:)      ! Area of grid cells
 
     real, allocatable :: age_weights(:)   ! Array with age structure
@@ -106,7 +106,8 @@ MODULE mo_const
 
     !********** Disease **************************
 
-    integer, parameter :: K_h = 1000 
+    integer, parameter :: K_h = 500
+    real, parameter :: srho = 0.5
 
     real, allocatable, target :: S(:) ! 1D long array for Sensitive density
     real, allocatable, target :: Sa(:,:)! (nxy,nage_blocks)
@@ -145,6 +146,7 @@ MODULE mo_const
     !--- Malaria ---
 
     real, allocatable :: EIR(:)   ! 1D long array for Entomological Inoculation Rate
+    real, allocatable :: hbr(:)   ! 1D long array for Human Biting Rate
     real, allocatable :: imm(:)   ! 1D long array for Endemicity level / Immunity
     ! Malaria parameters
 
@@ -176,7 +178,7 @@ MODULE mo_const
                                             ! (vectors that were infected upon
                                             ! bitting a human)
     real, allocatable :: rgonof(:)          ! Gonotrophic cycle 
-    real, allocatable :: m_0(:), m_1(:)  ! Vector to host ratio times the vector biting rate
+    real, allocatable :: m_0(:), m_1(:), m_all(:)  ! Vector to host ratio times the vector biting rate
 
 
 
@@ -261,7 +263,7 @@ MODULE mo_const
                               !                                  ~ 0.125       Bousema  et al. 2011 [DOI:] ---> and references therein | Ouedraogo 2009 [DOI:]
                               !                                                                                                        | Schneider 2007 [DOI:]
                               ! Vector biting rate [day^(-1)]
-        b_rate = 5            ! 20 - mean of 1.6 bites/person/hour from 18:00 - 6:30 (~ 1.6*12.5=20) Nzioki et al. 2023 [DOI:]
+        b_rate = 0.05           ! 20 - mean of 1.6 bites/person/hour from 18:00 - 6:30 (~ 1.6*12.5=20) Nzioki et al. 2023 [DOI:]
 
         mu  = 1./(61.*365)    ! Background human mortality rate [day^-1]
 
@@ -288,7 +290,7 @@ MODULE mo_const
         ! Symptomatics 
                           ! These values are only relevant when 
         fA_chr   = 0.05   ! Fraction of chronic asymptomatics [unkown]
-        tau_chr  = 365    ! Duration of chronic parasitaemia  [unkown]
+        tau_chr  = 365.*2    ! Duration of chronic parasitaemia  [unkown]
                           ! 
         alph_min = 0.28   !    We take the lowest we can find from literature focusing on highly endemic areas reporting (with PCR) adult prevalence
                           !    1-0.311 (Malawi) Topazian    2020 [DOI:]

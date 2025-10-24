@@ -104,7 +104,7 @@ $(EXE): ./build/mobile.o
 # - Look for module source files and module objects
 ./build/mobile.o: $(MOD2) $(MAIN)
 	@echo '1.- Compile main' $(MAIN)
-	@$(FC) -c $(MAIN) -I $(BUILD_DIR) -o $@ $(INC_FLAGS) $(DEBUG) $(FAST) $(COUPLING_FLAG)
+	@$(FC) -c $(MAIN) -I $(BUILD_DIR) -o $@ $(INC_FLAGS) $(DEBUG) $(FAST) $(COUPLING_FLAG) $(MOBILITY_FLAG)
 
 # Runs first -----------------------------------
 -include $(DEPENDS)
@@ -117,7 +117,7 @@ $(EXE): ./build/mobile.o
 $(MOD2): ./build/%.o : ./src/%.f90 
 	@echo '0.- Compile module' $<
 	@mkdir -p $(BUILD_DIR)
-	@$(FC) -cpp -c $< -J $(BUILD_DIR) -o $@ $(INC_FLAGS) $(DEBUG) $(FAST) $(COUPLING_FLAG)
+	@$(FC) -cpp -c $< -J $(BUILD_DIR) -o $@ $(INC_FLAGS) $(DEBUG) $(FAST) $(COUPLING_FLAG) $(MOBILITY_FLAG)
 # To generate dependency files add the flag -MD to the above command 
 # ... -cpp -MD -c ...
 

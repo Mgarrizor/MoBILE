@@ -11,7 +11,7 @@ if ( $parallel ) ; then
     echo '-- MoBILE being run in parallel mode --'
     export NPROC=$(getconf _NPROCESSORS_ONLN)
     export OMP_NUM_THREADS=$(getconf _NPROCESSORS_ONLN)
-    export OMP_NUM_THREADS=3
+  #  export OMP_NUM_THREADS=3
     #export NPROC=1
     echo 'Number of available processors =' ${NPROC}
     echo 'Number of used threads = ' ${OMP_NUM_THREADS}
@@ -45,10 +45,11 @@ fi
 #          |==============
 #          |Optional flags:
 #          |==============
+            mob=0
 #           -n Number of integrated days [days] (If n = 0 then nsteps=lenght of driving fields)
             nstep=1096
 #           -a Number of agents 
-            nagent=500000     
+            nagent=2000000    
 #           -u Spin Up (0: no spin-up ; 1: automatic spin-up to some tolerance) 
             spin_up=1
 #           -p Population file 
@@ -79,6 +80,7 @@ fi
 #          |==============
 #          Future developments
 #          |==============
+#          -i Vector ID       [Non-functional] --> for now we can only use the VECTRI default
 #          -d Vector disease  [Non-functional] (Dengue + Yellow Fever?)
 #          -m Mobility file   [Non-functional]
 #          -w Hydrology file  [Non-functional]
@@ -117,6 +119,7 @@ var_15="-x ${area_file}"
 # HUMAN
 var_10="-p ${pop_file}"
 var_11="-a ${nagent}"
+var_16="-m ${mob}"
 
 # CONST
 var_12="-c ${const}"
@@ -141,6 +144,7 @@ $var_11
 $var_12
 $var_13
 $var_15
+$var_16
 EOM
 
 echo 'Command:' ${command} > ${output_name}.info
