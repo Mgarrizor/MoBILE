@@ -11,7 +11,7 @@ if ( $parallel ) ; then
     echo '-- MoBILE being run in parallel mode --'
     export NPROC=$(getconf _NPROCESSORS_ONLN)
     export OMP_NUM_THREADS=$(getconf _NPROCESSORS_ONLN)
-  #  export OMP_NUM_THREADS=3
+    export OMP_NUM_THREADS=4
     #export NPROC=1
     echo 'Number of available processors =' ${NPROC}
     echo 'Number of used threads = ' ${OMP_NUM_THREADS}
@@ -37,6 +37,7 @@ fi
 #          |===============
 #           -o Output file name
             output_name='control'
+#            output_name='1995'
 #           -d Disease ID                       (0: Cholera ; 1: Malaria ; 2: Dengue [non-functional])
             disID=1
 #           -s Seed for random number generator (reproducibility)
@@ -45,17 +46,20 @@ fi
 #          |==============
 #          |Optional flags:
 #          |==============
+#           -m Mobility flag (0 for now as mobility needs to be developed)
             mob=0
 #           -n Number of integrated days [days] (If n = 0 then nsteps=lenght of driving fields)
             nstep=1096
+           # nstep=0
 #           -a Number of agents 
-            nagent=2000000    
+            nagent=500000    
 #           -u Spin Up (0: no spin-up ; 1: automatic spin-up to some tolerance) 
-            spin_up=1
+            spin_up=0
 #           -p Population file 
             pop_file='Data/CHIRXS/pop.nc'
 #           -r Rainfall file 
             rain_file='Data/CHIRXS/rainfall/Senegal/rain.nc'
+            #rain_file='experiments/repeat_rainfall/1995/rain.nc'
 #           -t Temperature file
             temp_file='Data/CHIRXS/temperature/Senegal/t2m.nc'
 #           -x Area file

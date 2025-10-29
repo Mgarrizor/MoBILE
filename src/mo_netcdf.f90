@@ -259,6 +259,12 @@ MODULE mo_netcdf
             !
         end if
         !
+        if ((out_HA)) then
+            !
+            call write_check_3D(itime,HA,var_out,'NetCDF Status Human to agent field',ncid_grp(2))
+            !
+        end if
+        !
 #endif
 
 
@@ -397,7 +403,7 @@ MODULE mo_netcdf
         dim = dim +merge(1, 0, out_wurbn) +merge(1, 0, out_wperm)   +merge(1, 0, out_wpond) &
                   +merge(1, 0, out_vect)  +merge(1, 0, out_vecinfc) +merge(1, 0, out_larv)&
                   +merge(1, 0, out_EIR)   +merge(1, 0, out_hbr)     +merge(1, 0, out_E)&
-                  +merge(1, 0, out_imm)   +merge(1,0, out_N)
+                  +merge(1, 0, out_imm)   +merge(1,0, out_N)        +merge(1,0, out_HA)
         !
 #endif
 
@@ -840,6 +846,17 @@ MODULE mo_netcdf
                     dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
           status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "units", values = "adimensional")
           status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "long_name", values = "Number of agents")
+          var_out = var_out + 1
+          !
+        end if
+        !
+        if (out_HA) then
+          !
+          VarId(var_out)=var_out
+          status = nf90_def_var(ncid = ncid_grp(2), name = "HA", xtype = nf90_double, &
+                    dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
+          status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "units", values = "adimensional")
+          status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "long_name", values = "Human to agent ratio")
           var_out = var_out + 1
           !
         end if

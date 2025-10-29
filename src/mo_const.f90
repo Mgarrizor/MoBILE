@@ -53,6 +53,7 @@ MODULE mo_const
     logical, allocatable :: mask_mob(:)    ! (nxy) Mask with the grid points where agents can move - combines mask_pop and mask_grav
 
     integer, allocatable :: npeop(:)    ! Number of agents in each grid cell 
+    real, allocatable :: HA(:)          ! Human to agent ratio
     integer, allocatable :: nattempt(:) ! Number of growth attempts in a given time step
     real, allocatable :: pop_dens(:)    ! 1D long array for human population density 
     real, allocatable :: Ipop_dens(:)   ! Inverse of 1D long array for human population density 
@@ -265,8 +266,9 @@ MODULE mo_const
                               ! Vector biting rate [day^(-1)]
         b_rate = 0.05           ! 20 - mean of 1.6 bites/person/hour from 18:00 - 6:30 (~ 1.6*12.5=20) Nzioki et al. 2023 [DOI:]
 
-        mu  = 1./(61.*365)    ! Background human mortality rate [day^-1]
+        ! mu  = 1./(61.*365)    ! Background human mortality rate [day^-1] [ref]
 
+        mu  = 0.0354/365.  ! Birth and mortality rate - Exponential fit to age structure in WorldPop Senegal 2020
         ! Immunity
         e_0    = 0.2
         !e_0    = 0.09     ! Base increase in endemicity level [per infectious bite]                  [x]

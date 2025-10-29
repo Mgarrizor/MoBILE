@@ -68,6 +68,7 @@ USE, INTRINSIC :: ISO_C_BINDING
         integer :: age     ! 0-X
         integer :: sex     ! F/M   [Non-functional]
         integer :: wealth  ! L/M/H [Non-functional]
+        real    :: ratio   ! Human to agent ratio of the agent
     end type agentID
 
     type agent
@@ -120,6 +121,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             ! the input human population density, pop_dens
             !
             norm = sum(pop_dens(:)*A_cell(:)) ! Weighted by cell area
+            !norm = sum(log(pop_dens(:)*A_cell(:))+1.) ! Re-scaled weights
             !
             allocate(scale(nxy))
             allocate(scaleI(nxy))
@@ -135,12 +137,14 @@ USE, INTRINSIC :: ISO_C_BINDING
             end if 
             !
             P_a = norm/nagent
-            print *, 'Human to agent ratio ~', P_a
+            print *, 'Standard human to agent ratio ~', P_a
             !
             ! Initialize array of types "agent"
             allocate(people(nagent))
             ! Allocate array of the number of agents in each grid cell
             allocate(npeop(nxy))
+            ! Allocate array of the human to agent ratio
+            allocate(HA(nxy))
             ! Allocate array of number of growth attempts 
             allocate(n_attempt(nxy))
             !
@@ -176,16 +180,28 @@ USE, INTRINSIC :: ISO_C_BINDING
                 write(*,'(1a1,A19,F6.1,A2)', advance='no') char(13),'Initializing agents',(real(ixy)/real(nxy)*100.),' %'
                 if ((mask_pop(ixy))) then ! If area is populated or not missing (FillValue)
                     !
-                    ! Calculate number of agents in ixy as the fraction of the total pop at ixy times the total number of agents
-                    ! We start below the steady-state and fill it up to max.
-                    ! When
-                    npeop(ixy) = floor(pop_dens(ixy)*(A_cell(ixy))/norm*nagent) ! Rounding error is big, we correct at the end
+                    ! Standard agent distribution:
+                    ! Calculate number of agents in ixy as the fraction of the total 
+                    ! population at ixy times the total number of agents
+                    npeop(ixy) = floor(pop_dens(ixy)*(A_cell(ixy))/norm*nagent)
+                    
+                    !npeop(ixy) = min( floor(pop_dens(ixy)*(A_cell(ixy))/norm*nagent),int(pop_dens(ixy)*A_cell(ixy)) ) ! - Rounding error from floor() function is big, we correct later.
+                                                                                                                 ! - Apply min() function to avoid having more agents
+                                                                                                                 !   than people.
+                    ! Re-scaled agent distribution:
+                    ! Weights are now proportional to the natural logarithm of the
+                    ! number of agents in each location. This emphasizes low density
+                    ! areas, as we need as many agents as we can to resolve the
+                    ! different atribute (age, sex, wealth) distributions. This choice 
+                    ! is made when the standard method would require a prohibitive number of
+                    ! agents, e.g., when run at regional scales.
+                    !npeop(ixy) = min( floor(log(pop_dens(ixy)*A_cell(ixy)+1.)/norm*nagent),int(pop_dens(ixy)*A_cell(ixy)) )
                     !
                     if (npeop(ixy) /= 0) then ! If there is someone
                         do ipeo = 1,npeop(ixy)
                             !
                             ! Initialize main agent attributes
-                            people(indx)%agent_ID%age=find_face(generate_random(),age_weights(:),size(age_weights(:)))
+                            people(indx)%agent_ID%age=find_face0(generate_random(),age_weights(:),size(age_weights(:)))
                             age_counts(people(indx)%agent_ID%age) = age_counts(people(indx)%agent_ID%age) + 1
                             people(indx)%agent_ID%name=indx     !
                             people(indx)%agent_ID%sex=0         ! F = 0, M = 1 [Not in use]
@@ -281,9 +297,17 @@ USE, INTRINSIC :: ISO_C_BINDING
             ! Continue asigning based on density until actual number of agents matches nagent,
             ! i.e., until sum(npeop(:)) = nagent = (indx - 1).
             !
+            ! Standard distribution of agents:
             ! For this, build a biased dice (see functions below) with weights 
             ! prop. to pop_dens(:)*A_cell(:) and throw it.
             cdf(:) = cumsum(pop_dens(:)*(A_cell(:)))/norm
+            !
+            ! Re-scaled distribution of agents:
+            ! Add the correction factor "-npeop(:)" to avoid having a human/agent ratio
+            ! bigger than 1. Agents will no distributed to places where the ratio is
+            ! smaller than one.
+            !cdf(:) = cumsum(log(pop_dens(:)*A_cell(:)+1.))/norm !-npeop(:)
+            !
             !
             !
             do while (indx /= (nagent+1))
@@ -297,7 +321,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                    npeop(loc) = npeop(loc) + 1
                    !
                    ! Initialize main agent attributes
-                   people(indx)%agent_ID%age=find_face(generate_random(),age_weights(:),size(age_weights(:)))
+                   people(indx)%agent_ID%age=find_face0(generate_random(),age_weights(:),size(age_weights(:)))
                    age_counts(people(indx)%agent_ID%age) = age_counts(people(indx)%agent_ID%age) + 1
                    people(indx)%agent_ID%name=indx     !
                    people(indx)%agent_ID%sex=0         ! F = 0, M = 1
@@ -389,10 +413,12 @@ USE, INTRINSIC :: ISO_C_BINDING
                !
             end do
             !
+            HA(:) = pop_dens(:)*A_cell(:)/npeop(:) ! Assign human to agent ratio once all agents have been initialised
+            !
             write(*,*) ' '
             print *, 'Check normalization of agents', sum(npeop(:)/pop_dens(:)*scale(:), mask=((pop_dens(:) > 0.) .and. (npeop(:) > 0))) & 
                                                               /sum(merge(1, 0, mask_pop(:)), mask=((pop_dens(:) > 0.) .and. (npeop(:) > 0))), '~ 1?'
-
+            !
             print '("Initialized:", I8, A8)', nagent, '  agents'
             !
             deallocate(A_cell)
@@ -432,7 +458,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             CLOSE(UNIT=10)
 
             allocate(age_weights(num_elements))
-            allocate(age_counts(num_elements))
+            allocate(age_counts(0:num_elements-1))
             allocate(Iage_stat_ptr(5,num_elements))
             !
             age_counts(:) = 0
@@ -511,7 +537,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                 istat   =  people(iagent)%health_status%malaria_status%status
                 iactive =  people(iagent)%health_status%active_status%status
                 iloc    =  people(iagent)%location_status%currloc
-                iage    =  min(people(iagent)%agent_ID%age,80)
+                iage    =  min(people(iagent)%agent_ID%age,79)
                 !
                 ! Pointer approach to allow vectorization (discarded old branching if ... elseif ...)
                 if (iactive) then
@@ -1248,6 +1274,31 @@ USE, INTRINSIC :: ISO_C_BINDING
             end do
             !
         end function find_face
+        !
+        function find_face0(r,cum_distr,sides) result(roll)
+            ! r: uniformly distributed random number, [0,1)
+            ! cum_distr: cumulative distribution (not normalized) of probabilities (the weights of each face of the dice)
+            ! sides: number of dice sides
+            implicit none
+            !
+            real, intent(in) :: r, cum_distr(sides)
+            integer, intent(in) :: sides
+            integer   :: roll
+            !
+            ! Local use only
+            integer :: j
+            roll = 0 
+            !
+            do j = 0, sides-1
+                if (r <= cum_distr(j+1)) then
+                    !
+                    roll = j
+                    !
+                    exit
+                end if 
+            end do
+            !
+        end function find_face0
         !
         function find_masked_face(r,cum_distr,sides,mask_grav,mask_pop) result(roll)
             ! r: uniformly distributed random number, [0,1)

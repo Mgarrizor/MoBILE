@@ -35,6 +35,7 @@ MODULE mo_control
     !
     !======= Agents
     logical :: out_N    =.true.  ! Agent field
+    logical :: out_HA   =.true.  ! Human to agent ratio
     !
     !======= Disease
     logical :: out_S    =.false.  ! Susceptible
@@ -42,7 +43,7 @@ MODULE mo_control
     logical :: out_I    =.true.  ! Infected
     logical :: out_Ia   =.true.  ! Age-disaggregated Infected
     logical :: out_A    =.true.  ! Asymptomatic
-    logical :: out_Aa   =.true.  ! Age-disaggregated Asymptomatic
+    logical :: out_Aa   =.false.  ! Age-disaggregated Asymptomatic
     logical :: out_R    =.false.  ! Recovered
 
     logical :: diag_age = .true. ! Create age-stratified diagnostics
@@ -50,9 +51,9 @@ MODULE mo_control
     logical :: out_B    =.true.  ! Bacterial density (could be changed to generic source of disease, e.g., B, V,...)
     logical :: out_F    =.true.  ! Force of infection
     !--- Malaria ----
-    logical :: out_EIR  =.true.  ! Entomological Inoculation Rate
+    logical :: out_EIR  =.false.  ! Entomological Inoculation Rate
     logical :: out_imm  =.false.  ! Endemicity level / Immunity
-    logical :: out_hbr  =.true.  ! Human Biting Rate
+    logical :: out_hbr  =.false.  ! Human Biting Rate
     !
     ! Defined in mo_vectri.f90
     !
