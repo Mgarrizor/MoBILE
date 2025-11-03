@@ -831,7 +831,7 @@ MODULE mo_netcdf
         if (out_imm) then
           !
           VarId(var_out)=var_out
-          status = nf90_def_var(ncid = ncid_grp(2), name = "e_l", xtype = nf90_double, &
+          status = nf90_def_var(ncid = ncid_grp(2), name = "imm", xtype = nf90_double, &
                     dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
           status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "units", values = "adimensional")
           status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "long_name", values = "Endemicity level / Immunity")

@@ -53,8 +53,8 @@ end subroutine DI
 subroutine AA()
     ! https://www.youtube.com/watch?v=fU_Ey5haF_M 
     ! Problem is the convergence is measured on a diagnostic variable (year and grid average of immunity level)
-    ! instead of the prognostic e_l of each agent. How do we deal with this?
-    ! Should we look for explicit convergence of each e_l attribute?
+    ! instead of the prognostic imm of each agent. How do we deal with this?
+    ! Should we look for explicit convergence of each imm attribute?
 
     implicit none
 
