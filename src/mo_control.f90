@@ -44,14 +44,14 @@ MODULE mo_control
     logical :: out_Ia   =.true.  ! Age-disaggregated Infected
     logical :: out_A    =.true.  ! Asymptomatic
     logical :: out_Aa   =.false.  ! Age-disaggregated Asymptomatic
-    logical :: out_R    =.false.  ! Recovered
+    logical :: out_R    =.true.  ! Recovered
 
     logical :: diag_age = .true. ! Create age-stratified diagnostics
     !--- Cholera ----
     logical :: out_B    =.true.  ! Bacterial density (could be changed to generic source of disease, e.g., B, V,...)
     logical :: out_F    =.true.  ! Force of infection
     !--- Malaria ----
-    logical :: out_EIR  =.false.  ! Entomological Inoculation Rate
+    logical :: out_EIR  =.true.  ! Entomological Inoculation Rate
     logical :: out_imm  =.false.  ! Endemicity level / Immunity
     logical :: out_hbr  =.false.  ! Human Biting Rate
     !

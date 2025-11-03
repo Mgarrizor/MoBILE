@@ -52,9 +52,9 @@ fi
             nstep=1096
            # nstep=0
 #           -a Number of agents 
-            nagent=500000    
+            nagent=2000000    
 #           -u Spin Up (0: no spin-up ; 1: automatic spin-up to some tolerance) 
-            spin_up=0
+            spin_up=1
 #           -p Population file 
             pop_file='Data/CHIRXS/pop.nc'
 #           -r Rainfall file 

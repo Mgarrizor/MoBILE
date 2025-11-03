@@ -107,7 +107,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             integer :: k   ! Dummy looping index
             integer :: ixy ! Looping long index
             integer :: ipeo, indx, loc
-            real :: norm, rand
+            real :: norm, norm_check, rand
             integer :: nfaces
             integer :: j          ! Short trip location index
             real, allocatable :: cdf_health(:) ! Cumulative distribution to asign agent health based on initial profile
@@ -120,23 +120,23 @@ USE, INTRINSIC :: ISO_C_BINDING
             ! Calculate number of agents per grid cell for a given total, nagent, and
             ! the input human population density, pop_dens
             !
-            norm = sum(pop_dens(:)*A_cell(:)) ! Weighted by cell area
-            !norm = sum(log(pop_dens(:)*A_cell(:))+1.) ! Re-scaled weights
+            norm_check = sum(pop_dens(:)*A_cell(:)) ! Weighted by cell area
+            norm = sum(log(pop_dens(:)*A_cell(:)+1.)) ! Re-scaled weights
             !
             allocate(scale(nxy))
             allocate(scaleI(nxy))
             !
-            scale(:)  = norm/(A_cell(:)*nagent)
+            scale(:)  = norm_check/(A_cell(:)*nagent)
             scaleI(:) = 1./scale(:)
             print *, 'Average scale factor = ', sum(scale(:))/size(scale(:))
-            print *, 'Number of people in simulated region', norm
+            print *, 'Number of people in simulated region', norm_check
             !
-            if (norm < nagent) then
+            if (norm_check < nagent) then
                 print *, 'More agents than people! --> STOP'
                 STOP 
             end if 
             !
-            P_a = norm/nagent
+            P_a = norm_check/nagent
             print *, 'Standard human to agent ratio ~', P_a
             !
             ! Initialize array of types "agent"
@@ -183,7 +183,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                     ! Standard agent distribution:
                     ! Calculate number of agents in ixy as the fraction of the total 
                     ! population at ixy times the total number of agents
-                    npeop(ixy) = floor(pop_dens(ixy)*(A_cell(ixy))/norm*nagent)
+                    !npeop(ixy) = floor(pop_dens(ixy)*(A_cell(ixy))/norm*nagent)
                     
                     !npeop(ixy) = min( floor(pop_dens(ixy)*(A_cell(ixy))/norm*nagent),int(pop_dens(ixy)*A_cell(ixy)) ) ! - Rounding error from floor() function is big, we correct later.
                                                                                                                  ! - Apply min() function to avoid having more agents
@@ -195,7 +195,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                     ! different atribute (age, sex, wealth) distributions. This choice 
                     ! is made when the standard method would require a prohibitive number of
                     ! agents, e.g., when run at regional scales.
-                    !npeop(ixy) = min( floor(log(pop_dens(ixy)*A_cell(ixy)+1.)/norm*nagent),int(pop_dens(ixy)*A_cell(ixy)) )
+                    npeop(ixy) = min( ceiling(log(pop_dens(ixy)*A_cell(ixy)+1.)/norm*nagent),int(pop_dens(ixy)*A_cell(ixy)) )
                     !
                     if (npeop(ixy) /= 0) then ! If there is someone
                         do ipeo = 1,npeop(ixy)
@@ -300,16 +300,22 @@ USE, INTRINSIC :: ISO_C_BINDING
             ! Standard distribution of agents:
             ! For this, build a biased dice (see functions below) with weights 
             ! prop. to pop_dens(:)*A_cell(:) and throw it.
-            cdf(:) = cumsum(pop_dens(:)*(A_cell(:)))/norm
+            !
+            norm_check = sum(max(pop_dens(:)*A_cell(:)-npeop(:), 0.)) ! Weighted by cell area
+            cdf(:) = cumsum(max(pop_dens(:)*A_cell(:)-npeop(:), 0.))/norm_check
             !
             ! Re-scaled distribution of agents:
             ! Add the correction factor "-npeop(:)" to avoid having a human/agent ratio
             ! bigger than 1. Agents will no distributed to places where the ratio is
             ! smaller than one.
-            !cdf(:) = cumsum(log(pop_dens(:)*A_cell(:)+1.))/norm !-npeop(:)
+            !
+            !norm = sum(log(max(pop_dens(:)*A_cell(:)-npeop(:), 0.)+1.)) ! Re-scaled weights
+            !cdf(:) = cumsum(log(max(pop_dens(:)*A_cell(:)-npeop(:), 0.)+1.))/norm !
             !
             !
             !
+            write(*,*) ' ' 
+            print *, indx, nagent, cdf(nxy)
             do while (indx /= (nagent+1))
                !
                call random_number(rand)        ! Throw the dice
@@ -421,7 +427,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             print '("Initialized:", I8, A8)', nagent, '  agents'
             !
-            deallocate(A_cell)
+            !deallocate(A_cell)
         end subroutine agents_init
 
         subroutine agents_read_age(age_weights,age_counts)
@@ -559,16 +565,16 @@ USE, INTRINSIC :: ISO_C_BINDING
                 !
             end do 
             !
-            S(:) = scale(:)*S(:)
-            E(:) = scale(:)*E(:)
-            I(:) = scale(:)*I(:)
-            A(:) = scale(:)*A(:)
-            R(:) = scale(:)*R(:)
+            S(:) = HA(:)*S(:)/A_cell(:)
+            E(:) = HA(:)*E(:)/A_cell(:)
+            I(:) = HA(:)*I(:)/A_cell(:)
+            A(:) = HA(:)*A(:)/A_cell(:)
+            R(:) = HA(:)*R(:)/A_cell(:)
             !
             if (diag_age) then
                 do j = 1, size(age_blocks(:))
-                    Ia(:,j) = scale(:)*Ia(:,j)
-                    Aa(:,j) = scale(:)*Aa(:,j)
+                    Ia(:,j) = HA(:)*Ia(:,j)/A_cell(:)
+                    Aa(:,j) = HA(:)*Aa(:,j)/A_cell(:)
                 end do
             end if
             !===================================================
