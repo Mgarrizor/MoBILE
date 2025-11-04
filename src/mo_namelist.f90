@@ -153,16 +153,16 @@ MODULE mo_namelist
 
 
         subroutine namelist_const
-        ! Contains all model constants
-        ! Overwrites default values selected 
-        ! by case at mo_const.f90
+        ! - Contains all model constants
+        ! - Overwrites default values selected 
+        !   by case at mo_const.f90
 
-        ! Especially usefull for sensitivity analysis and calibration 
+        ! - Especially usefull for sensitivity analysis and calibration 
 
-        ! You can use a NAMELIST to input values for specific parameters, and it is perfectly valid 
-        ! to provide only a subset of the parameters defined in the NAMELIST. 
-        ! When you input a single parameter value, the program will update only that specific parameter, 
-        ! while the others will retain their default or previously assigned values.
+        ! - You can use a NAMELIST to input values for specific parameters, and it is perfectly valid 
+        !   to provide only a subset of the parameters defined in the NAMELIST. 
+        !   When you input a single parameter value, the program will update only that specific parameter, 
+        !   while the others will retain their default or previously assigned values.
             implicit none
 
             ! Local use only
@@ -170,9 +170,12 @@ MODULE mo_namelist
             integer:: file_unit, iostats
 
             ! Define namelist
+            ! - We should have here all model parameters that are being changed to their params.txt value
+            !
             namelist /CONST/ mu_B, theta_e, theta_p, mu, rho, sigma, gamma, alpha, beta, & ! cholera disease params
                              m_long, m_short, D_grav, D_pop, H_0,                        & ! mobility params gravity model
-                             B_0, fS_0, fI_0, fA_0, fR_0                                   ! initial conditions
+                             B_0, fS_0, fI_0, fA_0, fR_0,                                & ! initial conditions
+                             K_h, srho, b_rate                                             ! malaria params
                              
             ! Does the file exist?
             inquire (file='namelist.nml', iostat=iostats)

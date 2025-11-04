@@ -955,7 +955,12 @@ MODULE mo_netcdf
 
         ! Open file
         status = nf90_open(path = pop_file, mode = nf90_nowrite, ncid = ncid_in)
-
+        !
+        if(status /= nf90_noerr) then
+          print *, 'NetCDF Status: error opening population file -- ', pop_file
+          STOP
+        end if
+        !
         ! Inquire dimensions and get their IDs ----------------------------------------
         do indx=1,size(lat_names)
           status = nf90_inq_dimid(ncid=ncid_in, name=lat_names(indx), dimid=LatDimID)

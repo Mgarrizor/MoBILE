@@ -41,12 +41,12 @@ implicit none
 
 ! Default output if VECTRI is active
 
-logical :: out_vect   =.true.        ! Vector density
-logical :: out_vecinfc=.true.        ! Infective vector density
-logical :: out_larv   =.true.       ! Larval density
-logical :: out_wpond  =.true.        ! Pond fraction
-logical :: out_wurbn  =.true.        ! Urban fraction
-logical :: out_wperm  =.true.        ! Permanent fraction
+logical :: out_vect   =.false.        ! Vector density
+logical :: out_vecinfc=.false.        ! Infective vector density
+logical :: out_larv   =.false.       ! Larval density
+logical :: out_wpond  =.false.        ! Pond fraction
+logical :: out_wurbn  =.false.        ! Urban fraction
+logical :: out_wperm  =.false.        ! Permanent fraction
 
 !=============================================
 

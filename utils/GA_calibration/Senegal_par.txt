@@ -1,0 +1,4 @@
+name,          default,   tol,   min,       max
+K_h,               500,   500,     0,      1500 
+srho,              1.0,   1.0,     0.1,     1.0
+b_rate,            10,    10,      0.01,    20      

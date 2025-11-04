@@ -107,9 +107,6 @@ MODULE mo_const
 
     !********** Disease **************************
 
-    integer, parameter :: K_h = 500
-    real, parameter :: srho = 0.5
-
     real, allocatable, target :: S(:) ! 1D long array for Sensitive density
     real, allocatable, target :: Sa(:,:)! (nxy,nage_blocks)
     real, allocatable, target :: E(:) ! 1D long array for Exposed density
@@ -150,6 +147,9 @@ MODULE mo_const
     real, allocatable :: hbr(:)   ! 1D long array for Human Biting Rate
     real, allocatable :: imm(:)   ! 1D long array for Endemicity level / Immunity
     ! Malaria parameters
+
+    real :: K_h
+    real :: srho
 
     integer :: iip 
     real :: bite_night, bite_day        ! 
@@ -264,7 +264,9 @@ MODULE mo_const
                               !                                  ~ 0.125       Bousema  et al. 2011 [DOI:] ---> and references therein | Ouedraogo 2009 [DOI:]
                               !                                                                                                        | Schneider 2007 [DOI:]
                               ! Vector biting rate [day^(-1)]
-        b_rate = 0.05           ! 20 - mean of 1.6 bites/person/hour from 18:00 - 6:30 (~ 1.6*12.5=20) Nzioki et al. 2023 [DOI:]
+        b_rate = 1.           ! 20 - mean of 1.6 bites/person/hour from 18:00 - 6:30 (~ 1.6*12.5=20) Nzioki et al. 2023 [DOI:]
+        K_h = 500.
+        srho = 1.0
 
         ! mu  = 1./(61.*365)    ! Background human mortality rate [day^-1] [ref]
 
