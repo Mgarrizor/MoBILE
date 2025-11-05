@@ -116,15 +116,18 @@ if [[ ${vectri} == 1 ]]; then
 
   touch "${path}/src/mo_netcdf.f90" # Touch file so that it is recompiled WITH the VECTRI lines
 
-                                                               # These are the necessary VECTRI source files to
-  ln -sf ${VECTRI}/source/mo_constants.f90 ${path}/src         # couple it to the AB model.
-  ln -sf ${VECTRI}/source/mo_advect.f90 ${path}/src
+                                                                # These are the necessary VECTRI source files to
+  #ln -sf ${VECTRI}/source/mo_constants.f90 ${path}/src         # couple it to the AB model.
+  #ln -sf ${VECTRI}/source/mo_advect.f90 ${path}/src
+  ln -sf ${MOBILE}/utils/vectri/mo_constants.f90 ${path}/src
+  ln -sf ${MOBILE}/utils/vectri/mo_advect.f90 ${path}/src
   ln -sf ${MOBILE}/utils/vectri/mo_methods.f90 ${path}/src
   #-------------------------------------------------------------------------------------------------------------------
 
   ln -sf ${MOBILE}/utils/vectri/mo_vectri.f90  ${path}/src     # This is the file that declares, allocates and 
                                                                # initializes VECTRI's fields and wraps all subroutines 
                                                                # necessary for integrating the vector density.
+                                                               # This module is NOT part of VECTRI.
   #-------------------------------------------------------------------------------------------------------------------
 
   ln -sf ${MOBILE}/utils/vectri/mo_vectri.d ${path}/src/deps   # Dependency files to ensure right compilation order.

@@ -1,1 +1,0 @@
-/Users/miguelgarridozornoza/Desktop/Research/MODELS/MoBILE/utils/vectri/mo_vectri.f90

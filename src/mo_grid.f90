@@ -52,6 +52,10 @@ MODULE mo_grid
         allocate(imm(nxy))
         allocate(hbr(nxy))
 
+        EIR(:) = 0.
+        imm(:) = 0.
+        hbr(:) = 0.
+
         if (diag_age) then
           !
           allocate(Sa(nxy,size(age_blocks(:))))
