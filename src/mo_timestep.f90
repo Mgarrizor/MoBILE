@@ -2,8 +2,8 @@ MODULE mo_timestep
 ! This module contains one time step of the model, this is
 ! one spatial and one agent loop.
 
-! Miguel Garrido Zornoza 2025
-! mgarrizoraca@gmail.com
+! Author: Miguel Garrido Zornoza (2025)
+! Contact: mgarrizoraca@gmail.com
 
 !-------------------------------------------------------
 ! Import modules
@@ -146,11 +146,16 @@ subroutine time_step(disID,itime)
           ! Compute base interaction rates
           !
           ! Human to vector transmission
-          m_0(:) = b_rate*rgonof(:)*rvect(0,:)/(npeop(:)+K_h)**srho*scaleI*HA(:)!P_a!HA(:)
+          !
+          where((pop_dens(:) > 0.) .and. (npeop(:) > 0)) m_0(:) = (1.-0.*exp(-pop_dens(:)*1e6/100.))*b_rate*rgonof(:)*rvect(0,:)/(pop_dens(:)+K_h)*HA(:)!**srho
+          !
           ! Infected vector to human transmission
-          m_1(:) = b_rate*rgonof(:)*rvect(ninfv,:)/(npeop(:)+K_h)**srho*scaleI*HA(:)!P_a!HA(:)
+          !
+          where((pop_dens(:) > 0.) .and. (npeop(:) > 0)) m_1(:) = (1.-0.*exp(-pop_dens(:)*1e6/100.))*b_rate*rgonof(:)*rvect(ninfv,:)/(pop_dens(:)+K_h)*HA(:)!**srho
+          !
           ! All vector to human (human biting rate - hbr)
-          m_all(:) = b_rate*rgonof(:)*SUM(rvect(:,:), DIM=1)/(npeop(:)+K_h)**srho*scaleI*HA(:)!P_a!HA(:)
+          !
+          where((pop_dens(:) > 0.) .and. (npeop(:) > 0)) m_all(:) = (1.-0.*exp(-pop_dens(:)*1e6/100.))*b_rate*rgonof(:)*SUM(rvect(:,:), DIM=1)/(pop_dens(:)+K_h)*HA(:)!**srho
           !
         case default
           print *, "Incorrect case, choose disID between: 0 (cholera) and 1 (malaria)"

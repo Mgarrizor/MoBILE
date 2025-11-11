@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# Author: M. Garrido Zornoza
+# Contact: mgarrizoraca@gmail.com
 #export CPUPROFILE=$PWD/profile.prof
 #export CPUPROFILE_FREQUENCY=${freq} # Sampling frequency (default is 100 per second)
 

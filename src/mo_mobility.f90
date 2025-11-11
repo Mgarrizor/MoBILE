@@ -1,8 +1,8 @@
 MODULE mo_mobility
   ! This module ...
   !
-  ! Miguel Garrido Zornoza 2024 
-  ! mgarrizoraca@gmail.com
+  ! Author: Miguel Garrido Zornoza (2024) 
+  ! Contact: mgarrizoraca@gmail.com
   !
   implicit none
   

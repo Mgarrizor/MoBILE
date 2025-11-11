@@ -3,8 +3,8 @@ MODULE mo_spinup
 ! to deal with the slow adjustment of 
 ! immunity.
 
-! Miguel Garrido Zornoza 2025
-! mgarrizoraca@gmail.com
+! Author: Miguel Garrido Zornoza (2025)
+! Contact: mgarrizoraca@gmail.com
 
 
 implicit none

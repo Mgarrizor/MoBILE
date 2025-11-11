@@ -1,8 +1,8 @@
 MODULE mo_namelist
 ! This module deals with the NAMELIST(S) information
 
-! Miguel Garrido Zornoza 2024
-! mgarrizoraca@gmail.com
+! Author: Miguel Garrido Zornoza (2024)
+! Contact: mgarrizoraca@gmail.com
 !
 
     use, intrinsic :: iso_fortran_env, only: stderr => error_unit
@@ -54,10 +54,10 @@ MODULE mo_namelist
 
         end subroutine namelist_inout
 
-        subroutine namelist_human(pop_file,nagent)
+        subroutine namelist_human(pop_file,nagent,imm_file)
             implicit none
 
-            character(len=100), intent(out):: pop_file
+            character(len=100), intent(out):: pop_file, imm_file
             integer, intent(out) :: nagent
             
             ! Local use only
@@ -65,7 +65,7 @@ MODULE mo_namelist
             integer:: file_unit, iostats
             
             ! Define namelist
-            namelist /HUMAN/ pop_file, nagent
+            namelist /HUMAN/ pop_file, nagent, imm_file
 
             ! Does the file exist?
             inquire (file='namelist.nml', iostat=iostats)
@@ -175,7 +175,7 @@ MODULE mo_namelist
             namelist /CONST/ mu_B, theta_e, theta_p, mu, rho, sigma, gamma, alpha, beta, & ! cholera disease params
                              m_long, m_short, D_grav, D_pop, H_0,                        & ! mobility params gravity model
                              B_0, fS_0, fI_0, fA_0, fR_0,                                & ! initial conditions
-                             K_h, srho, b_rate                                             ! malaria params
+                             K_h, b_rate                                             ! malaria params
                              
             ! Does the file exist?
             inquire (file='namelist.nml', iostat=iostats)

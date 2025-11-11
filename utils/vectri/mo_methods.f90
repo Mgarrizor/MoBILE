@@ -29,10 +29,6 @@ MODULE mo_methods
 !===
 ! 
 !
-!
-! Adrian M. Tompkins (tompkins@ictp.it)           2025
-! Miguel Garrido Zornoza (mgarrizoraca@gmail.com) 2025
-!
 
 ! VECTRI modules
 USE mo_advect

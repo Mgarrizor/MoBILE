@@ -3,8 +3,8 @@ MODULE mo_netcdf
 ! of NetCDF files. From:
 ! https://docs.unidata.ucar.edu/netcdf-fortran/current/f90_The-NetCDF-Fortran-90-Interface-Guide.html
 !
-! Miguel Garrido Zornoza 2024 
-! mgarrizoraca@gmail.com
+! Author: Miguel Garrido Zornoza (2024) 
+! Contact: mgarrizoraca@gmail.com
 !
     use netcdf
     use mo_control
@@ -487,6 +487,7 @@ MODULE mo_netcdf
             status = nf90_def_var(ncid = ncid_grp(2), name = "pop", xtype = nf90_double, &
                       dimids = (/ DimId(1), DimId(2) /), varid = VarId(var_out))
             status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "units", values = "km^-2")
+            status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "long_name", values = "Human population density")
          !   status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "_FillValue", values = FillValue)
             status = nf90_def_var_fill(ncid_grp(2), VarId(var_out), 0, FillValue)
             var_out = var_out + 1

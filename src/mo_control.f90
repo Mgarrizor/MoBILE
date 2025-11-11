@@ -1,8 +1,8 @@
 MODULE mo_control
 ! This module deals with output and control flags
 !
-! Miguel Garrido Zornoza 2024 
-! mgarrizoraca@gmail.com
+! Author: Miguel Garrido Zornoza (2024) 
+! Contact: mgarrizoraca@gmail.com
 !
     implicit none
 
@@ -52,8 +52,8 @@ MODULE mo_control
     logical :: out_F    =.true.  ! Force of infection
     !--- Malaria ----
     logical :: out_EIR  =.true.  ! Entomological Inoculation Rate
-    logical :: out_imm  =.false.  ! Endemicity level / Immunity
-    logical :: out_hbr  =.false.  ! Human Biting Rate
+    logical :: out_imm  =.true.  ! Endemicity level / Immunity
+    logical :: out_hbr  =.true.  ! Human Biting Rate
     !
     ! Defined in mo_vectri.f90
     !
@@ -68,6 +68,7 @@ MODULE mo_control
     character(len=100) :: rain_file  ! Name of rain/precipitation file
     character(len=100) :: t2m_file   ! Name of temperature file
     character(len=100) :: area_file  ! Name of cell area file
+    character(len=100) :: imm_file   ! Name of immunity forcing file
     !----------------------------------------------------------
 
     ! https://fortran-lang.org/en/learn/quickstart/arrays_strings/#array-of-strings

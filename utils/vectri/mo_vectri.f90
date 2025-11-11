@@ -1,6 +1,7 @@
 MODULE mo_vectri
 !
-! Miguel Garrido Zornoza (mgarrizoraca@gmail.com) 2025
+! Author: Miguel Garrido Zornoza (2025)
+! Contact: mgarrizoraca@gmail.com 
 !
 use mo_constants  !--VECTRI--
 use mo_methods    !--VECTRI--
@@ -41,7 +42,7 @@ implicit none
 
 ! Default output if VECTRI is active
 
-logical :: out_vect   =.false.        ! Vector density
+logical :: out_vect   =.true.        ! Vector density
 logical :: out_vecinfc=.false.        ! Infective vector density
 logical :: out_larv   =.false.       ! Larval density
 logical :: out_wpond  =.false.        ! Pond fraction

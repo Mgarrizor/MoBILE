@@ -1,11 +1,11 @@
 MODULE mo_agents
 ! This module contains methods on agents
 !
-! 
-! Adrian M. Tompkins 2014 
+! Authors & Contact
+! Adrian M. Tompkins (2014) 
 ! tompkins@ictp.it
 
-! Miguel Garrido Zornoza 2024
+! Miguel Garrido Zornoza (2024)
 ! mgarrizoraca@gmail.com
 
 USE mo_const
@@ -424,6 +424,10 @@ USE, INTRINSIC :: ISO_C_BINDING
             where((pop_dens(:) > 0.) .and. (npeop(:) > 0)) HA(:) = pop_dens(:)*A_cell(:)/npeop(:)
             !HA(:) = pop_dens(:)*A_cell(:)/npeop(:)
             !
+            ! Conversion factor between number of agents and density
+            !scale(:) = HA(:)/A_cell(:)
+            !
+            !
             write(*,*) ' '
             print *, 'Check normalization of agents', sum(HA(:)*npeop(:)/norm_check, mask=((pop_dens(:) > 0.) .and. (npeop(:) > 0))), '~ 1?' !& 
                                                              ! /sum(merge(1, 0, mask_pop(:)), mask=((pop_dens(:) > 0.) .and. (npeop(:) > 0))), '~ 1?'
@@ -435,6 +439,10 @@ USE, INTRINSIC :: ISO_C_BINDING
             !print *, 'Median :', median(HA(:)))
             print *, 'Mean: ', sum(HA(:), mask=((pop_dens(:) > 0.) .and. (npeop(:) > 0))) & 
                                 /sum(merge(1, 0, mask_pop(:)), mask=((pop_dens(:) > 0.) .and. (npeop(:) > 0)))
+            print *, 'Mean scale factor:', sum(HA(:), mask=((pop_dens(:) > 0.) .and. (npeop(:) > 0))) & 
+                                /sum(merge(1, 0, mask_pop(:)), mask=((pop_dens(:) > 0.) .and. (npeop(:) > 0))) &
+                                /(sum(A_cell(:), mask=((pop_dens(:) > 0.) .and. (npeop(:) > 0))) & 
+                                /sum(merge(1, 0, mask_pop(:)), mask=((pop_dens(:) > 0.) .and. (npeop(:) > 0))))
             print *, 'Min.: ', minval(HA(:), mask=(HA > 0.)), ' Max.: ', maxval(HA(:), mask=((pop_dens(:) > 0.) .and. (npeop(:) > 0)))
             !
             !deallocate(A_cell)
@@ -475,7 +483,7 @@ USE, INTRINSIC :: ISO_C_BINDING
 
             allocate(age_weights(num_elements))
             allocate(age_counts(0:num_elements-1))
-            allocate(Iage_stat_ptr(5,num_elements))
+            allocate(Iage_stat_ptr(5,num_elements)) ! SEIAR = 5
             !
             age_counts(:) = 0
             do i = 1, num_elements

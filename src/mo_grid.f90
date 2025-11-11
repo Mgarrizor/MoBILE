@@ -1,8 +1,8 @@
 MODULE mo_grid
   ! This module ...
   !
-  ! Miguel Garrido Zornoza 2024 
-  ! mgarrizoraca@gmail.com
+  ! Author: Miguel Garrido Zornoza (2024) 
+  ! Contact: mgarrizoraca@gmail.com
   !
   USE mo_const
   USE mo_control

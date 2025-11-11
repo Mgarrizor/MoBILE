@@ -4,15 +4,9 @@ PROGRAM MOBILE
 ! Mobility-Based Integrated Landscape Epidemiology
 !
 !                       MoBILE
-!
-!                      (model) by
-!          A. M. Tompkins      (tompkins@ictp.it)
-!
-!                    (2014,2024)
-!
-!                         &
 ! 
-!          M. Garrido Zornoza  (mgarrizoraca@gmail.com)
+!          Authors: M. Garrido Zornoza  & Adrian M. Tompkins
+!          Contact: mgarrizoraca@gmail.com & tompkins@ictp.it
 !          
 !                      (2024)
 !
@@ -22,7 +16,7 @@ PROGRAM MOBILE
 ! License: GNU General Public License v3.0
 ! ========================================
 !
-! Referenced sources in MoBILE
+! Sources referenced in MoBILE
 !
 ! --------- Cholera --------------------
 ! [ref:c1] Lorenzo et al. (http://doi.org/10.1098/rsif.2014.0840)
@@ -37,9 +31,9 @@ PROGRAM MOBILE
 
 
 ! --------- Dengue ---------------------
-! [d1]
-! [d2]
-! [d3]
+! [ref:d1]
+! [ref:d2]
+! [ref:d3]
 !
 !============================================================================================
 ! Index                           |- mo_dules                          | Performance (profiler.sh)
@@ -167,8 +161,8 @@ itime = 1
   print '("Pi = ",f6.4)', pi
   !
   ! ************** 0.1 Grid & params **************
-  ! If .input.=true then read gridded fields (population density and forcings - rainfall, air temperature)
-  ! and new disease parameters from namelist. Otherwise fall back to idealized world 
+  ! If .input.=true then read gridded fields (population density and forcings - rainfall, air temperature, immunity)
+  ! and new disease parameters from namelist. Otherwise fall back to idealized world. 
   !
   ! init default constants for disease "disID"
   call const_disease(disID)
@@ -179,7 +173,7 @@ itime = 1
     ! Namelists
     !=
       !--Human input
-      call namelist_human(pop_file,nagent)
+      call namelist_human(pop_file,nagent,imm_file)
       !
       !--Climate input
       call namelist_clima(rain_file,t2m_file,area_file)
@@ -293,6 +287,8 @@ itime = 1
   ! 0.3.1 Empirical network
   if ((network)) then ! [Non-functional]
     print *, 'Mobility scheme: empirical network'
+    print *, 'Check point: mobility scheme -> Empirical network non-functional --> STOP'
+    STOP 
   !
   ! 0.3.2 Gravity model
   elseif ((gravity)) then
@@ -303,14 +299,16 @@ itime = 1
   ! 0.3.3 Radiation model
   elseif ((radiation)) then ! [Non-functional]
     print *, 'Mobility scheme: radiation model'
+    print *, 'Check point: mobility scheme -> Radiation model non-functional --> STOP'
+    STOP
     !
-    ! call init_radiation  
+    ! call mob_radiation_init(??) 
     !
   end if !-----------------------------------
   !
   ! Save some memory
   if ((agents) .and. (.not. out_Q)) then
-      deallocate(Q) ! Safe some memory
+      deallocate(Q)
   end if
   !
   if (.not. out_D) then 
@@ -321,9 +319,9 @@ itime = 1
   !
   ! 0.4.1 Agents
   print *, '------------------------'
-  if ((agents)) then ![Non-functional]
+  if ((agents)) then
     print *, "People representation: Agents"
-    !'("Pi = ",f4.2)', pi
+    !
      if (random .and. (.not. rand_seed)) then
         print *, '-- Random initial disease profiles --'
      end if
@@ -456,6 +454,7 @@ print '("Integrate: ",i6," days.")', nsteps
 print *, '------------------------'
 !
 !********************************************************
+! Time integration
 time_loop: do itime=2,nsteps
   !
   call time_step(disID,itime)
@@ -466,27 +465,28 @@ time_loop: do itime=2,nsteps
   call netcdf_3D_output(itime,Var3D)
   !
 end do time_loop
-  !
-  ! Write 2D fields (x,y) here and close NetCDF file
-  call netcdf_2D_output()
-  !
-  !t_finish = OMP_GET_WTIME()
+!********************************************************
+!
+! Write 2D fields (x,y) here and close NetCDF file
+call netcdf_2D_output()
+!
+!t_finish = OMP_GET_WTIME()
+!
+! CPU stats
+call cpu_time(t_finish)
+write(*,*) ' '
+print *, '-- Program finished successfully after --'
+print '("CPU:      ",f6.3," minutes")',(t_finish-t_start)/60.
 
-  ! CPU stats
-  call cpu_time(t_finish)
-  write(*,*) ' '
-  print *, '-- Program finished successfully after --'
-  print '("CPU:      ",f6.3," minutes")',(t_finish-t_start)/60.
-  
-  ! OMP Wall-clock stats
-  !t_finish = OMP_GET_WTIME()
-  
-  ! Wall-clock stats
-  CALL SYSTEM_CLOCK(COUNT=end_count)
-  elapsed_time = REAL(end_count - start_count) / REAL(count_rate)
-  print '("Wall time:",f6.3," minutes")',elapsed_time/60.
-  print *, '------------------------'
-  write(*,*) ' '
-  !
+! OMP Wall-clock stats
+!t_finish = OMP_GET_WTIME()
+
+! Wall-clock stats
+CALL SYSTEM_CLOCK(COUNT=end_count)
+elapsed_time = REAL(end_count - start_count) / REAL(count_rate)
+print '("Wall time:",f6.3," minutes")',elapsed_time/60.
+print *, '------------------------'
+write(*,*) ' '
+!
 end PROGRAM MOBILE
 

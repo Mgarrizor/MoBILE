@@ -15,10 +15,9 @@ OBJ_DIR   := ./obj      # Location of objects (not in use right now)
 BUILD_DIR := ./build    # Location to build the program
 #-----------------------------------------
 # Touch these lines if the nf-config shell command does not work for your system
-INC_FLAGS := $(shell nf-config --fflags)  # Flags needed to compile a FORTRAN program (NetCDF)
-#INC_LIBS  := $(shell nf-config --flibs)  # Libraries needed to link a FORTRAN program (NetCDF)
-INC_LIBS  := -L/opt/homebrew/Cellar/netcdf_both/lib -lnetcdff -lnetcdf         # For my weird Mac set up
-PROF_LIB  := -L/opt/homebrew/Cellar/gperftools/2.16/lib -lprofiler -ltcmalloc  # Profiling library (Google performance tools)
+INC_FLAGS := $(shell nf-config --fflags) # Flags needed to compile a FORTRAN program (NetCDF)
+INC_LIBS  := $(shell nf-config --flibs) $(shell nc-config --libs) # Libraries needed to link a FORTRAN program (NetCDF)
+PROF_LIB  := -L/opt/homebrew/Cellar/gperftools/2.17.2/lib -lprofiler -ltcmalloc  # Profiling library (Google performance tools)
 #-----------------------------------------
 # (https://stackoverflow.com/questions/3676322/what-flags-to-set-for-gfortran-compiler-to-catch-faulty-code)
 DEBUG     := -Og -fbacktrace -Wall -fcheck=all \

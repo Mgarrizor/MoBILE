@@ -80,6 +80,9 @@ while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:x:" flag; do
    x) # Handle the -c flag
    area_file=$OPTARG
    ;;
+   i) # Handle the -c flag
+   imm_file=$OPTARG
+   ;;
    \?) # Handle invalid options
    usage
    exit 1
@@ -219,7 +222,8 @@ area_file='${area_file}'
 /
 &HUMAN
 pop_file='${pop_file}',
-nagent=${nagent}
+nagent=${nagent},
+iforcing=${imm_file}
 /
 &CONST
 ${lines}

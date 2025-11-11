@@ -3,8 +3,8 @@ MODULE mo_const
 ! This module deals with array declarations, model parameters and the 
 ! selection of constants by disease case.
 !
-! Miguel Garrido Zornoza 2024 
-! mgarrizoraca@gmail.com
+! Author: Miguel Garrido Zornoza 2024 
+! Contact: mgarrizoraca@gmail.com
 !
 ! Index
 !
@@ -149,7 +149,7 @@ MODULE mo_const
     ! Malaria parameters
 
     real :: K_h
-    real :: srho
+    !real :: srho
 
     integer :: iip 
     real :: bite_night, bite_day        ! 
@@ -264,9 +264,9 @@ MODULE mo_const
                               !                                  ~ 0.125       Bousema  et al. 2011 [DOI:] ---> and references therein | Ouedraogo 2009 [DOI:]
                               !                                                                                                        | Schneider 2007 [DOI:]
                               ! Vector biting rate [day^(-1)]
-        b_rate = 1.           ! 20 - mean of 1.6 bites/person/hour from 18:00 - 6:30 (~ 1.6*12.5=20) Nzioki et al. 2023 [DOI:]
+        b_rate = 1.0           ! 20 - mean of 1.6 bites/person/hour from 18:00 - 6:30 (~ 1.6*12.5=20) Nzioki et al. 2023 [DOI:]
         K_h = 500.
-        srho = 1.0
+      !  srho = 1.0
 
         ! mu  = 1./(61.*365)    ! Background human mortality rate [day^-1] [ref]
 
