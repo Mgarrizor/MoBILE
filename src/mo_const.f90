@@ -31,6 +31,7 @@ MODULE mo_const
     integer :: TempVarID, ncTempID
     integer :: RainVarID, ncRainID
     integer :: AreaVarID, ncAreaID
+    integer :: ImmVarID, ncImmID   ! IDs for immunity forcing file
 
 
     real    :: eps = 1e-15  ! Numerical tolerance 
@@ -146,6 +147,7 @@ MODULE mo_const
     real, allocatable :: EIR(:)   ! 1D long array for Entomological Inoculation Rate
     real, allocatable :: hbr(:)   ! 1D long array for Human Biting Rate
     real, allocatable :: imm(:)   ! 1D long array for Endemicity level / Immunity
+    real, allocatable :: imm_2D(:,:) ! 2D array for immunity forcing at slice itime
     ! Malaria parameters
 
     real :: K_h

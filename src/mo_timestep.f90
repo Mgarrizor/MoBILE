@@ -12,7 +12,7 @@ MODULE mo_timestep
   USE mo_agents
   USE mo_source
   USE mo_control
-!  USE mo_netcdf
+  USE mo_netcdf
   USE mo_bulk
 ! USE mo_grid
 ! USE mo_namelist
@@ -182,6 +182,13 @@ subroutine time_step(disID,itime)
         end do agent_loop
 !$OMP END PARALLEL DO
         !
+        !
+        if (in_imm) then
+          !
+          call read_slice_imm(itime,imm)
+          !
+        end if 
+        !
         call agents_diagnostics(disID,scale)  ! Compute bulk stats
         !
         ! Post-diagnostics calculations
@@ -223,7 +230,9 @@ subroutine time_step(disID,itime)
 
           ! Calculate average daily e_l (endemicity level)
           !imm(:) = imm(:)/npeop(:)
-          where((mask_pop(:)) .and. (npeop(:)>0)) imm(:) = imm(:)/npeop(:)
+          if (.not. in_imm) then
+            where((mask_pop(:)) .and. (npeop(:)>0)) imm(:) = imm(:)/npeop(:)
+          end if
           !
         case default
           print *, "Incorrect case, choose disID between: 0 (cholera) and 1 (malaria)"

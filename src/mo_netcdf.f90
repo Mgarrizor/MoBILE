@@ -327,22 +327,19 @@ MODULE mo_netcdf
       end subroutine write_check_3D_int
 
 
-      !subroutine read_slice(itime)
-        ! Test subroutine for better performance (read drivers each time-step)
-      !  implicit none 
+      subroutine read_slice_imm(itime,imm_1D)
+        ! Read drivers each time-step (immunity for now, might extend it to rainfall and temperature and save some memory)
+        implicit none 
 
-      !  integer, intent(in) :: itime
+        integer, intent(in) :: itime
+        real, allocatable, intent(out)  :: imm_1D(:)     ! 1D long array with average immunity level
+        integer :: status
 
-        !integer :: status
+        status = nf90_get_var(ncImmID, ImmVarID, imm_2D, start=(/1,1,itime/),count=(/nlon,nlat,1/))
 
-      !  print*, "You're using a subroutine that does nothing!"
+        imm_1D = reshape(imm_2D, (/nxy/))
 
-      !  status = nf90_get_var(ncTempID, TempVarID, point_t2m, start=(/1,1,itime/),count=(/nlon,nlat,1/))
-      !  status = nf90_get_var(ncRainID, RainVarID, rain_2d, start=(/1,1,itime/),count=(/nlon,nlat,1/))
-
-      !  point_rain = reshape(rain_2d, (/nxy/))
-
-      !end subroutine read_slice
+      end subroutine read_slice_imm
 
       subroutine netcdf_init(nlon,nlat,nsteps,lon_coord,lat_coord,Var3D)
         implicit none
@@ -585,8 +582,8 @@ MODULE mo_netcdf
             VarId(var_out)=var_out
             status = nf90_def_var(ncid = ncid_grp(2), name = "S", xtype = nf90_double, &
                       dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
-            status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "units", values = "km^-2")
-            status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "long_name", values = "Susceptible population density")
+            status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "units", values = "fraction")
+            status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "long_name", values = "Susceptible population per person")
             var_out = var_out + 1
 
         end if
@@ -596,8 +593,8 @@ MODULE mo_netcdf
             VarId(var_out)=var_out
             status = nf90_def_var(ncid = ncid_sbgrp(3), name = "I_bulk", xtype = nf90_double, &
                       dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
-            status = nf90_put_att(ncid = ncid_sbgrp(3), varid = VarId(var_out), name = "units", values = "km^-2")
-            status = nf90_put_att(ncid = ncid_sbgrp(3), varid = VarId(var_out), name = "long_name", values = "Infected symptomatic population density")
+            status = nf90_put_att(ncid = ncid_sbgrp(3), varid = VarId(var_out), name = "units", values = "fraction")
+            status = nf90_put_att(ncid = ncid_sbgrp(3), varid = VarId(var_out), name = "long_name", values = "Infected symptomatic population per person")
             var_out = var_out + 1
 
         else if (out_I) then
@@ -605,8 +602,8 @@ MODULE mo_netcdf
             VarId(var_out)=var_out
             status = nf90_def_var(ncid = ncid_grp(2), name = "I", xtype = nf90_double, &
                       dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
-            status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "units", values = "km^-2")
-            status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "long_name", values = "Infected symptomatic population density")
+            status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "units", values = "fraction")
+            status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "long_name", values = "Infected symptomatic population per person")
             var_out = var_out + 1
 
         end if
@@ -616,8 +613,8 @@ MODULE mo_netcdf
                 VarId(var_out)=var_out
                 status = nf90_def_var(ncid = ncid_sbgrp(3), name = I_age_names(k), xtype = nf90_double, &
                           dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
-                status = nf90_put_att(ncid = ncid_sbgrp(3), varid = VarId(var_out), name = "units", values = "km^-2")
-                status = nf90_put_att(ncid = ncid_sbgrp(3), varid = VarId(var_out), name = "long_name", values = "Age-disaggregated Infected symptomatic population density")
+                status = nf90_put_att(ncid = ncid_sbgrp(3), varid = VarId(var_out), name = "units", values = "fraction")
+                status = nf90_put_att(ncid = ncid_sbgrp(3), varid = VarId(var_out), name = "long_name", values = "Age-disaggregated Infected symptomatic population per person")
                 var_out = var_out + 1
             end do
         end if
@@ -627,8 +624,8 @@ MODULE mo_netcdf
             VarId(var_out)=var_out
             status = nf90_def_var(ncid = ncid_sbgrp(4), name = "A_bulk", xtype = nf90_double, &
                       dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
-            status = nf90_put_att(ncid = ncid_sbgrp(4), varid = VarId(var_out), name = "units", values = "km^-2")
-            status = nf90_put_att(ncid = ncid_sbgrp(4), varid = VarId(var_out), name = "long_name", values = "Infected asymptomatic population density")
+            status = nf90_put_att(ncid = ncid_sbgrp(4), varid = VarId(var_out), name = "units", values = "fraction")
+            status = nf90_put_att(ncid = ncid_sbgrp(4), varid = VarId(var_out), name = "long_name", values = "Infected asymptomatic population per person")
             var_out = var_out + 1
 
         else if (out_A) then
@@ -636,8 +633,8 @@ MODULE mo_netcdf
             VarId(var_out)=var_out
             status = nf90_def_var(ncid = ncid_grp(2), name = "A", xtype = nf90_double, &
                       dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
-            status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "units", values = "km^-2")
-            status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "long_name", values = "Infected asymptomatic population density")
+            status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "units", values = "fraction")
+            status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "long_name", values = "Infected asymptomatic population per person")
             var_out = var_out + 1
 
         end if
@@ -647,8 +644,8 @@ MODULE mo_netcdf
                 VarId(var_out)=var_out
                 status = nf90_def_var(ncid = ncid_sbgrp(4), name = A_age_names(k), xtype = nf90_double, &
                           dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
-                status = nf90_put_att(ncid = ncid_sbgrp(4), varid = VarId(var_out), name = "units", values = "km^-2")
-                status = nf90_put_att(ncid = ncid_sbgrp(4), varid = VarId(var_out), name = "long_name", values = "Age-disaggregated Infected symptomatic population density")
+                status = nf90_put_att(ncid = ncid_sbgrp(4), varid = VarId(var_out), name = "units", values = "fraction")
+                status = nf90_put_att(ncid = ncid_sbgrp(4), varid = VarId(var_out), name = "long_name", values = "Age-disaggregated Infected symptomatic population per person")
                 var_out = var_out + 1
             end do
         end if
@@ -658,8 +655,8 @@ MODULE mo_netcdf
             VarId(var_out)=var_out
             status = nf90_def_var(ncid = ncid_grp(2), name = "R", xtype = nf90_double, &
                       dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
-            status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "units", values = "km^-2")
-            status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "long_name", values = "Recovered population density")
+            status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "units", values = "fraction")
+            status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "long_name", values = "Recovered population per person")
             var_out = var_out + 1
 
         end if
@@ -823,8 +820,8 @@ MODULE mo_netcdf
             VarId(var_out)=var_out
             status = nf90_def_var(ncid = ncid_grp(2), name = "E", xtype = nf90_double, &
                       dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
-            status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "units", values = "km^-2")
-            status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "long_name", values = "Exposed population density")
+            status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "units", values = "fraction")
+            status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "long_name", values = "Exposed population per person")
             var_out = var_out + 1
 
         end if
@@ -1213,6 +1210,61 @@ MODULE mo_netcdf
           allocate(t2m(nxy,nsteps))
           t2m(:,:) = 0
 
+
+        end if
+
+        if (in_imm) then
+
+              ! Open file
+              status = nf90_open(path = imm_file, mode = nf90_nowrite, ncid = ncImmID)
+
+              ! Inquire about time and get its DimID 
+              !
+              do indx=1,size(time_names)
+                !
+                status = nf90_inq_dimid(ncid=ncImmID, name=time_names(indx), dimid=TimeDimID)
+                !
+                ! If found we get the length and VarID out
+                if (status == nf90_noerr) then
+                !=
+                  status = nf90_inquire_dimension(ncid=ncImmID, dimid=TimeDimID, len=ntime)
+                  status = nf90_inq_varid(ncid=ncImmID, name=time_names(indx), varid=TimeVarID)
+                  !
+                  if (ntime .ne. nsteps) then
+                    print *, 'Simulation lenght and immunity fields have different lenght --> Stop.' 
+                    print *, ntime, '/=', nsteps
+                    STOP
+                  end if
+                  !
+                  status = nf90_get_var(ncid=ncImmID, varid=LonVarID, values=time_coord)
+                  !
+                  print *, 'NetCDF Status: found immunity forcing file of len --> ', ntime
+                  ! 
+                  exit
+                !=
+                elseif((indx == size(time_names)) .and. (status /= nf90_noerr)) then
+                  print *, 'NetCDF Status: time dimension not indentified'
+                  STOP
+                end if
+              end do
+              !
+              ! Inquire about immunity and get its VarID
+              do indx=1,size(imm_names)
+                  status = nf90_inq_varid(ncid=ncImmID, name=imm_names(indx), varid=ImmVarID)
+                  
+                  ! If name is found exit do loop
+                  if (status == nf90_noerr) then
+                    print *, 'NetCDF Status: found immunity forcing of name --> ', imm_names(indx)
+                    allocate(imm_2d(nlon,nlat))
+                    !
+                    exit
+                  else if((indx == size(temp_names)) .and. (status /= nf90_noerr)) then
+                    print *, 'NetCDF Status: immunity forcing not indentified'
+                    STOP
+                  end if
+              end do
+              !
+              ! Get immuninty values later --> we read them by slices
 
         end if
 

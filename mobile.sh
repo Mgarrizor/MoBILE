@@ -23,18 +23,19 @@ usage() { echo "Usage:              \n
                 -t: Path to temperature file [String] (Optional) \n
                 -d: Disease ID (0: Cholera) [Integer] \n
                 -n: Number of integration steps (days) [Integer <= length of forcing files] \n
-                -s: Seed [Integer]
-                -a: Number of agents [Integer]
-                -u: Spin up length [days]
-                -v: VECTRI coupling [0: No, 1: Yes]
-                -i: Vector ID [0: gambiae, ...]
-                -x: Area of grid cells 
+                -s: Seed [Integer] \n
+                -a: Number of agents [Integer] \n
+                -u: Spin up [0: no SI ; 1: SU to threshold] \n
+                -v: VECTRI coupling [0: No, 1: Yes] \n
+                -?: Vector ID [0: gambiae, ...] \n
+                -x: Area of grid cells \n
+                -i: Immunity forcing file \n
 
                  "; }
 # Resources
 # https://stackoverflow.com/questions/16483119/an-example-of-how-to-use-getopts-in-bash
 # https://serverfault.com/questions/266867/bash-getops-allow-but-not-require-arg
-while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:x:" flag; do
+while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:x:i:" flag; do
  case $flag in
    h) # Handle the -h flag
    # Display script help information
@@ -50,7 +51,7 @@ while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:x:" flag; do
    r) # Handle the -r flag
    rain_file=$OPTARG
    ;;
-   t) # Handle the -r flag
+   t) # Handle the -t flag
    temp_file=$OPTARG
    ;;
    d) # Handle the -d flag
@@ -59,7 +60,7 @@ while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:x:" flag; do
    n) # Handle the -n flag
    nstep=$OPTARG
    ;;
-   m) # Handle the -n flag
+   m) # Handle the -m flag
    mob=$OPTARG
    ;;
    s) # Handle the -s flag
@@ -71,17 +72,25 @@ while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:x:" flag; do
    c) # Handle the -c flag
    const=$OPTARG
    ;;
-   u) # Handle the -c flag
+   u) # Handle the -u flag
    spin_up=$OPTARG
    ;;
-   v) # Handle the -c flag
+   v) # Handle the -v flag
    vectri=$OPTARG
    ;;
-   x) # Handle the -c flag
+   x) # Handle the -x flag
    area_file=$OPTARG
    ;;
-   i) # Handle the -c flag
-   imm_file=$OPTARG
+   #i) # Handle the -i flag -> argument is not required (no colon after the 'i' flag)
+   #imm_file=$OPTARG
+   i)
+   # This case handles '-i ""', which passes an empty string
+   if [ "$OPTARG" = "NONE" ]; then # if the string has zero length then
+     imm_file=""
+   # This case handles '-i "my_string"'
+   else
+     imm_file="$OPTARG"
+   fi
    ;;
    \?) # Handle invalid options
    usage
@@ -159,6 +168,7 @@ else
   exit 1
 fi
 #
+
 if [[ ${mob} == 1 ]]; then
   echo '================= MOBILITY active ================'
 elif [[ ${mob} == 0 ]]; then
@@ -223,13 +233,12 @@ area_file='${area_file}'
 &HUMAN
 pop_file='${pop_file}',
 nagent=${nagent},
-iforcing=${imm_file}
+imm_file='${imm_file}',
 /
 &CONST
 ${lines}
 /
 EOM
-
 
 # 4) Execute MOBILE (mobile.out)
 echo '================= Running MoBILE ================='

@@ -88,6 +88,11 @@ MODULE mo_namelist
                 read(file_unit,fmt='(A)') line
                 write(stderr,'(A)') 'Invalid line in namelist is: '//trim(line)
             end if
+
+            if (len(trim(imm_file)) /= 0) then
+                print *, '--> Immunity forcing ', imm_file
+                in_imm = .true.
+            end if
             
             close (file_unit)
             

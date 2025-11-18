@@ -31,7 +31,7 @@ USE, INTRINSIC :: ISO_C_BINDING
         integer :: status   ! S=1, E= 2, I=3, A=4, R=5 Susceptible-Exposed-Infected-Asymptomatic-Recovered (SEIAR)
         real    :: EIR_att  ! Entomological inoculation rate
         real    :: hbr_att  ! Human biting rate
-        real    :: imm      ! Endemicity level [0,1]
+        real    :: imm      ! Immunity level [0,1]
         logical :: mat_im   ! Maternal immunity 
        ! real    :: par_load ! Parasite load [Gametocytes/microLiter] 
         integer :: infc_dur ! Infection duration (log-Normal distribution) PfPR ~ 0% (MalariaTheraphy dataset) [ref:m1]
@@ -545,7 +545,11 @@ USE, INTRINSIC :: ISO_C_BINDING
             R(:) = 0.
             !
             EIR(:) = 0.
-            imm(:) = 0.
+            if (.not. in_imm) then ! If not external forcing then reset immunity
+                !
+                imm(:) = 0.
+                !
+            end if
             hbr(:) = 0.
             !
             if (diag_age) then
@@ -577,22 +581,39 @@ USE, INTRINSIC :: ISO_C_BINDING
                     end if
                 end if
                 !
+                if (in_imm) then ! Immunity is set to that of the external forcing
+                    !
+                    people(iagent)%health_status%malaria_status%imm = imm(iloc)
+                    !
+                else ! Otherwise we gather value from agent for diagnostics
+                    imm(iloc) = imm(iloc) + people(iagent)%health_status%malaria_status%imm
+                end if 
+                !
                 EIR(iloc) = EIR(iloc) + people(iagent)%health_status%malaria_status%EIR_att
-                imm(iloc) = imm(iloc) + people(iagent)%health_status%malaria_status%imm
+                !imm(iloc) = imm(iloc) + people(iagent)%health_status%malaria_status%imm
                 hbr(iloc) = hbr(iloc) + people(iagent)%health_status%malaria_status%hbr_att
                 !
             end do 
+            ! Density [km^-2]
             !
-            S(:) = HA(:)*S(:)/A_cell(:)
-            E(:) = HA(:)*E(:)/A_cell(:)
-            I(:) = HA(:)*I(:)/A_cell(:)
-            A(:) = HA(:)*A(:)/A_cell(:)
-            R(:) = HA(:)*R(:)/A_cell(:)
-            !
+            !S(:) = HA(:)*S(:)/A_cell(:)
+            !E(:) = HA(:)*E(:)/A_cell(:)
+            !I(:) = HA(:)*I(:)/A_cell(:)
+            !A(:) = HA(:)*A(:)/A_cell(:)
+            !R(:) = HA(:)*R(:)/A_cell(:)
+            ! Fraction [per person]  = HA*N/(rho*A_cell) = N/npeop - with mobility this will have to 
+            !                                                        be modified 
+            S(:) = S(:)/npeop(:)
+            E(:) = E(:)/npeop(:)
+            I(:) = I(:)/npeop(:)
+            A(:) = A(:)/npeop(:)
+            R(:) = R(:)/npeop(:)
             if (diag_age) then
                 do j = 1, size(age_blocks(:))
-                    Ia(:,j) = HA(:)*Ia(:,j)/A_cell(:)
-                    Aa(:,j) = HA(:)*Aa(:,j)/A_cell(:)
+                    !Ia(:,j) = HA(:)*Ia(:,j)/A_cell(:)
+                    !Aa(:,j) = HA(:)*Aa(:,j)/A_cell(:)
+                    Ia(:,j) = Ia(:,j)/npeop(:)
+                    Aa(:,j) = Aa(:,j)/npeop(:)
                 end do
             end if
             !===================================================
@@ -1082,8 +1103,8 @@ USE, INTRINSIC :: ISO_C_BINDING
                         ! Check if IIP has finished
                         if (people(iagent)%health_status%malaria_status%infc_dur == 0) then
                             !
-                            ! Update immunity/endemicity level
-                            people(iagent)%health_status%malaria_status%imm = people(iagent)%health_status%malaria_status%imm + endemicity(people(iagent)%health_status%malaria_status%imm,e_0,e1,e2,A1)
+                            ! Update immunity level
+                            people(iagent)%health_status%malaria_status%imm = people(iagent)%health_status%malaria_status%imm + dimmunity(people(iagent)%health_status%malaria_status%imm,e_0,e1,e2,A1)
                             !
                             ! Transition to symptomatic with probability prob_symp() if maternal immunity 
                             if ((generate_random() < prob_symp_sig(people(iagent)%health_status%malaria_status%imm,alph_max,alph_min,e_m,sig_m)) .and. (.not. people(iagent)%health_status%malaria_status%mat_im)) then 
@@ -1228,7 +1249,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                              people(iagent)%health_status%active_status%status=.true.  ! You are now alive,
                              people(iagent)%health_status%malaria_status%status=1      ! born susceptible
                              people(iagent)%agent_ID%age=0                             ! and as a baby
-                             people(iagent)%health_status%malaria_status%imm=0.        ! Endemicity level is zero
+                             people(iagent)%health_status%malaria_status%imm=0.        ! Immunity level is zero
                              people(iagent)%health_status%malaria_status%mat_im=.true. ! Maternal immunity is active
                              !
                              if (generate_random() <= 0.51) then ! Sex
@@ -1398,7 +1419,7 @@ USE, INTRINSIC :: ISO_C_BINDING
 
         ! =============== Immunity functions =============================
 
-        function endemicity(imm,e_0,e1,e2,A1) result(delta_e)
+        function dimmunity(imm,e_0,e1,e2,A1) result(delta_e)
 
         ! Return the acquired inmmunity after an infectious bite
 
@@ -1413,7 +1434,7 @@ USE, INTRINSIC :: ISO_C_BINDING
 
             delta_e = e_0*(A1*exp(-imm/e1) + (1-A1)*(1-imm/e2))
 
-        end function endemicity
+        end function dimmunity
         !
         function prob_symp_sig(imm,alph_max,alph_min,e_m,sig_m) result(p)
 
