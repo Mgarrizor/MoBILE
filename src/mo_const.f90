@@ -24,6 +24,7 @@ MODULE mo_const
     real, allocatable    :: scaleI(:)  ! Inverse of scale
     !integer :: nalive       ! Number of alive agents
     real    :: dt = 1.      ! Time step (fixed)
+    real    :: da = 1./365. ! Age increase per time step 
     integer :: ncid_out     ! ID of output NetCDF file
     integer :: ncid_in      ! ID of input NetCDF files
     integer :: ncid_grp(4)  ! ID of groups: 1 - Vector ; 2 - Human ; 3 - Climate ; 4 - Hydro

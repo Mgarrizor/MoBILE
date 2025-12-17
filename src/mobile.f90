@@ -238,20 +238,18 @@ itime = 1
     !
     ! ************** 0.2 Common information **************
 ! Safety ===============
-#ifdef COUPLED     
-    out_D    =.false.
-    out_Q    =.false.
-    out_B    =.false.
-    out_F    =.false.
-    out_A    =.true.
-    out_E    =.true.
-    coupling =.true.
+#ifdef COUPLED   
+    coupling =.true.    ! Vector-borne setting
+    out_D    =.false.   ! No bulk/densiy model of human movement (might be a to-do in VECTRI)
+    out_Q    =.false.   ! No bulk/density model of human movement
+    out_B    =.false.   ! No bacterial load
+    out_F    =.false.   ! We have not defined a force of infection (might be a to-do)
 #else 
-    coupling =.false.
-    out_t2m  =.false.
-    out_EIR  =.false.
-    out_imm  =.false.
-    out_hbr  =.false.
+    coupling =.false.   ! Cholera setting
+    out_t2m  =.false.   ! Temperature is not a forcing field in the cholera model
+    out_EIR  =.false.   ! There is no EIR
+    out_imm  =.false.   ! There is no immunity dynamics
+    out_hbr  =.false.   ! There are no vectors
 #endif
 !=======!
   !
@@ -459,7 +457,7 @@ time_loop: do itime=2,nsteps
   !
   call time_step(disID,itime)
   !
-  WRITE(*,'(1a1,A11,F6.1,A2)', advance='no') char(13),'Integrating',(real(itime)/(nsteps)*100.),' %'
+  WRITE(*,'(1a1,A11,I6,A2,I6,A2,F6.1,A2)', advance='no') char(13),'Integrating',itime,' /',nsteps,' -',(real(itime)/(nsteps)*100.),' %'
   !
   ! Write 3D fields (x,y,t) here
   call netcdf_3D_output(itime,Var3D)

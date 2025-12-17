@@ -172,12 +172,13 @@ subroutine time_step(disID,itime)
           !
           call agents_update(disID,iagent,itime,nattempt,npeop,nbites,m_0,m_1,m_all)
           !
-          if (MOD(itime,365)==0) then ! Ignore leap years
+          ! Old method - age was an integer only saving the year. It's now a float.
+          !if (MOD(itime,365)==0) then ! Ignore leap years
             !
             ! 3.2) Update population age
-            call agents_age(iagent)
+            !call agents_age(iagent)
             !
-          end if
+          !end if
         !
         end do agent_loop
 !$OMP END PARALLEL DO

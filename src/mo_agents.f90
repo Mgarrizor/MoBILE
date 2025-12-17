@@ -66,7 +66,7 @@ USE, INTRINSIC :: ISO_C_BINDING
 
     type agentID
         integer :: name    ! The name of the agent is an integer
-        integer :: age     ! 0-X
+        real ::    age     ! Age is a floating-point number
         integer :: sex     ! F/M   [Non-functional]
         integer :: wealth  ! L/M/H [Non-functional]
         real    :: ratio   ! Human to agent ratio of the agent
@@ -205,8 +205,9 @@ USE, INTRINSIC :: ISO_C_BINDING
                         do ipeo = 1,npeop(ixy)
                             !
                             ! Initialize main agent attributes
-                            people(indx)%agent_ID%age=find_face0(generate_random(),age_weights(:),size(age_weights(:)))
-                            age_counts(people(indx)%agent_ID%age) = age_counts(people(indx)%agent_ID%age) + 1
+                            people(indx)%agent_ID%age=find_face0(generate_random(),age_weights(:),size(age_weights(:))) &
+                                                      + generate_random() 
+                            age_counts(floor(people(indx)%agent_ID%age)) = age_counts(floor(people(indx)%agent_ID%age)) + 1
                             people(indx)%agent_ID%name=indx     !
                             people(indx)%agent_ID%sex=0         ! F = 0, M = 1 [Not in use]
                             people(indx)%agent_ID%wealth=0      ! L = 0, M = 1, H = 2 [Not in use]
@@ -331,8 +332,10 @@ USE, INTRINSIC :: ISO_C_BINDING
                    npeop(loc) = npeop(loc) + 1
                    !
                    ! Initialize main agent attributes
-                   people(indx)%agent_ID%age=find_face0(generate_random(),age_weights(:),size(age_weights(:)))
-                   age_counts(people(indx)%agent_ID%age) = age_counts(people(indx)%agent_ID%age) + 1
+                   people(indx)%agent_ID%age=find_face0(generate_random(),age_weights(:),size(age_weights(:))) &
+                                             + generate_random() ! Selection of year following age structure, and 
+                                                                 ! selection of day from uniform distribution
+                   age_counts(floor(people(indx)%agent_ID%age)) = age_counts(floor(people(indx)%agent_ID%age)) + 1
                    people(indx)%agent_ID%name=indx     !
                    people(indx)%agent_ID%sex=0         ! F = 0, M = 1
                    people(indx)%agent_ID%wealth=0      ! L = 0, M = 1, H = 2
@@ -521,6 +524,9 @@ USE, INTRINSIC :: ISO_C_BINDING
             R(:) = 0.
             do iagent = 1,nagent
                 !
+                ! Increase age by da = 1/365
+                people(iagent)%agent_ID%age =  people(iagent)%agent_ID%age + da
+                !
                 istat    =  people(iagent)%health_status%cholera_status%status
                 iactive  =  people(iagent)%health_status%active_status%status
                 iloc     =  people(iagent)%location_status%currloc
@@ -569,10 +575,13 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             do iagent = 1,nagent
                 !
+                ! Increase age by da = 1/365
+                people(iagent)%agent_ID%age =  people(iagent)%agent_ID%age + da
+                !
                 istat   =  people(iagent)%health_status%malaria_status%status
                 iactive =  people(iagent)%health_status%active_status%status
                 iloc    =  people(iagent)%location_status%currloc
-                iage    =  min(people(iagent)%agent_ID%age,79)
+                iage    =  min(floor(people(iagent)%agent_ID%age),79)
                 !
                 ! Pointer approach to allow vectorization (discarded old branching if ... elseif ...)
                 if (iactive) then
@@ -923,7 +932,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                              !
                              people(iagent)%health_status%active_status%status=.true. ! You are now alive,
                              people(iagent)%health_status%cholera_status%status=1     ! born susceptible
-                             people(iagent)%agent_ID%age=0                            ! and as a baby
+                             people(iagent)%agent_ID%age=0.                            ! and as a baby
                              !
                              if (generate_random() <= 0.51) then ! Sex
                                  people(iagent)%agent_ID%sex=0   ! Female = 0
@@ -1270,7 +1279,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                              !
                              people(iagent)%health_status%active_status%status=.true.  ! You are now alive,
                              people(iagent)%health_status%malaria_status%status=1      ! born susceptible
-                             people(iagent)%agent_ID%age=0                             ! and as a baby
+                             people(iagent)%agent_ID%age=0.                             ! and as a baby
                              people(iagent)%health_status%malaria_status%imm=0.        ! Immunity level is zero
                              people(iagent)%health_status%malaria_status%mat_im=.true. ! Maternal immunity is active
                              !
