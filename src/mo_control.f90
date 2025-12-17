@@ -34,26 +34,27 @@ MODULE mo_control
     ! 3D (x,y,t) Fields
     !
     !======= Agents
-    logical :: out_N    =.true.  ! Agent field
-    logical :: out_HA   =.true.  ! Human to agent ratio
+    logical :: out_N    =.false.  ! Agent field
+    logical :: out_HA   =.false.  ! Human to agent ratio
     !
     !======= Disease
-    logical :: out_S    =.true.  ! Susceptible
-    logical :: out_E    =.true.  ! Exposed
-    logical :: out_I    =.true.  ! Infected
-    logical :: out_Ia   =.true.  ! Age-disaggregated Infected
-    logical :: out_A    =.true.  ! Asymptomatic
+    logical :: out_S    =.false.  ! Susceptible
+    logical :: out_E    =.false.  ! Exposed
+    logical :: out_I    =.false.  ! Infected
+    logical :: out_Ia   =.false.  ! Age-disaggregated Infected
+    logical :: out_A    =.false.  ! Asymptomatic
     logical :: out_Aa   =.false.  ! Age-disaggregated Asymptomatic
-    logical :: out_R    =.true.  ! Recovered
+    logical :: out_R    =.false.  ! Recovered
 
-    logical :: diag_age = .true. ! Create age-stratified diagnostics
+    logical :: diag_age = .false. ! Create age-stratified diagnostics
     !--- Cholera ----
     logical :: out_B    =.true.  ! Bacterial density (could be changed to generic source of disease, e.g., B, V,...)
     logical :: out_F    =.true.  ! Force of infection
     !--- Malaria ----
     logical :: out_EIR  =.true.  ! Entomological Inoculation Rate
-    logical :: out_imm  =.true.  ! Endemicity level / Immunity
-    logical :: out_hbr  =.true.  ! Human Biting Rate
+    logical :: out_imm  =.false.  ! Endemicity level / Immunity
+    logical :: out_imm_a=.false.  ! Age-disaggregated Immunity
+    logical :: out_hbr  =.false.  ! Human Biting Rate
     logical :: in_imm   =.false. ! Input immunity forcing flag: always false and automatically set to true is the corresponding
                                  ! forcing file is found.
     !
@@ -71,6 +72,7 @@ MODULE mo_control
     character(len=100) :: t2m_file   ! Name of temperature file
     character(len=100) :: area_file  ! Name of cell area file
     character(len=100) :: imm_file   ! Name of immunity forcing file
+    character(len=100) :: namelist_filename
     !----------------------------------------------------------
 
     ! https://fortran-lang.org/en/learn/quickstart/arrays_strings/#array-of-strings
@@ -81,7 +83,7 @@ MODULE mo_control
     character(len=100) ::  rain_names(5)= [character(len=20) :: "rain", "rainfall", "precipitation", "tp", "precip"]
     character(len=100) ::  temp_names(1)= [character(len=20) :: "temperature"]
     character(len=100) ::  area_names(1)= [character(len=20) :: "cell_area"]
-    character(len=100) ::  imm_names(1)= [character(len=20) :: "imm"]
+    character(len=100) ::  imm_names(2)= [character(len=20) :: "imm","imm_bulk"]
 
     ! Attribute names
     integer, parameter :: att_len = 6

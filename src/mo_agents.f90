@@ -110,10 +110,12 @@ USE, INTRINSIC :: ISO_C_BINDING
             integer :: ipeo, indx, loc
             real :: norm, norm_check, rand
             integer :: nfaces
-            integer :: j          ! Short trip location index
             real, allocatable :: cdf_health(:) ! Cumulative distribution to asign agent health based on initial profile
             real :: cdf(nxy)      ! Cumulative distribution to asign agent location based on human density
             integer :: stat_health
+#ifdef MOBILITY
+            integer :: j          ! Short trip location index
+#endif
             
             !
             call random_seed()       ! Each simulation generates a different series of random numbers
@@ -143,8 +145,10 @@ USE, INTRINSIC :: ISO_C_BINDING
             allocate(people(nagent))
             ! Allocate array of the number of agents in each grid cell
             allocate(npeop(nxy))
+            npeop(:) = 0
             ! Allocate array of the human to agent ratio
             allocate(HA(nxy))
+            HA(:) = 0.
             ! Allocate array of number of growth attempts 
             allocate(n_attempt(nxy))
             !
@@ -420,7 +424,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             end do
             !
             ! Assign human to agent ratio once all agents have been initialised
-            HA(:) = 0.
+            !
             where((pop_dens(:) > 0.) .and. (npeop(:) > 0)) HA(:) = pop_dens(:)*A_cell(:)/npeop(:)
             !HA(:) = pop_dens(:)*A_cell(:)/npeop(:)
             !
@@ -483,7 +487,7 @@ USE, INTRINSIC :: ISO_C_BINDING
 
             allocate(age_weights(num_elements))
             allocate(age_counts(0:num_elements-1))
-            allocate(Iage_stat_ptr(5,num_elements)) ! SEIAR = 5
+            allocate(Iage_stat_ptr(7,num_elements)) ! SEIAR = 5 + imm + N(a) 
             !
             age_counts(:) = 0
             do i = 1, num_elements
@@ -558,6 +562,9 @@ USE, INTRINSIC :: ISO_C_BINDING
                 Ia(:,:) = 0.
                 Aa(:,:) = 0.
                 Ra(:,:) = 0.
+
+                imm_a(:,:) = 0.
+                N_a(:,:)   = 0.
             end if 
             !
             do iagent = 1,nagent
@@ -569,28 +576,36 @@ USE, INTRINSIC :: ISO_C_BINDING
                 !
                 ! Pointer approach to allow vectorization (discarded old branching if ... elseif ...)
                 if (iactive) then
-                    ! bulk
+                    ! bulk SEIAR
                     status_pointer(istat)%arr_p(iloc) = &
                     status_pointer(istat)%arr_p(iloc) + 1.
                     !
+                    if (in_imm) then ! Immunity is set to that of the external forcing
+                        !
+                        people(iagent)%health_status%malaria_status%imm = imm(iloc)
+                        !
+                    else ! Otherwise we gather value from agent for diagnostics
+                        imm(iloc) = imm(iloc) + people(iagent)%health_status%malaria_status%imm
+                    end if 
+                    !
                     if (diag_age) then
-                        ! Disaggregated by age
+                        ! SEIAR disaggregated by age
                         Iage_stat_ptr(istat,iage+1)%arr_p(iloc) = &
                         Iage_stat_ptr(istat,iage+1)%arr_p(iloc) + 1.
+                        !
+                        ! Immunity disaggregated by age
+                        Iage_stat_ptr(6,iage+1)%arr_p(iloc) = &
+                        Iage_stat_ptr(6,iage+1)%arr_p(iloc) + &
+                        people(iagent)%health_status%malaria_status%imm
+                        !
+                        ! Agent number disaggregated by age
+                        Iage_stat_ptr(7,iage+1)%arr_p(iloc) = &
+                        Iage_stat_ptr(7,iage+1)%arr_p(iloc) + 1.
                         !
                     end if
                 end if
                 !
-                if (in_imm) then ! Immunity is set to that of the external forcing
-                    !
-                    people(iagent)%health_status%malaria_status%imm = imm(iloc)
-                    !
-                else ! Otherwise we gather value from agent for diagnostics
-                    imm(iloc) = imm(iloc) + people(iagent)%health_status%malaria_status%imm
-                end if 
-                !
                 EIR(iloc) = EIR(iloc) + people(iagent)%health_status%malaria_status%EIR_att
-                !imm(iloc) = imm(iloc) + people(iagent)%health_status%malaria_status%imm
                 hbr(iloc) = hbr(iloc) + people(iagent)%health_status%malaria_status%hbr_att
                 !
             end do 
@@ -612,8 +627,12 @@ USE, INTRINSIC :: ISO_C_BINDING
                 do j = 1, size(age_blocks(:))
                     !Ia(:,j) = HA(:)*Ia(:,j)/A_cell(:)
                     !Aa(:,j) = HA(:)*Aa(:,j)/A_cell(:)
-                    Ia(:,j) = Ia(:,j)/npeop(:)
-                    Aa(:,j) = Aa(:,j)/npeop(:)
+                    !Ia(:,j) = Ia(:,j)/npeop(:)
+                    !Aa(:,j) = Aa(:,j)/npeop(:)
+                    Ia(:,j) = Ia(:,j)/N_a(:,j)
+                    Aa(:,j) = Aa(:,j)/N_a(:,j)
+                    !
+                    imm_a(:,j) = imm_a(:,j)/N_a(:,j)  ! Normalize by number of people in that age group
                 end do
             end if
             !===================================================
@@ -1061,21 +1080,24 @@ USE, INTRINSIC :: ISO_C_BINDING
                         ! Human to Vector transmission
                         !
                         lambda_0 = m_0(j)*1. ! f(a,t) = 1 
-                        P_0 = P_max*(1 - exp(-lambda_0*P_h0))
+                        !P_0 = P_max*(1 - exp(-lambda_0*P_h0))               ! Poisson
+                        P_0 = P_max*(1 - (k_NB/(k_NB+lambda_0*P_h0))**k_NB) ! Negative Binomial
                         !
                         ! Vector to Human transmission
                         !
                         lambda_1 = m_1(j)*1. ! f(a,t) = 1 
-                        P_1 = 1 - exp(-lambda_1*P_v0)
+                        !P_1 = 1 - exp(-lambda_1*P_v0)               ! Poisson
+                        P_1 = 1 - (k_NB/(k_NB+lambda_1*P_v0))**k_NB ! Negative Binomial
                         !
                         ! Apply numerical threshold ---> Need to optimize transmission events for cases where P < epsilon
                         P_0 = min(real(floor(P_0/eps)),P_0)
                         P_1 = min(real(floor(P_1/eps)),P_1)
                         ! 
-                        ! Save agent-specific daily entomological inoculation rate
+                        ! Save agent-specific 'bulk' daily entomological inoculation rate (EIR)
                         people(iagent)%health_status%malaria_status%EIR_att = lambda_1
+                        !people(iagent)%health_status%malaria_status%EIR_att = P_1 ! Temporary check
 
-                        ! Save agent-specific biting rate (hbr)
+                        ! Save agent-specific 'bulk' daily biting rate (hbr)
                         people(iagent)%health_status%malaria_status%hbr_att = lambda_all
                     !===
                     !
@@ -1104,7 +1126,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                         if (people(iagent)%health_status%malaria_status%infc_dur == 0) then
                             !
                             ! Update immunity level
-                            people(iagent)%health_status%malaria_status%imm = people(iagent)%health_status%malaria_status%imm + dimmunity(people(iagent)%health_status%malaria_status%imm,e_0,e1,e2,A1)
+                            people(iagent)%health_status%malaria_status%imm = min(people(iagent)%health_status%malaria_status%imm + dimmunity(people(iagent)%health_status%malaria_status%imm,e_0,e1,e2,A1), 1.)
                             !
                             ! Transition to symptomatic with probability prob_symp() if maternal immunity 
                             if ((generate_random() < prob_symp_sig(people(iagent)%health_status%malaria_status%imm,alph_max,alph_min,e_m,sig_m)) .and. (.not. people(iagent)%health_status%malaria_status%mat_im)) then 

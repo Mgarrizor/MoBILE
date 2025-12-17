@@ -27,7 +27,8 @@ MODULE mo_const
     integer :: ncid_out     ! ID of output NetCDF file
     integer :: ncid_in      ! ID of input NetCDF files
     integer :: ncid_grp(4)  ! ID of groups: 1 - Vector ; 2 - Human ; 3 - Climate ; 4 - Hydro
-    integer :: ncid_sbgrp(5)! ID of disease subgroups: 1 - Susceptible ; 2 - Exposed ; 3 - Infected ; 4 - Asymptomatic ; 5 - Recovered
+    integer :: ncid_sbgrp(6)! ID of disease subgroups: 1 - Susceptible ; 2 - Exposed ; 3 - Infected ; 4 - Asymptomatic ; 5 - Recovered
+                            !                          6 - Immunity                
     integer :: TempVarID, ncTempID
     integer :: RainVarID, ncRainID
     integer :: AreaVarID, ncAreaID
@@ -68,6 +69,7 @@ MODULE mo_const
     ! Labels of disaggregated age structure (to improve --> automatise based on age_blocks(:))
     character(len=100) ::  I_age_names(8)= [character(len=20) :: "I_0<","I_1-4","I_5-9","I_10-14","I_15-19","I_20-39","I_40-59","I_60>"]
     character(len=100) ::  A_age_names(8)= [character(len=20) :: "A_0<","A_1-4","A_5-9","A_10-14","A_15-19","A_20-39","A_40-59","A_60>"]
+    character(len=100) ::  imm_age_names(8)= [character(len=20) :: "imm_0<","imm_1-4","imm_5-9","imm_10-14","imm_15-19","imm_20-39","imm_40-59","imm_60>"]
     
     !********* Spin Up ***************************
 
@@ -123,7 +125,7 @@ MODULE mo_const
       real, pointer :: arr_p(:)
     end type array_pointers
     
-    type(array_pointers) :: status_pointer(5)
+    type(array_pointers) :: status_pointer(5)  ! SEIAR 
     type(array_pointers), allocatable :: Iage_stat_ptr(:,:)  !(istatus,iage)
 
     !--- Cholera ---
@@ -147,10 +149,13 @@ MODULE mo_const
     real, allocatable :: EIR(:)   ! 1D long array for Entomological Inoculation Rate
     real, allocatable :: hbr(:)   ! 1D long array for Human Biting Rate
     real, allocatable :: imm(:)   ! 1D long array for Endemicity level / Immunity
-    real, allocatable :: imm_2D(:,:) ! 2D array for immunity forcing at slice itime
-    ! Malaria parameters
+    real, allocatable :: imm_2D(:,:) ! (nx,ny) 2D array for immunity forcing at slice itime
+    real, allocatable, target :: imm_a(:,:) !(nxy,nage_blocks) Immunity disaggregated by age
+    real, allocatable, target :: N_a(:,:) !(nxy,nage_blocks)   Agent number disaggregated by age
+    ! Host-vector parameters
 
-    real :: K_h
+    real :: K_h                         ! 
+    real :: k_NB                        ! Negative Binomial dispersion coefficient
     !real :: srho
 
     integer :: iip 
@@ -162,7 +167,7 @@ MODULE mo_const
     real :: b_rate                      ! Mosquito biting rate (bites/mosquito/day)
 
     real :: e_0, e1, e2, A1, e_th, mat_rate ! Immunity - immunity acquisition parametrization
-    real :: d_sig,d_mu,sig_1,mu_1         ! Immunity - clearance times parametrization
+    real :: d_sig,d_mu,sig_1,mu_1           ! Immunity - clearance times parametrization
     real :: fA_chr                          ! Fraction of chronic asymptomatics
     integer :: tau_chr                      ! Duration of chronic parasitaemia
  
@@ -194,7 +199,7 @@ MODULE mo_const
     !********** NetCDF **************************
     real                 :: fill_pop       !
     ! NetCDF IDs
-    integer, allocatable :: VarId(:)
+    integer, allocatable :: arr_VarID(:)
     integer :: DimId(4) = [1,2,3,4] !(lon,lat,time,age)
     integer :: Var3D
     ! Attribute list
@@ -266,14 +271,15 @@ MODULE mo_const
                               !                                  ~ 0.125       Bousema  et al. 2011 [DOI:] ---> and references therein | Ouedraogo 2009 [DOI:]
                               !                                                                                                        | Schneider 2007 [DOI:]
                               ! Vector biting rate [day^(-1)]
-        b_rate = 1.0           ! 20 - mean of 1.6 bites/person/hour from 18:00 - 6:30 (~ 1.6*12.5=20) Nzioki et al. 2023 [DOI:]
-        K_h = 500.
+        b_rate = 0.5          ! 20 [bites/person/day] - mean of 1.6 bites/person/hour from 18:00 - 6:30 (~ 1.6*12.5=20) Nzioki et al. 2023 [DOI:]
+        K_h = 0.0003          ! Free (tuning) parameter
+        k_NB = 2.5            ! Guelbéogo et al. 2018 [DOI: https://doi.org/10.7554/eLife.32625]
       !  srho = 1.0
 
-        ! mu  = 1./(61.*365)    ! Background human mortality rate [day^-1] [ref]
+        ! mu  = 1./(61.*365)    ! Background human mortality rate [day^-1] [ref] 
 
-        mu  = 0.0354/365.  ! Birth and mortality rate - Exponential fit to age structure in WorldPop Senegal 2020
-        ! Immunity
+        mu  = 0.0354/365.  ! Birth and mortality rate - Exponential fit to Senegal's 2020 WorldPop age structure 
+        !-- Immunity scheme --!
         e_0    = 0.2
         !e_0    = 0.09     ! Base increase in endemicity level [per infectious bite]                  [x]
         e1     = 0.5*e_0  ! e-folding factor in boosted maternal/naive immunity acquisition (fast) [e_0]
@@ -287,13 +293,14 @@ MODULE mo_const
                                   ! 3   months Ghani 2009 [DOI:]
         rho = log(2.)/(6.*365)    ! Decay rate of endemicity/immunity level = ln(2)/(Half-life of clinical immunity) 5   [yr] Filipe 2007 [DOI:]
                                   !                                                                                  6.9 [yr] Ghani 2009  [DOI:]
-        !-- Clearance times       ! The reported mean and std are those of the corresponding normal distribution.
+        !-- Clearance time scheme --!
+                                  ! The reported mean and std are those of the corresponding normal distribution.
         d_mu    = -3.54           ! mu_1 = 5.2  (MT (PfPR ~ 0 %) [Sama et al. 2006a]), mu_2 = 1.66 (Ghana (PfPR ~ 75%) [Bretscher et al. 2011])
         d_sig   =  0.47           ! sig1 = 0.73 (MT (PfPR ~ 0 %) [Sama et al. 2006a]), sig2 = 1.20 (Ghana (PfPR ~ 75%) [Bretscher et al. 2011])
         sig_1   =  0.73           ! 
         mu_1    =  5.2            !
 
-        ! Symptomatics 
+        !-- Symptomatic scheme --!
                           ! These values are only relevant when 
         fA_chr   = 0.05   ! Fraction of chronic asymptomatics [unkown]
         tau_chr  = 365.*2    ! Duration of chronic parasitaemia  [unkown]

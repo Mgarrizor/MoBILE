@@ -35,7 +35,7 @@ usage() { echo "Usage:              \n
 # Resources
 # https://stackoverflow.com/questions/16483119/an-example-of-how-to-use-getopts-in-bash
 # https://serverfault.com/questions/266867/bash-getops-allow-but-not-require-arg
-while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:x:i:" flag; do
+while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:x:i:l:" flag; do
  case $flag in
    h) # Handle the -h flag
    # Display script help information
@@ -81,6 +81,9 @@ while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:x:i:" flag; do
    x) # Handle the -x flag
    area_file=$OPTARG
    ;;
+   l) # Handle the -x flag
+   name_list=$OPTARG
+   ;;
    #i) # Handle the -i flag -> argument is not required (no colon after the 'i' flag)
    #imm_file=$OPTARG
    i)
@@ -102,7 +105,7 @@ done
 # 0) Prepare folder to save simulation and namelist options
 
 path=$PWD/$filename
-namelist=namelist.nml
+namelist=$name_list
 
 # If you are trying to run MOBILE in the root stop simulation
 # Useful for GitHub development.
@@ -242,8 +245,8 @@ EOM
 
 # 4) Execute MOBILE (mobile.out)
 echo '================= Running MoBILE ================='
-${path}/mobile.out ${namelist}
+${path}/mobile.out ${namelist}     # Pass namelist name as command line argument
 #-------------------------------
-mv namelist.nml ${filename}.nc ${filename}.info ${filename}/
+mv ${namelist} ${filename}.nc ${filename}.info ${filename}/
 cp $const ${filename}/
 

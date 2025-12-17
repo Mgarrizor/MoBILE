@@ -67,6 +67,8 @@ MOD1 := $(filter-out $(MAIN),$(SRCS))
 #MOD1:= $(FILTERED:%=$(BUILD_DIR)/%)
 MOD2:= $(addprefix $(strip $(BUILD_DIR))/,$(MOD1:./src/%.f90=%.o))
 
+MOD3:= $(addprefix $(strip $(BUILD_DIR))/,$(MOD1:./src/%.f90=%.mod))
+
 DEPENDS := $(shell find -L $(DEPS_DIR) -name '*.d')
 #MOD2:= $(MOD1:%.f90.o=%.f90.mod)
 #=============================================
@@ -75,7 +77,6 @@ DEPENDS := $(shell find -L $(DEPS_DIR) -name '*.d')
 # String substitution
 # reference: https://www.gnu.org/software/make/manual/html_node/Text-Functions.html#Text-Functions
 # Nomenclature: $(text:pattern=replacement)
-
 
 #OBJS := $(SRCS:%=$(BUILD_DIR)/%.o)
 #MOD  := $(SRCS:%=$(BUILD_DIR)/%.o)
@@ -86,6 +87,7 @@ OBJS := $(addprefix $(strip $(BUILD_DIR))/,$(SRCS:./src/%.f90=%.o))
 #   executable (.out) file by triggering the chain 
 #   of rules written below
 # Look for $(EXE)!
+
 all: $(EXE)
 	@echo 'Successful compilation'
 
@@ -93,6 +95,7 @@ all: $(EXE)
 # Linking step
 # - Requires object file of main
 #   source file (mobile.f90), mobile.o
+
 $(EXE): ./build/mobile.o
 	@echo '2.- Link step'
 	@$(FC) $(OBJS) -o $(EXE) $(INC_LIBS) $(PROF_LIB) $(DEBUG) $(FAST) 
@@ -101,18 +104,21 @@ $(EXE): ./build/mobile.o
 # - Generate main object file only if module object files or
 #   main source file are newer than main object.
 # - Look for module source files and module objects
+
 ./build/mobile.o: $(MOD2) $(MAIN)
 	@echo '1.- Compile main' $(MAIN)
 	@$(FC) -c $(MAIN) -I $(BUILD_DIR) -o $@ $(INC_FLAGS) $(DEBUG) $(FAST) $(COUPLING_FLAG) $(MOBILITY_FLAG)
 
 # Runs first -----------------------------------
 -include $(DEPENDS)
+
 # - Compile module only if its .f90 source
 #   file is newer than the corresponding
 #   object file, $(MOD2). 
 # - By including the above dependencies the module will 
 #   also be recompiled if any dependency source file
 #   is newer.
+
 $(MOD2): ./build/%.o : ./src/%.f90 
 	@echo '0.- Compile module' $<
 	@mkdir -p $(BUILD_DIR)

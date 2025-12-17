@@ -220,16 +220,15 @@ subroutine time_step(disID,itime)
         case (1) ! Malaria
           !
           ! Calculate average daily EIR on a per person basis (use human to agent ratio: HA(:))
-          !EIR(:) = EIR(:)/npeop(:)
-          
+          !
           where((mask_pop(:)) .and. (npeop(:)>0)) EIR(:) = EIR(:)/npeop(:)/HA(:)!P_a!/HA(:)
 
           ! Calculate average daily hbr
-          !hbr(:) = hbr(:)/npeop(:)
+          !
           where((mask_pop(:)) .and. (npeop(:)>0)) hbr(:) = hbr(:)/npeop(:)/HA(:)!P_a!/HA(:)
 
           ! Calculate average daily e_l (endemicity level)
-          !imm(:) = imm(:)/npeop(:)
+          !
           if (.not. in_imm) then
             where((mask_pop(:)) .and. (npeop(:)>0)) imm(:) = imm(:)/npeop(:)
           end if

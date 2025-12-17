@@ -21,6 +21,8 @@ MODULE mo_netcdf
 
     CONTAINS
 
+      !character(len=100) ::  status_list(1)= [character(len=20) :: "time"]
+
       subroutine netcdf_input
 
 
@@ -46,7 +48,7 @@ MODULE mo_netcdf
             !call write_check_2D(Q(xy_seed,:),var_out,'NetCDF Status Q')
             !
 
-            status = nf90_put_var(ncid = ncid_out, varid = VarId(var_out), & 
+            status = nf90_put_var(ncid = ncid_out, varid = arr_VarID(var_out), & 
                                   values = reshape((Q(xy_seed,:)), shape = (/ nlon, nlat /)))
             var_out = var_out + 1
 
@@ -54,14 +56,14 @@ MODULE mo_netcdf
 
         if ((out_D)) then            
            
-            status = nf90_put_var(ncid = ncid_out, varid = VarId(var_out), & 
+            status = nf90_put_var(ncid = ncid_out, varid = arr_VarID(var_out), & 
                                  values = reshape((dist(xy_seed,:)), shape = (/ nlon, nlat /)))
             var_out = var_out + 1
         end if 
 
         if ((out_age)) then            
             
-            status = nf90_put_var(ncid = ncid_grp(2), varid = VarId(var_out), & 
+            status = nf90_put_var(ncid = ncid_grp(2), varid = arr_VarID(var_out), & 
                                  values = age_counts(:))
             var_out = var_out + 1
         end if 
@@ -72,14 +74,14 @@ MODULE mo_netcdf
         !
         if ((out_wurbn)) then
             !
-            status = nf90_put_var(ncid = ncid_grp(4), varid = VarId(var_out), & 
+            status = nf90_put_var(ncid = ncid_grp(4), varid = arr_VarID(var_out), & 
                                  values = reshape((rwaterurbn*wurbn_ratio), shape = (/ nlon, nlat /)))
             var_out = var_out + 1!
         end if 
         !
         if ((out_wperm)) then
             !
-            status = nf90_put_var(ncid = ncid_grp(4), varid = VarId(var_out), & 
+            status = nf90_put_var(ncid = ncid_grp(4), varid = arr_VarID(var_out), & 
                                  values = reshape((rwaterperm*wperm_ratio), shape = (/ nlon, nlat /)))
             var_out = var_out + 1!
         end if 
@@ -105,7 +107,7 @@ MODULE mo_netcdf
       ! Local use only
       integer :: status
 
-      status = nf90_put_var(ncid = ncID, varid = VarId(var_out), & 
+      status = nf90_put_var(ncid = ncID, varid = arr_VarID(var_out), & 
                             values = reshape((var), shape = (/ nlon, nlat /)))
       var_out = var_out + 1
       if(status /= nf90_noerr) then
@@ -120,7 +122,7 @@ MODULE mo_netcdf
         integer, intent(in) :: itime, Var3D
 
         ! Local use
-        integer :: var_out  !,status
+        integer :: var_out
         integer :: k
 
         ! 3D Fields
@@ -247,9 +249,21 @@ MODULE mo_netcdf
             !
         end if
         !
-        if ((out_imm)) then
+        if ((out_imm) .and. (out_imm_a)) then
             !
-            call write_check_3D(itime,imm,var_out,'NetCDF Status Endemicity level / Immunity',ncid_grp(2))
+            call write_check_3D(itime,imm,var_out,'NetCDF Status Endemicity level / Immunity - A',ncid_sbgrp(6))
+            !
+        else if (out_imm) then
+            !
+            call write_check_3D(itime,imm,var_out,'NetCDF Status Endemicity level / Immunity - B',ncid_grp(2))
+            !
+        end if
+
+        if (out_imm_a) then
+            !
+            do k = 1, size(age_blocks(:))
+                call write_check_3D(itime,imm_a(:,k),var_out,'NetCDF Status imm_a',ncid_sbgrp(6))
+            end do
             !
         end if
         !
@@ -261,11 +275,11 @@ MODULE mo_netcdf
         !
         if ((out_HA)) then
             !
-            call write_check_3D(itime,HA,var_out,'NetCDF Status Human to agent field',ncid_grp(2))
+            call write_check_3D(itime,HA,var_out,'NetCDF Status Human to Agent field',ncid_grp(2))
             !
         end if
         !
-#endif
+#endif  !============================= END VECTRI ==============
 
 
       end subroutine netcdf_3D_output
@@ -285,7 +299,7 @@ MODULE mo_netcdf
       ! Local use only
       integer :: status
 
-      status = nf90_put_var(ncid = ncID, varid = VarId(var_out), & 
+      status = nf90_put_var(ncid = ncID, varid = arr_VarID(var_out), & 
                             values = reshape((var), shape = (/ nlon, nlat /)), &
                             start = (/ 1, 1, itime /))
       var_out = var_out + 1
@@ -293,6 +307,7 @@ MODULE mo_netcdf
       if(status /= nf90_noerr) then
        print *, err_mes
        print *, itime
+       print *, NF90_STRERROR(status) 
        STOP
       end if
 
@@ -313,7 +328,7 @@ MODULE mo_netcdf
       ! Local use only
       integer :: status
 
-      status = nf90_put_var(ncid = ncID, varid = VarId(var_out), & 
+      status = nf90_put_var(ncid = ncID, varid = arr_VarID(var_out), & 
                             values = reshape((var), shape = (/ nlon, nlat /)), &
                             start = (/ 1, 1, itime /))
       var_out = var_out + 1
@@ -402,10 +417,14 @@ MODULE mo_netcdf
                   +merge(1, 0, out_EIR)   +merge(1, 0, out_hbr)     +merge(1, 0, out_E)&
                   +merge(1, 0, out_imm)   +merge(1,0, out_N)        +merge(1,0, out_HA)
         !
+        if (out_imm_a) then
+            dim = dim + size(age_blocks(:))
+        end if
+        !
 #endif
 
-        allocate(VarId(dim))
-
+        allocate(arr_VarId(dim))
+        arr_VarID(:) = 0
 
         !=== Create 
         ! - Returns a netCDF ID that can subsequently be used 
@@ -422,47 +441,46 @@ MODULE mo_netcdf
         ! See below "About coordinate systems"
 
         ! ------------- Longitude --------------------------------
-        VarId(var_out)=var_out
+        !
         status = nf90_def_var(ncid = ncid_out, name = "lon", xtype = nf90_double, &
-                      dimids = DimId(1), varid = VarId(var_out))
+                      dimids = DimId(1), varid = arr_VarID(var_out))
         ! Write longitude attributes
         do indx=1,size(att_names)
             if (len(trim(lon_att(indx))) /= 0) then 
-              status = nf90_put_att(ncid=ncid_out, varid = VarId(var_out), name=att_names(indx), values=lon_att(indx))
+              status = nf90_put_att(ncid=ncid_out, varid = arr_VarID(var_out), name=att_names(indx), values=lon_att(indx))
             end if 
         end do
         var_out = var_out + 1
-
+        !
         ! ------------- Latitude --------------------------------
-        VarId(var_out)=var_out
+        !
         status = nf90_def_var(ncid = ncid_out, name = "lat", xtype = nf90_double, &
-                      dimids = DimId(2), varid = VarId(var_out))
+                      dimids = DimId(2), varid = arr_VarID(var_out))
         ! Write latitude attributes
         do indx=1,size(att_names)
             if (len(trim(lat_att(indx))) /= 0) then 
-              status = nf90_put_att(ncid=ncid_out, varid = VarId(var_out), name=att_names(indx), values=lat_att(indx))
+              status = nf90_put_att(ncid=ncid_out, varid = arr_VarID(var_out), name=att_names(indx), values=lat_att(indx))
             end if 
         end do
         var_out = var_out + 1
-
+        !
         ! ------------- Time --------------------------------
-        VarId(var_out)=var_out
+        !
         status = nf90_def_var(ncid = ncid_out, name = "time", xtype = nf90_double, &
-                      dimids = DimId(3), varid = VarId(var_out))
+                      dimids = DimId(3), varid = arr_VarID(var_out))
 
         if (out_rain) then
         ! Write time attributes
           do indx=1,size(att_names)
                 !
                 if (len(trim(time_att(indx))) /= 0) then 
-                  status = nf90_put_att(ncid=ncid_out, varid = VarId(var_out), name=att_names(indx), values=time_att(indx))
+                  status = nf90_put_att(ncid=ncid_out, varid = arr_VarID(var_out), name=att_names(indx), values=time_att(indx))
                 end if 
                 !
           end do
         end if
         var_out = var_out + 1
         !
-
         !
         ! We write time attributes in the 3D field along the climatic forcings
 
@@ -479,46 +497,42 @@ MODULE mo_netcdf
         end if
         !
         if ((out_pop)) then
-
-            VarId(var_out)=var_out
+            !
             status = nf90_def_var(ncid = ncid_grp(2), name = "pop", xtype = nf90_double, &
-                      dimids = (/ DimId(1), DimId(2) /), varid = VarId(var_out))
-            status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "units", values = "km^-2")
-            status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "long_name", values = "Human population density")
-         !   status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "_FillValue", values = FillValue)
-            status = nf90_def_var_fill(ncid_grp(2), VarId(var_out), 0, FillValue)
+                      dimids = (/ DimId(1), DimId(2) /), varid = arr_VarID(var_out))
+            status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "units", values = "km^-2")
+            status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "long_name", values = "Human population density")
+         !   status = nf90_put_att(ncid = ncid_out, varid = arr_VarID(var_out), name = "_FillValue", values = FillValue)
+            status = nf90_def_var_fill(ncid_grp(2), arr_VarID(var_out), 0, FillValue)
             var_out = var_out + 1
-
+            !
         end if
-
+        !
         if ((out_Q)) then
-
-            VarId(var_out)=var_out
+            !
             status = nf90_def_var(ncid = ncid_out, name = "Q", xtype = nf90_double, &
-                      dimids = (/ DimId(1), DimId(2) /), varid = VarId(var_out))
-            status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "units", values = "[]")
+                      dimids = (/ DimId(1), DimId(2) /), varid = arr_VarID(var_out))
+            status = nf90_put_att(ncid = ncid_out, varid = arr_VarID(var_out), name = "units", values = "[]")
             var_out = var_out + 1
-
+            !
         end if
 
         if ((out_D)) then
-
-            VarId(var_out)=var_out
+            !
             status = nf90_def_var(ncid = ncid_out, name = "D", xtype = nf90_double, &
-                      dimids = (/ DimId(1), DimId(2) /), varid = VarId(var_out))
-            status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "units", values = "[km]")
+                      dimids = (/ DimId(1), DimId(2) /), varid = arr_VarID(var_out))
+            status = nf90_put_att(ncid = ncid_out, varid = arr_VarID(var_out), name = "units", values = "[km]")
             var_out = var_out + 1
-
+            !
         end if
-
+        
         if ((out_age)) then
-
-            VarId(var_out)=var_out
+            !
             status = nf90_def_var(ncid = ncid_grp(2), name = "Age", xtype = nf90_double, &
-                     dimids = DimId(4), varid = VarId(var_out))
-            status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "units", values = "[counts]")
+                     dimids = DimId(4), varid = arr_VarID(var_out))
+            status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "units", values = "[counts]")
             var_out = var_out + 1
-
+            !
         end if
 
 
@@ -533,20 +547,18 @@ MODULE mo_netcdf
         ! Declarations or interfaces related to the coupled mode
         if ((out_wurbn)) then
             !
-            VarId(var_out)=var_out
             status = nf90_def_var(ncid = ncid_grp(4), name = "wurbn", xtype = nf90_double, &
-                      dimids = (/ DimId(1), DimId(2) /), varid = VarId(var_out))
-            status = nf90_put_att(ncid = ncid_grp(4), varid = VarId(var_out), name = "units", values = "[fraction]")
+                      dimids = (/ DimId(1), DimId(2) /), varid = arr_VarID(var_out))
+            status = nf90_put_att(ncid = ncid_grp(4), varid = arr_VarID(var_out), name = "units", values = "[fraction]")
             var_out = var_out + 1
             !
         end if
         !
         if ((out_wperm)) then
             !
-            VarId(var_out)=var_out
             status = nf90_def_var(ncid = ncid_grp(4), name = "wperm", xtype = nf90_double, &
-                      dimids = (/ DimId(1), DimId(2) /), varid = VarId(var_out))
-            status = nf90_put_att(ncid = ncid_grp(4), varid = VarId(var_out), name = "units", values = "[fraction]")
+                      dimids = (/ DimId(1), DimId(2) /), varid = arr_VarID(var_out))
+            status = nf90_put_att(ncid = ncid_grp(4), varid = arr_VarID(var_out), name = "units", values = "[fraction]")
             var_out = var_out + 1
             !
         end if
@@ -554,8 +566,8 @@ MODULE mo_netcdf
 #endif
         
 
-        ! 3D Fields (x,y,t)
-        !
+        !----------------------------
+        ! Create subgroups
         if ((out_Ia)) then
             status = nf90_def_grp(parent_ncid = ncid_out, name = 'I', new_ncid = ncid_sbgrp(3))
             if(status /= nf90_noerr) then
@@ -573,112 +585,116 @@ MODULE mo_netcdf
             end if
         end if
         !
+        if ((out_imm_a)) then
+            status = nf90_def_grp(parent_ncid = ncid_out, name = 'imm', new_ncid = ncid_sbgrp(6))
+            if(status /= nf90_noerr) then
+              print *, 'NetCDF Status: error creating subgroup <<imm>> ; status =', status
+              STOP
+            end if
+        end if
+        !
         !==================
+        ! 3D Fields (x,y,t)
+        !
         Var3D = var_out
 
         ! ============================== Disease ======================================
         if ((out_S)) then
-
-            VarId(var_out)=var_out
+            !
             status = nf90_def_var(ncid = ncid_grp(2), name = "S", xtype = nf90_double, &
-                      dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
-            status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "units", values = "fraction")
-            status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "long_name", values = "Susceptible population per person")
+                      dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = arr_VarID(var_out))
+            status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "units", values = "fraction")
+            status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "long_name", values = "Susceptible population per person")
             var_out = var_out + 1
-
+            !
         end if
 
         if ((out_I) .and. (out_Ia)) then
-
-            VarId(var_out)=var_out
+            !
             status = nf90_def_var(ncid = ncid_sbgrp(3), name = "I_bulk", xtype = nf90_double, &
-                      dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
-            status = nf90_put_att(ncid = ncid_sbgrp(3), varid = VarId(var_out), name = "units", values = "fraction")
-            status = nf90_put_att(ncid = ncid_sbgrp(3), varid = VarId(var_out), name = "long_name", values = "Infected symptomatic population per person")
+                      dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = arr_VarID(var_out))
+            status = nf90_put_att(ncid = ncid_sbgrp(3), varid = arr_VarID(var_out), name = "units", values = "fraction")
+            status = nf90_put_att(ncid = ncid_sbgrp(3), varid = arr_VarID(var_out), name = "long_name", values = "Infected symptomatic population per person")
             var_out = var_out + 1
-
+            !
         else if (out_I) then
-
-            VarId(var_out)=var_out
+            !
             status = nf90_def_var(ncid = ncid_grp(2), name = "I", xtype = nf90_double, &
-                      dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
-            status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "units", values = "fraction")
-            status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "long_name", values = "Infected symptomatic population per person")
+                      dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = arr_VarID(var_out))
+            status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "units", values = "fraction")
+            status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "long_name", values = "Infected symptomatic population per person")
             var_out = var_out + 1
-
+            !
         end if
 
         if ((out_Ia)) then
             do k = 1, size(age_blocks(:))
-                VarId(var_out)=var_out
+                !
                 status = nf90_def_var(ncid = ncid_sbgrp(3), name = I_age_names(k), xtype = nf90_double, &
-                          dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
-                status = nf90_put_att(ncid = ncid_sbgrp(3), varid = VarId(var_out), name = "units", values = "fraction")
-                status = nf90_put_att(ncid = ncid_sbgrp(3), varid = VarId(var_out), name = "long_name", values = "Age-disaggregated Infected symptomatic population per person")
+                          dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = arr_VarID(var_out))
+                status = nf90_put_att(ncid = ncid_sbgrp(3), varid = arr_VarID(var_out), name = "units", values = "fraction")
+                status = nf90_put_att(ncid = ncid_sbgrp(3), varid = arr_VarID(var_out), name = "long_name", values = "Age-disaggregated Infected symptomatic population per person")
                 var_out = var_out + 1
+                !
             end do
         end if
 
         if ((out_A) .and. (out_Aa)) then
-
-            VarId(var_out)=var_out
+            !
             status = nf90_def_var(ncid = ncid_sbgrp(4), name = "A_bulk", xtype = nf90_double, &
-                      dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
-            status = nf90_put_att(ncid = ncid_sbgrp(4), varid = VarId(var_out), name = "units", values = "fraction")
-            status = nf90_put_att(ncid = ncid_sbgrp(4), varid = VarId(var_out), name = "long_name", values = "Infected asymptomatic population per person")
+                      dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = arr_VarID(var_out))
+            status = nf90_put_att(ncid = ncid_sbgrp(4), varid = arr_VarID(var_out), name = "units", values = "fraction")
+            status = nf90_put_att(ncid = ncid_sbgrp(4), varid = arr_VarID(var_out), name = "long_name", values = "Infected asymptomatic population per person")
             var_out = var_out + 1
-
+            !
         else if (out_A) then
-
-            VarId(var_out)=var_out
+            !
             status = nf90_def_var(ncid = ncid_grp(2), name = "A", xtype = nf90_double, &
-                      dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
-            status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "units", values = "fraction")
-            status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "long_name", values = "Infected asymptomatic population per person")
+                      dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = arr_VarID(var_out))
+            status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "units", values = "fraction")
+            status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "long_name", values = "Infected asymptomatic population per person")
             var_out = var_out + 1
-
+            !
         end if
 
         if ((out_Aa)) then
             do k = 1, size(age_blocks(:))
-                VarId(var_out)=var_out
+                !
                 status = nf90_def_var(ncid = ncid_sbgrp(4), name = A_age_names(k), xtype = nf90_double, &
-                          dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
-                status = nf90_put_att(ncid = ncid_sbgrp(4), varid = VarId(var_out), name = "units", values = "fraction")
-                status = nf90_put_att(ncid = ncid_sbgrp(4), varid = VarId(var_out), name = "long_name", values = "Age-disaggregated Infected symptomatic population per person")
+                          dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = arr_VarID(var_out))
+                status = nf90_put_att(ncid = ncid_sbgrp(4), varid = arr_VarID(var_out), name = "units", values = "fraction")
+                status = nf90_put_att(ncid = ncid_sbgrp(4), varid = arr_VarID(var_out), name = "long_name", values = "Age-disaggregated Infected symptomatic population per person")
                 var_out = var_out + 1
+                !
             end do
         end if
 
         if ((out_R)) then
 
-            VarId(var_out)=var_out
             status = nf90_def_var(ncid = ncid_grp(2), name = "R", xtype = nf90_double, &
-                      dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
-            status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "units", values = "fraction")
-            status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "long_name", values = "Recovered population per person")
+                      dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = arr_VarID(var_out))
+            status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "units", values = "fraction")
+            status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "long_name", values = "Recovered population per person")
             var_out = var_out + 1
 
         end if
 !!
         if ((out_B)) then
 
-            VarId(var_out)=var_out
             status = nf90_def_var(ncid = ncid_out, name = "B", xtype = nf90_double, &
-                      dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
-            status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "units", values = "Dimensionless")
-            status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "long_name", values = "Bacterial load")
+                      dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = arr_VarID(var_out))
+            status = nf90_put_att(ncid = ncid_out, varid = arr_VarID(var_out), name = "units", values = "Dimensionless")
+            status = nf90_put_att(ncid = ncid_out, varid = arr_VarID(var_out), name = "long_name", values = "Bacterial load")
             var_out = var_out + 1
 
         end if
 !!
         if ((out_F)) then
 
-            VarId(var_out)=var_out
             status = nf90_def_var(ncid = ncid_out, name = "F", xtype = nf90_double, &
-                      dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
-            status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "units", values = "day^-1")
-            status = nf90_put_att(ncid = ncid_out, varid = VarId(var_out), name = "long_name", values = "Force of infection")
+                      dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = arr_VarID(var_out))
+            status = nf90_put_att(ncid = ncid_out, varid = arr_VarID(var_out), name = "units", values = "day^-1")
+            status = nf90_put_att(ncid = ncid_out, varid = arr_VarID(var_out), name = "long_name", values = "Force of infection")
             var_out = var_out + 1
 
         end if
@@ -694,19 +710,16 @@ MODULE mo_netcdf
         !
         if ((out_rain)) then
 
-
-          VarId(var_out)=var_out
           status = nf90_def_var(ncid = ncid_grp(3), name = "rain", xtype = nf90_double, &
-                    dimids = (/ DimId(1), DimId(2) , DimId(3) /), varid = VarId(var_out))
-
-          status = nf90_def_var_fill(ncid_grp(3), VarId(var_out), 0, FillValue_rain)
-      
+                    dimids = (/ DimId(1), DimId(2) , DimId(3) /), varid = arr_VarID(var_out))
+          status = nf90_def_var_fill(ncid_grp(3), arr_VarID(var_out), 0, FillValue_rain)
+          !
           ! Write rainfall attributes
           do indx=1,size(att_names)
               !
               if (len(trim(rain_att(indx))) /= 0) then 
                 !
-                status = nf90_put_att(ncid=ncid_grp(3), varid = VarId(var_out), name=att_names(indx), values=rain_att(indx))
+                status = nf90_put_att(ncid=ncid_grp(3), varid = arr_VarID(var_out), name=att_names(indx), values=rain_att(indx))
               end if
               !
           end do
@@ -715,20 +728,17 @@ MODULE mo_netcdf
         end if
 
         if ((out_t2m)) then
-
-
-          VarId(var_out)=var_out
+          
           status = nf90_def_var(ncid = ncid_grp(3), name = "t2m", xtype = nf90_double, &
-                    dimids = (/ DimId(1), DimId(2) , DimId(3) /), varid = VarId(var_out))
-          
-          status = nf90_def_var_fill(ncid_grp(3), VarId(var_out), 0, FillValue_temp)
-          
+                    dimids = (/ DimId(1), DimId(2) , DimId(3) /), varid = arr_VarID(var_out))
+          status = nf90_def_var_fill(ncid_grp(3), arr_VarID(var_out), 0, FillValue_temp)
+          !
           ! Write temperature attributes
           do indx=1,size(att_names)
               !
               if (len(trim(temp_att(indx))) /= 0) then 
                 !
-                status = nf90_put_att(ncid=ncid_grp(3), varid = VarId(var_out), name=att_names(indx), values=temp_att(indx))
+                status = nf90_put_att(ncid=ncid_grp(3), varid = arr_VarID(var_out), name=att_names(indx), values=temp_att(indx))
               end if
               !
           end do
@@ -751,110 +761,130 @@ MODULE mo_netcdf
         !
         if (out_vect) then
           !
-          VarId(var_out)=var_out
+          arr_VarID(var_out)=var_out
           status = nf90_def_var(ncid = ncid_grp(1), name = "V", xtype = nf90_double, &
-                    dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
-          status = nf90_put_att(ncid = ncid_grp(1), varid = VarId(var_out), name = "units", values = "m^-2")
-          status = nf90_put_att(ncid = ncid_grp(1), varid = VarId(var_out), name = "long_name", values = "Vector density")
+                    dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = arr_VarID(var_out))
+          status = nf90_put_att(ncid = ncid_grp(1), varid = arr_VarID(var_out), name = "units", values = "m^-2")
+          status = nf90_put_att(ncid = ncid_grp(1), varid = arr_VarID(var_out), name = "long_name", values = "Vector density")
           var_out = var_out + 1
           !
         end if
         !
         if (out_vecinfc) then
           !
-          VarId(var_out)=var_out
+          arr_VarID(var_out)=var_out
           status = nf90_def_var(ncid = ncid_grp(1), name = "Vinf", xtype = nf90_double, &
-                    dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
-          status = nf90_put_att(ncid = ncid_grp(1), varid = VarId(var_out), name = "units", values = "m^-2")
-          status = nf90_put_att(ncid = ncid_grp(1), varid = VarId(var_out), name = "long_name", values = "Infective vector density")
+                    dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = arr_VarID(var_out))
+          status = nf90_put_att(ncid = ncid_grp(1), varid = arr_VarID(var_out), name = "units", values = "m^-2")
+          status = nf90_put_att(ncid = ncid_grp(1), varid = arr_VarID(var_out), name = "long_name", values = "Infective vector density")
           var_out = var_out + 1
           !
         end if
         !
         if (out_larv) then
           !
-          VarId(var_out)=var_out
+          arr_VarID(var_out)=var_out
           status = nf90_def_var(ncid = ncid_grp(1), name = "L", xtype = nf90_double, &
-                    dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
-          status = nf90_put_att(ncid = ncid_grp(1), varid = VarId(var_out), name = "units", values = "m^-2")
-          status = nf90_put_att(ncid = ncid_grp(1), varid = VarId(var_out), name = "long_name", values = "Larval density")
+                    dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = arr_VarID(var_out))
+          status = nf90_put_att(ncid = ncid_grp(1), varid = arr_VarID(var_out), name = "units", values = "m^-2")
+          status = nf90_put_att(ncid = ncid_grp(1), varid = arr_VarID(var_out), name = "long_name", values = "Larval density")
           var_out = var_out + 1
           !
         end if
         !
         if (out_wpond) then
           !
-          VarId(var_out)=var_out
+          arr_VarID(var_out)=var_out
           status = nf90_def_var(ncid = ncid_grp(4), name = "wpond", xtype = nf90_double, &
-                    dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
-          status = nf90_put_att(ncid = ncid_grp(4), varid = VarId(var_out), name = "units", values = "[fraction]")
-          status = nf90_put_att(ncid = ncid_grp(4), varid = VarId(var_out), name = "long_name", values = "Fraction of temporary rain-driven ponds")
+                    dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = arr_VarID(var_out))
+          status = nf90_put_att(ncid = ncid_grp(4), varid = arr_VarID(var_out), name = "units", values = "[fraction]")
+          status = nf90_put_att(ncid = ncid_grp(4), varid = arr_VarID(var_out), name = "long_name", values = "Fraction of temporary rain-driven ponds")
           var_out = var_out + 1
           !
         end if
         !
         if (out_EIR) then
           !
-          VarId(var_out)=var_out
+          arr_VarID(var_out)=var_out
           status = nf90_def_var(ncid = ncid_grp(2), name = "EIR", xtype = nf90_double, &
-                    dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
-          status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "units", values = "day^-1")
-          status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "long_name", values = "Entomological Inoculation Rate")
+                    dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = arr_VarID(var_out))
+          status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "units", values = "day^-1")
+          status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "long_name", values = "Entomological Inoculation Rate")
           var_out = var_out + 1
           !
         end if
         !
         if (out_hbr) then
           !
-          VarId(var_out)=var_out
+          arr_VarID(var_out)=var_out
           status = nf90_def_var(ncid = ncid_grp(2), name = "hbr", xtype = nf90_double, &
-                    dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
-          status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "units", values = "day^-1")
-          status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "long_name", values = "Human Biting Rate")
+                    dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = arr_VarID(var_out))
+          status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "units", values = "day^-1")
+          status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "long_name", values = "Human Biting Rate")
           var_out = var_out + 1
           !
         end if
         !
         if ((out_E)) then
 
-            VarId(var_out)=var_out
+            arr_VarID(var_out)=var_out
             status = nf90_def_var(ncid = ncid_grp(2), name = "E", xtype = nf90_double, &
-                      dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
-            status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "units", values = "fraction")
-            status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "long_name", values = "Exposed population per person")
+                      dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = arr_VarID(var_out))
+            status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "units", values = "fraction")
+            status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "long_name", values = "Exposed population per person")
             var_out = var_out + 1
 
         end if
         !
-        if (out_imm) then
+        if ((out_imm) .and. (out_imm_a)) then
           !
-          VarId(var_out)=var_out
-          status = nf90_def_var(ncid = ncid_grp(2), name = "imm", xtype = nf90_double, &
-                    dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
-          status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "units", values = "adimensional")
-          status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "long_name", values = "Endemicity level / Immunity")
+          arr_VarID(var_out)=var_out
+          status = nf90_def_var(ncid = ncid_sbgrp(6), name = "imm_bulk", xtype = nf90_double, &
+                    dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = arr_VarID(var_out))
+          status = nf90_put_att(ncid = ncid_sbgrp(6), varid = arr_VarID(var_out), name = "units", values = "adimensional")
+          status = nf90_put_att(ncid = ncid_sbgrp(6), varid = arr_VarID(var_out), name = "long_name", values = "Bulk Immunity")
           var_out = var_out + 1
           !
+        else if (out_imm) then
+
+            arr_VarID(var_out)=var_out
+            status = nf90_def_var(ncid = ncid_grp(2), name = "imm", xtype = nf90_double, &
+                      dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = arr_VarID(var_out))
+            status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "units", values = "adimensional")
+            status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "long_name", values = "Bulk Immunity")
+            var_out = var_out + 1
+
+        end if
+        !
+        if ((out_imm_a)) then
+            do k = 1, size(age_blocks(:))
+                arr_VarID(var_out)=var_out
+                status = nf90_def_var(ncid = ncid_sbgrp(6), name = imm_age_names(k), xtype = nf90_double, &
+                          dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = arr_VarID(var_out))
+                status = nf90_put_att(ncid = ncid_sbgrp(6), varid = arr_VarID(var_out), name = "units", values = "adimensional")
+                status = nf90_put_att(ncid = ncid_sbgrp(6), varid = arr_VarID(var_out), name = "long_name", values = "Age-disaggregated Immunity")
+                var_out = var_out + 1
+            end do
         end if
         !
         if (out_N) then
           !
-          VarId(var_out)=var_out
+          arr_VarID(var_out)=var_out
           status = nf90_def_var(ncid = ncid_grp(2), name = "Nagent", xtype = nf90_double, &
-                    dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
-          status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "units", values = "adimensional")
-          status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "long_name", values = "Number of agents")
+                    dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = arr_VarID(var_out))
+          status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "units", values = "adimensional")
+          status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "long_name", values = "Number of agents")
           var_out = var_out + 1
           !
         end if
         !
         if (out_HA) then
           !
-          VarId(var_out)=var_out
+          arr_VarID(var_out)=var_out
           status = nf90_def_var(ncid = ncid_grp(2), name = "HA", xtype = nf90_double, &
-                    dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = VarId(var_out))
-          status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "units", values = "adimensional")
-          status = nf90_put_att(ncid = ncid_grp(2), varid = VarId(var_out), name = "long_name", values = "Human to agent ratio")
+                    dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = arr_VarID(var_out))
+          status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "units", values = "adimensional")
+          status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "long_name", values = "Human to agent ratio")
           var_out = var_out + 1
           !
         end if
@@ -897,12 +927,12 @@ MODULE mo_netcdf
 
         ! Lon/lat
         
-        status = nf90_put_var(ncid = ncid_out, varid = VarId(1), values = lon_coord)
-        status = nf90_put_var(ncid = ncid_out, varid = VarId(2), values = lat_coord)
+        status = nf90_put_var(ncid = ncid_out, varid = arr_VarId(1), values = lon_coord)
+        status = nf90_put_var(ncid = ncid_out, varid = arr_VarId(2), values = lat_coord)
 
         ! Time
         if (out_rain) then
-          status = nf90_put_var(ncid = ncid_out, varid = VarId(3), values = time_coord(1:nsteps))
+          status = nf90_put_var(ncid = ncid_out, varid = arr_VarId(3), values = time_coord(1:nsteps))
         end if
         
       end subroutine netcdf_init
@@ -1251,14 +1281,13 @@ MODULE mo_netcdf
               ! Inquire about immunity and get its VarID
               do indx=1,size(imm_names)
                   status = nf90_inq_varid(ncid=ncImmID, name=imm_names(indx), varid=ImmVarID)
-                  
                   ! If name is found exit do loop
                   if (status == nf90_noerr) then
                     print *, 'NetCDF Status: found immunity forcing of name --> ', imm_names(indx)
                     allocate(imm_2d(nlon,nlat))
                     !
                     exit
-                  else if((indx == size(temp_names)) .and. (status /= nf90_noerr)) then
+                  else if((indx == size(imm_names)) .and. (status /= nf90_noerr)) then
                     print *, 'NetCDF Status: immunity forcing not indentified'
                     STOP
                   end if

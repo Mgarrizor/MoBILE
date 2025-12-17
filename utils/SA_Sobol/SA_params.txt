@@ -1,0 +1,7 @@
+name,         p1,        p2,   dist
+b_rate,       1.,      20.0,   unif
+K_h,         0.00001,   0.01,  logunif
+P_v0,         0.1,      1.0,   unif
+P_h0,         0.1,      1.0,   unif
+P_max,        0.05,     0.4,   unif 
+k_NB,         0.0,     10.0,   unif

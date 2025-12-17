@@ -64,6 +64,10 @@ MODULE mo_grid
           allocate(Aa(nxy,size(age_blocks(:))))
           allocate(Ra(nxy,size(age_blocks(:))))
           !
+          allocate(imm_a(nxy,size(age_blocks(:))))
+          !
+          allocate(N_a(nxy,size(age_blocks(:))))
+          !
           ! Look up table for age blocks
           do indx = 0, size(Iage_stat_ptr(1,:))-1 ! Loop over ages, starting at 0
             !
@@ -74,6 +78,10 @@ MODULE mo_grid
             Iage_stat_ptr(3,indx+1)%arr_p => Ia(:,k)
             Iage_stat_ptr(4,indx+1)%arr_p => Aa(:,k)
             Iage_stat_ptr(5,indx+1)%arr_p => Ra(:,k)
+            !
+            Iage_stat_ptr(6,indx+1)%arr_p => imm_a(:,k)
+            !
+            Iage_stat_ptr(7,indx+1)%arr_p => N_a(:,k)
             !
           end do
         else 

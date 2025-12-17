@@ -23,12 +23,17 @@ MODULE mo_namelist
             ! Local use only
             character(len=1000) :: line
             integer:: file_unit, iostats
+            integer:: arg_num,ierr
             
             ! Define namelist
             namelist /INOUT/ run_name, disID, nsteps, seed, spin_up
 
+            arg_num = 1
+            ! Read first command line argument (namelist name)
+            CALL GET_COMMAND_ARGUMENT(arg_num, VALUE=namelist_filename, STATUS=ierr)
+            !
             ! Does the file exist?
-            inquire (file='namelist.nml', iostat=iostats)
+            inquire (file=namelist_filename, iostat=iostats)
 
              if (iostats /= 0) then
                  write (stderr, '("Error: namelist file does not exist")')
@@ -36,7 +41,7 @@ MODULE mo_namelist
              end if
 
             ! Open and read namelist
-            open (action='read', file='namelist.nml', iostat=iostats, newunit=file_unit)
+            open (action='read', file=namelist_filename, iostat=iostats, newunit=file_unit)
             read (nml=INOUT, iostat=iostats, unit=file_unit)
 
             ! If file exists but reading failed
@@ -68,7 +73,7 @@ MODULE mo_namelist
             namelist /HUMAN/ pop_file, nagent, imm_file
 
             ! Does the file exist?
-            inquire (file='namelist.nml', iostat=iostats)
+            inquire (file=namelist_filename, iostat=iostats)
 
              if (iostats /= 0) then
                  write (stderr, '("Error: namelist file does not exist")')
@@ -76,7 +81,7 @@ MODULE mo_namelist
              end if
 
             ! Open and read namelist
-            open (action='read', file='namelist.nml', iostat=iostats, newunit=file_unit)
+            open (action='read', file=namelist_filename, iostat=iostats, newunit=file_unit)
             read (nml=HUMAN, iostat=iostats, unit=file_unit)
 
             ! If file exists but reading failed
@@ -113,7 +118,7 @@ MODULE mo_namelist
             namelist /CLIMA/ rain_file, t2m_file, area_file
 
             ! Does the file exist?
-            inquire (file='namelist.nml', iostat=iostats)
+            inquire (file=namelist_filename, iostat=iostats)
 
              if (iostats /= 0) then
                  write (stderr, '("Error: namelist file does not exist")')
@@ -121,7 +126,7 @@ MODULE mo_namelist
              end if
 
             ! Open and read namelist
-            open (action='read', file='namelist.nml', iostat=iostats, newunit=file_unit)
+            open (action='read', file=namelist_filename, iostat=iostats, newunit=file_unit)
             read (nml=CLIMA, iostat=iostats, unit=file_unit)
 
             ! If file exists but reading failed
@@ -180,10 +185,10 @@ MODULE mo_namelist
             namelist /CONST/ mu_B, theta_e, theta_p, mu, rho, sigma, gamma, alpha, beta, & ! cholera disease params
                              m_long, m_short, D_grav, D_pop, H_0,                        & ! mobility params gravity model
                              B_0, fS_0, fI_0, fA_0, fR_0,                                & ! initial conditions
-                             K_h, b_rate                                             ! malaria params
+                             K_h, b_rate, P_v0, k_NB, P_h0, P_max                          ! malaria params
                              
             ! Does the file exist?
-            inquire (file='namelist.nml', iostat=iostats)
+            inquire (file=namelist_filename, iostat=iostats)
 
              if (iostats /= 0) then
                  write (stderr, '("Error: namelist file does not exist")')
@@ -191,7 +196,7 @@ MODULE mo_namelist
              end if
 
             ! Open and read namelist
-            open (action='read', file='namelist.nml', iostat=iostats, newunit=file_unit)
+            open (action='read', file=namelist_filename, iostat=iostats, newunit=file_unit)
             read (nml=CONST, iostat=iostats, unit=file_unit)
 
             
