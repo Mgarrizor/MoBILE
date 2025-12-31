@@ -43,7 +43,6 @@ subroutine time_step(disID,itime)
 
     integer :: ixy       ! Looping spatial index
     integer :: iagent    ! Looping agent index
-    real :: conv1, conv2
 
       ! 1) Integrate source of disease --> dt_B/dt, dt_V/dt, ...  ==================================================================================
       ! 2) Update health status --> .agents.=false
@@ -97,7 +96,7 @@ subroutine time_step(disID,itime)
                !
                ! **Output from VECTRI**
                !
-               !   Updated vector and larval densities as well as sporogony state, V(t + dt, ixy, sporo_new):
+               !   Updated vector and larval densities as well as sporogonic state, V(t + dt, ixy, sporo_new):
                !
                !   1) rvect(ixy)  - vector density array 
                !   2) rgonof(ixy) - gonotrophic factor for proportion of susceptible and infective vectors searching for a blood meal
@@ -123,62 +122,25 @@ subroutine time_step(disID,itime)
       !
       ! 3) Disease --> Agents ==================================================================================
       if ((agents)) then
-        !
-        ! Reset growth array
-        nattempt(:) = 0.
-        !
-        SELECT case(disID)
-        case (0) ! Cholera
-          !
-          ! Reset base excretion array
-          exc(:) = 0.
-          !
-          ! Reset rainfall-driven excretion array
-          if (out_rain) then
-            exc_clim(:) = 0.
-          end if
-          !
-        case (1) ! Malaria
-          !
-          ! Reset number of infective bites
-          nbites(:) = 0
-          !
-          ! Compute base interaction rates
-          !
-          ! Human to vector transmission
-          !
-          where((pop_dens(:) > 0.) .and. (npeop(:) > 0)) m_0(:) = (1.-0.*exp(-pop_dens(:)*1e6/100.))*b_rate*rgonof(:)*rvect(0,:)/(pop_dens(:)+K_h)*HA(:)!**srho
-          !
-          ! Infected vector to human transmission
-          !
-          where((pop_dens(:) > 0.) .and. (npeop(:) > 0)) m_1(:) = (1.-0.*exp(-pop_dens(:)*1e6/100.))*b_rate*rgonof(:)*rvect(ninfv,:)/(pop_dens(:)+K_h)*HA(:)!**srho
-          !
-          ! All vector to human (human biting rate - hbr)
-          !
-          where((pop_dens(:) > 0.) .and. (npeop(:) > 0)) m_all(:) = (1.-0.*exp(-pop_dens(:)*1e6/100.))*b_rate*rgonof(:)*SUM(rvect(:,:), DIM=1)/(pop_dens(:)+K_h)*HA(:)!**srho
-          !
-        case default
-          print *, "Incorrect case, choose disID between: 0 (cholera) and 1 (malaria)"
-        STOP
-        end SELECT
+      !=
         !
         ! "Re-initialise" random number generator
         call random_seed()
+        !
+        ! Pre-diagnostics calculations
+        call agents_pre_diagnostics(disID)
         !
 !$OMP PARALLEL DO
         agent_loop: do iagent=1,nagent   
         !
         ! 3.1) Update health status
-          !
+        !=
+          ! Update health status
           call agents_update(disID,iagent,itime,nattempt,npeop,nbites,m_0,m_1,m_all)
           !
-          ! Old method - age was an integer only saving the year. It's now a float.
-          !if (MOD(itime,365)==0) then ! Ignore leap years
-            !
-            ! 3.2) Update population age
-            !call agents_age(iagent)
-            !
-          !end if
+          ! Gather diagnostics of iagent
+          call agents_diagnostics(disID,iagent)
+        !=
         !
         end do agent_loop
 !$OMP END PARALLEL DO
@@ -190,55 +152,10 @@ subroutine time_step(disID,itime)
           !
         end if 
         !
-        call agents_diagnostics(disID,scale)  ! Compute bulk stats
-        !
         ! Post-diagnostics calculations
-        SELECT case(disID)
-        case (0) ! Cholera
-          !
-          ! Scale excretion events to density
-          exc(:) = scale(:)*exc(:)
-          !
-          if (out_rain) then
-            exc_clim(:) = scale(:)*exc_clim(:)
-          end if
-          !
-          B_old = B
-          A_old = A
-          !
-          ! Check for demographic convergence (cholera model)
-          conv1 = 0.
-          conv2 = 0.
-          do ixy = 1,nxy
-            if (mask_pop(ixy)) then
-                !
-                conv1 = conv1 + (scale(ixy)*npeop(ixy) - alpha/mu * I(ixy))
-                conv2 = conv2 + (1+ gamma/(rho+mu))*(I(ixy)+ A(ixy)) + S(ixy)  
-                !
-            end if
-          end do
-          !
-        case (1) ! Malaria
-          !
-          ! Calculate average daily EIR on a per person basis (use human to agent ratio: HA(:))
-          !
-          where((mask_pop(:)) .and. (npeop(:)>0)) EIR(:) = EIR(:)/npeop(:)/HA(:)!P_a!/HA(:)
-
-          ! Calculate average daily hbr
-          !
-          where((mask_pop(:)) .and. (npeop(:)>0)) hbr(:) = hbr(:)/npeop(:)/HA(:)!P_a!/HA(:)
-
-          ! Calculate average daily e_l (endemicity level)
-          !
-          if (.not. in_imm) then
-            where((mask_pop(:)) .and. (npeop(:)>0)) imm(:) = imm(:)/npeop(:)
-          end if
-          !
-        case default
-          print *, "Incorrect case, choose disID between: 0 (cholera) and 1 (malaria)"
-        STOP
-        end SELECT
-
+        call agents_post_diagnostics(disID)
+        !
+      !=
       end if ! End agent methods -------------------------------------------------
       !
 !===

@@ -24,8 +24,8 @@ DEBUG     := -Og -fbacktrace -Wall -fcheck=all \
              -ffixed-line-length-none \
              -ffpe-summary=underflow,overflow -ffree-line-length-512 \
              -fopenmp 
-FAST      := #-O3 -ffast-math -ffixed-line-length-none \
-             -march=native #-fopenmp #    # Optimization flag (https://gcc.gnu.org/onlinedocs/gcc/Optimize-Options.html)
+FAST      := #-O3 -ffast-math -ffree-line-length-512 \
+             -march=native -fopenmp #    # Optimization flag (https://gcc.gnu.org/onlinedocs/gcc/Optimize-Options.html)
              #-ftree-parallelize-loops=$(NPROC)
 EXE       := mobile.out # Name of executable file
 #=========

@@ -140,6 +140,7 @@ implicit none
   ! Loop counters
   integer :: itime     ! Time    (nsteps)
   integer :: ispinup   ! Number of needed spin-up years 
+  integer :: oagent
 
   ! Random number and PDf sampler libraries
   character(len=100) :: phrase
@@ -357,7 +358,21 @@ itime = 1
         print *, '-- Random initial disease profiles --'
      end if
      call agents_init(nxy,disID,nagent,npeop,nattempt,mask_pop,pop_dens,scale,A_cell)
-     call agents_diagnostics(disID,scale)
+     !
+     !
+     if (in_imm) then
+       !
+       call read_slice_imm(itime,imm) ! itime = 1
+       !
+     end if 
+     !
+     call agents_pre_diagnostics(disID)
+     !
+     agent_loop: do oagent=1,nagent
+        call agents_diagnostics(disID,oagent)
+     end do agent_loop
+     !
+     call agents_post_diagnostics(disID)
     !
   ! 0.4.2 Density
   elseif ((.not. agents)) then 
@@ -477,9 +492,8 @@ end if
 !
 !=
 !
-itime=1
 ! Write initial conditions (after spin-up)
-call netcdf_3D_output(itime,Var3D)
+call netcdf_3D_output(1,Var3D) ! itime = 1
 ! 
 print '("Integrate: ",i6," days.")', nsteps
 print *, '------------------------'

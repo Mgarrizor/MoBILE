@@ -506,7 +506,7 @@ USE, INTRINSIC :: ISO_C_BINDING
 
         end subroutine agents_read_age
 
-        subroutine agents_diagnostics(idis,scale)
+        subroutine agents_diagnostics_loop(idis,scale)
         !===
             ! Calculate bulk statistics to feed into the disease source integration
             !
@@ -658,7 +658,286 @@ USE, INTRINSIC :: ISO_C_BINDING
             end SELECT
             !
         !===
+        end subroutine agents_diagnostics_loop
+
+        subroutine agents_diagnostics(idis,iagent)
+        !===
+            ! Calculate bulk statistics to feed into the disease source integration
+            !
+            integer, intent(in) :: idis ! 0 = Cholera: SIAR  ; 1 = Malaria: SEIAR ; 2 = Dengue [Non-functional]
+            integer, intent(in) :: iagent ! Agent ID (integer number)
+            !
+            ! Local use only
+            integer :: istat, iloc, iage
+            logical :: iactive
+
+            SELECT case(idis)
+            case (0) ! Cholera -------------------------------
+            !
+            ! Increase age by da = 1/365
+            people(iagent)%agent_ID%age =  people(iagent)%agent_ID%age + da
+            !
+            istat    =  people(iagent)%health_status%cholera_status%status
+            iactive  =  people(iagent)%health_status%active_status%status
+            iloc     =  people(iagent)%location_status%currloc
+            !
+            ! Pointer approach to allow vectorization (discarded old branching if ... elseif ...)
+            if (iactive) then
+                !$OMP ATOMIC
+                status_pointer(istat)%arr_p(iloc) = &
+                status_pointer(istat)%arr_p(iloc) + 1.
+                !$END OMP ATOMIC
+            end if
+            !
+            !=================================================
+
+            !
+            case (1) ! Malaria -------------------------------
+            !
+            ! Increase age by da = 1/365
+            people(iagent)%agent_ID%age =  people(iagent)%agent_ID%age + da
+            !
+            istat   =  people(iagent)%health_status%malaria_status%status
+            iactive =  people(iagent)%health_status%active_status%status
+            iloc    =  people(iagent)%location_status%currloc
+            iage    =  min(floor(people(iagent)%agent_ID%age),79)
+            !
+            ! Pointer approach to allow vectorization (discarded old branching if ... elseif ...)
+            if (iactive) then
+                ! bulk SEIAR
+                !$OMP ATOMIC
+                status_pointer(istat)%arr_p(iloc) = &
+                status_pointer(istat)%arr_p(iloc) + 1.
+                !$END OMP ATOMIC
+                !
+                if (in_imm) then ! Immunity is set to that of the external forcing
+                    !
+                    people(iagent)%health_status%malaria_status%imm = imm(iloc)
+                    !
+                else ! Otherwise we gather value from agent for diagnostics
+                    !$OMP ATOMIC
+                    imm(iloc) = imm(iloc) + people(iagent)%health_status%malaria_status%imm
+                    !$END OMP ATOMIC
+                end if 
+                !
+                if (diag_age) then
+                    !$OMP ATOMIC
+                    !
+                    ! SEIAR disaggregated by age
+                    Iage_stat_ptr(istat,iage+1)%arr_p(iloc) = &
+                    Iage_stat_ptr(istat,iage+1)%arr_p(iloc) + 1.
+                    !
+                    ! Immunity disaggregated by age
+                    Iage_stat_ptr(6,iage+1)%arr_p(iloc) = &
+                    Iage_stat_ptr(6,iage+1)%arr_p(iloc) + &
+                    people(iagent)%health_status%malaria_status%imm
+                    !
+                    ! Agent number disaggregated by age
+                    Iage_stat_ptr(7,iage+1)%arr_p(iloc) = &
+                    Iage_stat_ptr(7,iage+1)%arr_p(iloc) + 1.
+                    !
+                    !$END OMP ATOMIC
+                end if
+            end if
+            !
+            !$OMP ATOMIC
+            !
+            EIR(iloc) = EIR(iloc) + people(iagent)%health_status%malaria_status%EIR_att
+            hbr(iloc) = hbr(iloc) + people(iagent)%health_status%malaria_status%hbr_att
+            !
+            !$END OMP ATOMIC
+            !===================================================
+            !
+            case (2) ! Dengue [Non-functional]
+            !
+            case default
+                print *, "Incorrect case, choose disID between: 0 (cholera) & 1 (malaria)"
+                STOP
+            end SELECT
+            !
+        !===
         end subroutine agents_diagnostics
+
+        subroutine agents_pre_diagnostics(idis)
+        !===
+            ! Calculate bulk statistics to feed into the disease source integration
+            !
+            integer, intent(in) :: idis ! 0 = Cholera: SIAR  ; 1 = Malaria: SEIAR ; 2 = Dengue [Non-functional]
+            !
+            ! Reset growth array
+            nattempt(:) = 0.
+            !
+            SELECT case(idis)
+            case (0) ! Cholera -------------------------------
+            ! Reset base excretion array
+            exc(:) = 0.
+            !
+            ! Reset rainfall-driven excretion array
+            if (out_rain) then
+              exc_clim(:) = 0.
+            end if
+            !
+            !
+            S(:) = 0.
+            I(:) = 0.
+            A(:) = 0.
+            R(:) = 0.
+            !
+            !=================================================
+            !
+            case (1) ! Malaria -------------------------------
+            !
+            ! Reset number of infective bites
+            nbites(:) = 0
+            !
+            ! Compute base interaction rates
+            !
+            ! Human to vector transmission
+            !
+            where((pop_dens(:) > 0.) .and. (npeop(:) > 0)) m_0(:) = b_rate*rgonof(:)*rvect(0,:)/(pop_dens(:)+K_h)*HA(:)!
+            !
+            ! Infected vector to human transmission
+            !
+            where((pop_dens(:) > 0.) .and. (npeop(:) > 0)) m_1(:) = b_rate*rgonof(:)*rvect(ninfv,:)/(pop_dens(:)+K_h)*HA(:)!
+            !
+            ! All vector to human (human biting rate - hbr)
+            !
+            where((pop_dens(:) > 0.) .and. (npeop(:) > 0)) m_all(:) = b_rate*rgonof(:)*SUM(rvect(:,:), DIM=1)/(pop_dens(:)+K_h)*HA(:)!
+            !
+            S(:) = 0.
+            E(:) = 0.
+            I(:) = 0.
+            A(:) = 0.
+            R(:) = 0.
+            !
+            EIR(:) = 0.
+            if (.not. in_imm) then ! If not external forcing then reset immunity
+                !
+                imm(:) = 0.
+                !
+            end if
+            hbr(:) = 0.
+            !
+            if (diag_age) then
+                Sa(:,:) = 0.
+                Ea(:,:) = 0.
+                Ia(:,:) = 0.
+                Aa(:,:) = 0.
+                Ra(:,:) = 0.
+
+                imm_a(:,:) = 0.
+                N_a(:,:)   = 0.
+            end if 
+            !
+            !===================================================
+            !
+            case (2) ! Dengue [Non-functional]
+            !
+            case default
+                print *, "Incorrect case, choose disID between: 0 (cholera) & 1 (malaria)"
+                STOP
+            end SELECT
+            !
+        !===
+        end subroutine agents_pre_diagnostics
+
+        subroutine agents_post_diagnostics(idis)
+        !===
+            ! Calculate bulk statistics to feed into the disease source integration
+            !
+            integer, intent(in) :: idis ! 0 = Cholera: SIAR  ; 1 = Malaria: SEIAR ; 2 = Dengue [Non-functional]
+            !integer, intent(in) :: iagent ! Agent ID (integer number)
+            !real, allocatable, intent(in)    :: scale(:)
+            !integer, intent(out):: counter ! Number of alive agents
+            !
+            ! Local use only
+            integer :: j
+            !integer :: istat, iloc, iage, j
+            !logical :: iactive
+            !real :: conv1, conv2
+
+            SELECT case(idis)
+            case (0) ! Cholera -------------------------------
+            !
+            S(:) = S(:)/npeop(:)
+            I(:) = I(:)/npeop(:)
+            A(:) = A(:)/npeop(:)
+            R(:) = R(:)/npeop(:)
+
+            ! Scale excretion events to density
+            exc(:) = exc(:)/npeop(:)
+            !
+            if (out_rain) then
+              exc_clim(:) = exc_clim(:)/npeop(:)
+            end if
+            !
+            B_old = B
+            A_old = A
+            !
+            ! Check for demographic convergence (cholera model)
+            !conv1 = 0.
+            !conv2 = 0.
+            !do ixy = 1,nxy
+            !  if (mask_pop(ixy)) then
+            !      !
+            !      conv1 = conv1 + (scale(ixy)*npeop(ixy) - alpha/mu * I(ixy))
+            !      conv2 = conv2 + (1+ gamma/(rho+mu))*(I(ixy)+ A(ixy)) + S(ixy)  
+            !      !
+            !  end if
+            !end do
+            !=================================================
+
+            ! Age-structured 
+
+            !=================================================
+            case (1) ! Malaria -------------------------------
+            !
+            ! Fraction [per person]  = HA*N/(rho*A_cell) = N/npeop - with mobility this will have to 
+            !                                                        be modified 
+            S(:) = S(:)/npeop(:)
+            E(:) = E(:)/npeop(:)
+            I(:) = I(:)/npeop(:)
+            A(:) = A(:)/npeop(:)
+            R(:) = R(:)/npeop(:)
+
+            ! Age-structured 
+            if (diag_age) then
+                do j = 1, size(age_blocks(:))
+                    !
+                    Ia(:,j) = Ia(:,j)/N_a(:,j)
+                    Aa(:,j) = Aa(:,j)/N_a(:,j)
+                    !
+                    imm_a(:,j) = imm_a(:,j)/N_a(:,j)  ! Normalize by number of people in that age group
+                    !
+                end do
+            end if
+            !
+            ! Calculate average daily EIR on a per person basis (use human to agent ratio: HA(:))
+            !
+            where((mask_pop(:)) .and. (npeop(:)>0)) EIR(:) = EIR(:)/npeop(:)/HA(:)!P_a!/HA(:)
+  
+            ! Calculate average daily hbr
+            !
+            where((mask_pop(:)) .and. (npeop(:)>0)) hbr(:) = hbr(:)/npeop(:)/HA(:)!P_a!/HA(:)
+  
+            ! Calculate average daily imm (immunity level)
+            !
+            if (.not. in_imm) then
+              where((mask_pop(:)) .and. (npeop(:)>0)) imm(:) = imm(:)/npeop(:)
+            end if
+            !
+            !===================================================
+
+            !
+            case (2) ! Dengue [Non-functional]
+            !
+            case default
+                print *, "Incorrect case, choose disID between: 0 (cholera) & 1 (malaria)"
+                STOP
+            end SELECT
+            !
+        !===
+        end subroutine agents_post_diagnostics
 
         subroutine agents_update(idis,iagent,itime,n_attempt,npeop,nbites,m_0,m_1,m_all)
         !===
