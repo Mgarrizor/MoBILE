@@ -9,7 +9,10 @@ MODULE mo_namelist
     use mo_const
     use mo_control
 
-    
+
+    use mo_constants !-- VECTRI
+
+
     implicit none
 
     CONTAINS
@@ -185,7 +188,8 @@ MODULE mo_namelist
             namelist /CONST/ mu_B, theta_e, theta_p, mu, rho, sigma, gamma, alpha, beta, & ! cholera disease params
                              m_long, m_short, D_grav, D_pop, H_0,                        & ! mobility params gravity model
                              B_0, fS_0, fI_0, fA_0, fR_0,                                & ! initial conditions
-                             K_h, b_rate, P_v0, k_NB, P_h0, P_max                          ! malaria params
+                             K_h, b_rate, P_v0, k_NB, P_h0, P_max,                       & ! Vector-human transmission params
+                             wurbn_ratio, wperm_ratio, wpond_ratio                         ! Vector ecology parameters
                              
             ! Does the file exist?
             inquire (file=namelist_filename, iostat=iostats)

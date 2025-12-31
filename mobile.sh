@@ -122,6 +122,14 @@ mkdir -p $path
 ln -sf ${MOBILE}/Makefile ${path}
 ln -sf ${MOBILE}/src ${path}
 
+# External libraries
+
+# ---- random number generator
+ln -sf ${MOBILE}/utils/external_libraries/mo_rnglib.f90 ${path}/src
+
+# ---- samples from PDFs (needs rnglib.f90)
+ln -sf ${MOBILE}/utils/external_libraries/mo_ranlib.f90 ${path}/src
+
 # If VECTRI is coupled then create symbolic links 
 # pointing to the necessary files from VECTRI.
 # These files will then be found and compiled by the Makefile
@@ -129,7 +137,7 @@ ln -sf ${MOBILE}/src ${path}
 if [[ ${vectri} == 1 ]]; then
   echo '================= VECTRI active =================='
 
-  touch "${path}/src/mo_netcdf.f90" # Touch file so that it is recompiled WITH the VECTRI lines
+  touch "${path}/src/mo_netcdf.f90" # Touch file so that it is recompiled WITH the VECTRI lines (COUPLED mode)
 
                                                                 # These are the necessary VECTRI source files to
   #ln -sf ${VECTRI}/source/mo_constants.f90 ${path}/src         # couple it to the AB model.
@@ -162,6 +170,9 @@ elif  [[ ${vectri} == 0 ]]; then
 
     rm "${path}/src/deps/mo_vectri.d"
     rm "${path}/src/deps/mo_methods.d"
+
+    ln -sf ${MOBILE}/utils/vectri/mo_constants.f90 ${path}/src # Create symbolic link so that constant file is compiled
+                                                               # This is a way to have a common parameter namelist
 
     touch "${path}/src/mo_netcdf.f90"    # Touch file so that it is recompiled withOUT the VECTRI lines
 

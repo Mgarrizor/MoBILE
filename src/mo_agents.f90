@@ -10,6 +10,7 @@ MODULE mo_agents
 
 USE mo_const
 USE mo_control
+USE mo_ranlib
 
 USE omp_lib
 !use stdlib_stats, only: median
@@ -70,6 +71,7 @@ USE, INTRINSIC :: ISO_C_BINDING
         integer :: sex     ! F/M   [Non-functional]
         integer :: wealth  ! L/M/H [Non-functional]
         real    :: ratio   ! Human to agent ratio of the agent
+        real    :: w_NB    ! Weights of the Heterogeneous Poisson model
     end type agentID
 
     type agent
@@ -211,7 +213,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                             people(indx)%agent_ID%name=indx     !
                             people(indx)%agent_ID%sex=0         ! F = 0, M = 1 [Not in use]
                             people(indx)%agent_ID%wealth=0      ! L = 0, M = 1, H = 2 [Not in use]
-
+                            people(indx)%agent_ID%w_NB=gengam(k_NB,k_NB)
                             ! Initialize health attributes
                             if (random .and. (.not. rand_seed)) then
 
@@ -339,6 +341,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                    people(indx)%agent_ID%name=indx     !
                    people(indx)%agent_ID%sex=0         ! F = 0, M = 1
                    people(indx)%agent_ID%wealth=0      ! L = 0, M = 1, H = 2
+                   people(indx)%agent_ID%w_NB=gengam(k_NB,k_NB)
                    !
                    ! Initialize health attributes
                    if (random .and. (.not. rand_seed)) then
@@ -933,6 +936,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                              people(iagent)%health_status%active_status%status=.true. ! You are now alive,
                              people(iagent)%health_status%cholera_status%status=1     ! born susceptible
                              people(iagent)%agent_ID%age=0.                            ! and as a baby
+                             people(iagent)%agent_ID%w_NB=gengam(k_NB,k_NB)
                              !
                              if (generate_random() <= 0.51) then ! Sex
                                  people(iagent)%agent_ID%sex=0   ! Female = 0
@@ -1089,14 +1093,16 @@ USE, INTRINSIC :: ISO_C_BINDING
                         ! Human to Vector transmission
                         !
                         lambda_0 = m_0(j)*1. ! f(a,t) = 1 
-                        !P_0 = P_max*(1 - exp(-lambda_0*P_h0))               ! Poisson
-                        P_0 = P_max*(1 - (k_NB/(k_NB+lambda_0*P_h0))**k_NB) ! Negative Binomial
+                        !P_0 = P_max*(1 - exp(-lambda_0*P_h0))                              ! Homogeneous Poisson model
+                        !P_0 = P_max*(1 - (k_NB/(k_NB+lambda_0*P_h0))**k_NB)                ! Negative Binomial model
+                        P_0 = P_max*(1 - exp(-people(iagent)%agent_ID%w_NB*lambda_0*P_h0))  ! Heterogeneous Poisson model
                         !
                         ! Vector to Human transmission
                         !
                         lambda_1 = m_1(j)*1. ! f(a,t) = 1 
-                        !P_1 = 1 - exp(-lambda_1*P_v0)               ! Poisson
-                        P_1 = 1 - (k_NB/(k_NB+lambda_1*P_v0))**k_NB ! Negative Binomial
+                        !P_1 = 1 - exp(-lambda_1*P_v0)                              ! Homogeneous Poisson model
+                        !P_1 = 1 - (k_NB/(k_NB+lambda_1*P_v0))**k_NB                ! Negative Binomial model
+                        P_1 = 1 - exp(-people(iagent)%agent_ID%w_NB*lambda_1*P_v0)  ! Heterogeneous Poisson model
                         !
                         ! Apply numerical threshold ---> Need to optimize transmission events for cases where P < epsilon
                         P_0 = min(real(floor(P_0/eps)),P_0)
@@ -1282,6 +1288,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                              people(iagent)%agent_ID%age=0.                             ! and as a baby
                              people(iagent)%health_status%malaria_status%imm=0.        ! Immunity level is zero
                              people(iagent)%health_status%malaria_status%mat_im=.true. ! Maternal immunity is active
+                             people(iagent)%agent_ID%w_NB=gengam(k_NB,k_NB)
                              !
                              if (generate_random() <= 0.51) then ! Sex
                                  people(iagent)%agent_ID%sex=0   ! Female = 0
@@ -1304,7 +1311,6 @@ USE, INTRINSIC :: ISO_C_BINDING
         !==
         !
         end subroutine agents_malaria
-        !
         !
         subroutine agents_dengue()
 

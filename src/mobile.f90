@@ -5,7 +5,7 @@ PROGRAM MOBILE
 !
 !                       MoBILE
 ! 
-!          Authors: M. Garrido Zornoza  & Adrian M. Tompkins
+!          Authors: M. Garrido Zornoza & Adrian M. Tompkins
 !          Contact: mgarrizoraca@gmail.com & tompkins@ictp.it
 !          
 !                      (2024)
@@ -120,6 +120,8 @@ PROGRAM MOBILE
   USE mo_timestep
   USE mo_spinup
 
+! External libraries
+  USE mo_ranlib
   !USE, INTRINSIC :: ISO_C_BINDING
   
 !----- VECTRI
@@ -139,6 +141,12 @@ implicit none
   integer :: itime     ! Time    (nsteps)
   integer :: ispinup   ! Number of needed spin-up years 
 
+  ! Random number and PDf sampler libraries
+  character(len=100) :: phrase
+  integer :: seed1, seed2
+  integer:: ntest
+  integer::nloop
+  real, allocatable :: array(:)
   ! CPU time 
   real(kind=8) :: t_start
   real(kind=8) :: t_spin
@@ -153,6 +161,12 @@ implicit none
   CALL SYSTEM_CLOCK(COUNT=start_count, COUNT_RATE=count_rate)
 !******************************************************************
 !
+! Initialize generators
+phrase = 'randomizer'
+call initialize( )
+call phrtsd( phrase, seed1, seed2 )
+call set_initial_seed( seed1, seed2 )
+!
 ! Get basic information for the current run
 call namelist_inout(run_name,disID,nsteps,seed,spin_up)
 !
@@ -166,6 +180,21 @@ itime = 1
   !
   ! init default constants for disease "disID"
   call const_disease(disID)
+
+  !---- Test gamma-distributed sampling from external libraries ---
+  ntest = 100000
+  allocate(array(ntest))
+  do nloop = 1, ntest
+    array(nloop) = gengam(k_NB,k_NB)
+  end do
+  open(unit=20, file=trim(run_name)//'/gamma_data.txt', status='replace', action='write')
+  
+  do nloop = 1, ntest
+      write(20, '(F12.6)') array(nloop)  ! Writes one value per line
+  end do
+  
+  close(20)
+  !-----------------------------------------------------------------
   !
   !
   ! 0.1.1 Input
@@ -179,7 +208,7 @@ itime = 1
       call namelist_clima(rain_file,t2m_file,area_file)
       !
       !--Init namelist constants, overriding default --> New parameter values from input
-      call namelist_const()
+      !call namelist_const()
       !
       !--Init grid, pop and forcing fields
       call netcdf_read_grid(pop_file,grid,nlon,nlat,nxy,pop_dens,lon_coord,lat_coord,mask_pop,nsteps)
@@ -188,12 +217,16 @@ itime = 1
       ! Declarations or interfaces related to the coupled mode
       !=
         call init_constants() ! VECTRI-specific constants
-        wurbn_ratio = 1e-6    ! 
+        !
         call init_vectri(pop_dens,mask_pop,nlon,nlat)
       !=
       !
 #endif
       !
+      !--Init namelist constants, overriding default --> New parameter values from input
+      call namelist_const()
+      !
+      print*, gengam(k_NB,k_NB)
       !=
         call grid_allocate(nxy,nlon,nlat,y_coord_1d,x_coord_1d)
       !=
