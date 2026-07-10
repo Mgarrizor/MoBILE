@@ -176,8 +176,17 @@ MODULE mo_const
     real :: fA_chr                          ! Fraction of chronic asymptomatics
     integer :: tau_chr                      ! Duration of chronic parasitaemia
  
-    real :: alph_max, alph_min          ! Symptomatics
-    real :: sig_m, e_m
+    real :: alph_max, alph_min, k_alph      ! Symptomatics
+    !real :: sig_m, e_m                     ! Old scheme
+
+    ! Sigmoidal curve param ~ slope
+    real :: m_a, m_c, k_m !
+
+    ! Sigmoidal curve param ~ inflection point
+    real :: i_star_a, i_star_c, k_star
+
+
+    real :: d_c, d_a, k_e              !
 
     !--- VECTRI/Malaria ---
     ! mo_vectri.f90
@@ -316,9 +325,9 @@ MODULE mo_const
         k_NB = 2.5            ! Guelbéogo et al. 2018 [DOI: https://doi.org/10.7554/eLife.32625]
       !  srho = 1.0
 
-        ! mu  = 1./(61.*365)    ! Background human mortality rate [day^-1] [ref] 
-
-        mu  = 0.0354/365.  ! Birth and mortality rate - Exponential fit to Senegal's 2020 WorldPop age structure 
+        ! mu  = 1./(61.*365)    ! Background human mortality rate [day^-1] [ref]
+        mu  = 0.0416/365.   ! Birth and mortality rate - Exponential fit to Senegal's 2000 WorldPop age structure
+      !  mu  = 0.0354/365.  ! Birth and mortality rate - Exponential fit to Senegal's 2020 WorldPop age structure
         !-- Immunity scheme --!
         e_0    = 0.2
         !e_0    = 0.09     ! Base increase in endemicity level [per infectious bite]                  [x]
@@ -331,30 +340,51 @@ MODULE mo_const
                                   !
                                   ! 3-9 months Gupta 1999 [DOI:]
                                   ! 3   months Ghani 2009 [DOI:]
-        rho = log(2.)/(6.*365)    ! Decay rate of endemicity/immunity level = ln(2)/(Half-life of clinical immunity) 5   [yr] Filipe 2007 [DOI:]
-                                  !                                                                                  6.9 [yr] Ghani 2009  [DOI:]
-        !-- Clearance time scheme --!
+        !-------------------------!
+        ! Immunity waning scheme  !
+        !
+        ! t_e(1/2): Half-life of clinical immunity
+        ! ln(2)/(t_e(1/2))  = 5   [yr] Filipe 2007 [DOI:]
+        !                   = 6.9 [yr] Ghani  2009  [DOI:]
+        !
+        ! Scheme: t_e(1/2) = t_c(1/2) + (t_a(1/2) - t_c(1/2))*(1-e(-a/k_e))
+        d_c = 200.                ! t_c(1/2)
+        d_a = 10.*365             ! t_a(1/2)
+        k_e = 15.                 ! k_e: e-folding age for maturation of immunity half-life
+        !-------------------------!
+        ! Clearance time scheme   !
                                   ! The reported mean and std are those of the corresponding normal distribution.
         d_mu    = -3.54           ! mu_1 = 5.2  (MT (PfPR ~ 0 %) [Sama et al. 2006a]), mu_2 = 1.66 (Ghana (PfPR ~ 75%) [Bretscher et al. 2011])
         d_sig   =  0.47           ! sig1 = 0.73 (MT (PfPR ~ 0 %) [Sama et al. 2006a]), sig2 = 1.20 (Ghana (PfPR ~ 75%) [Bretscher et al. 2011])
-        sig_1   =  0.73           ! 
+        sig_1   =  0.73           !
         mu_1    =  5.2            !
-
-        !-- Symptomatic scheme --!
-                          ! These values are only relevant when 
+        !---------------------------------!
+        ! Symptomatic probability scheme  !
+                          ! These values are only relevant when
         fA_chr   = 0.05   ! Fraction of chronic asymptomatics [unkown]
         tau_chr  = 365.*2    ! Duration of chronic parasitaemia  [unkown]
-                          ! 
+                          !
+        k_alph   = 1.
         alph_min = 0.28   !    We take the lowest we can find from literature focusing on highly endemic areas reporting (with PCR) adult prevalence
                           !    1-0.311 (Malawi) Topazian    2020 [DOI:]
                           !    1-0.482 (DCR)    Mvumbi      2015 [DOI:]
                           !    1-0.520 (Gabon)  Dal-Bianco  2007 [DOI:]
                           !    1-0.680 (Ghana)  Heinemann   2020 [DOI:]
-        ! So far this one ---> 1-0.721 (Ghana)  Owusu-Agyei 2002 [DOI:] 
+        ! So far this one ---> 1-0.721 (Ghana)  Owusu-Agyei 2002 [DOI:]
         alph_max = 1.    !
 
-        sig_m  = 20.     ! Sigmoidal curve param ~ slope
-        e_m    = 0.35    ! Sigmoidal curve param ~ inflection point
+        ! sig_m  = 20.   ! Old scheme
+        ! e_m    = 0.35  ! Old scheme
+
+        ! Sigmoidal curve param ~ slope
+        m_a = 10
+        m_c = 60
+        k_m = 10
+
+        ! Sigmoidal curve param ~ inflection point
+        i_star_a = 0.15
+        i_star_c = 0.5
+        k_star   = 10
 
         ! Mobility [non-functional ; wait for funding (Marie-Curie!)]---------------------------------------------------
 

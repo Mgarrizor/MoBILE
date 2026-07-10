@@ -1272,7 +1272,10 @@ USE, INTRINSIC :: ISO_C_BINDING
                             people(iagent)%health_status%malaria_status%imm = min(people(iagent)%health_status%malaria_status%imm + dimmunity(people(iagent)%health_status%malaria_status%imm,e_0,e1,e2,A1), 1.)
                             !
                             ! Transition to symptomatic with probability prob_symp() if maternal immunity 
-                            if ((generate_random() < prob_symp_sig(people(iagent)%health_status%malaria_status%imm,alph_max,alph_min,e_m,sig_m)) .and. (.not. people(iagent)%health_status%malaria_status%mat_im)) then 
+                            if ((generate_random() < prob_symp_sig(people(iagent)%health_status%malaria_status%imm,alph_max,age_alph_min(people(iagent)%agent_ID%age,alph_min,k_alph), &
+                                                                                                                             age_i_star(people(iagent)%agent_ID%age,i_star_a,i_star_c,k_star),&
+                                                                                                                             age_m_slope(people(iagent)%agent_ID%age,m_a,m_c,k_m))) &
+                                                    .and. (.not. people(iagent)%health_status%malaria_status%mat_im)) then
                                 !
                                 people(iagent)%health_status%malaria_status%status=3
                                 !
@@ -1376,7 +1379,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                         ! Immunity loss
                         else
                             !
-                            people(iagent)%health_status%malaria_status%imm = people(iagent)%health_status%malaria_status%imm*(1. - rho*dt)
+                            people(iagent)%health_status%malaria_status%imm = people(iagent)%health_status%malaria_status%imm*(1. - clearance_half(people(iagent)%agent_ID%age,d_c,d_a,k_e)*dt)
                             !
                             ! Transition to Susceptible
                             if (people(iagent)%health_status%malaria_status%imm < e_th) then 
@@ -1602,9 +1605,80 @@ USE, INTRINSIC :: ISO_C_BINDING
         real, intent(in)  :: A1      ! Coefficient
         real              :: delta_e ! Acquired immunity 
 
-            delta_e = e_0*(A1*exp(-imm/e1) + (1-A1)*(1-imm/e2))
+            delta_e = e_0*(A1*exp(-imm/e1) + (1-A1)*(exp(-imm/e2)))
 
         end function dimmunity
+
+        function clearance_half(age,d_c,d_a,k_e) result(tau_a)
+
+        ! Return half-life of waning immunity
+
+        implicit none
+
+        real, intent(in)  :: age     ! Agent age
+        real, intent(in)  :: d_c     ! Clearance baseline for children
+        real, intent(in)  :: d_a     ! Clearance baseline for adults
+        real, intent(in)  :: k_e ! Maturation time scale (~15yrs)
+
+        real :: tau_a                ! Half-life
+            !
+            tau_a = log(2.)/(d_c + (d_a - d_c) * (1-exp(-age/k_e)))
+
+        end function clearance_half
+        !
+        function age_alph_min(age,alph_min,k) result(alph_min_age)
+
+        ! Return minimum symptomatic probability as a function of age
+
+        implicit none
+
+        real, intent(in)  :: age        ! Agent age
+        real, intent(in)  :: alph_min   !
+        real, intent(in)  :: k          !
+
+        real :: alph_min_age                !
+            !
+            alph_min_age  = alph_min*exp(-age/k)
+
+        end function age_alph_min
+        !
+        function age_i_star(age,i_star_a,i_star_c,k_star) result(i_star_age)
+
+        ! Return immunity level for I --> A transition as a function of age
+        ! This is the inflection point in the sigmoidal curve
+
+        implicit none
+
+        real, intent(in)  :: age        ! Agent age
+        real, intent(in)  :: i_star_a   ! Transition immunity level for adults
+        real, intent(in)  :: i_star_c   ! Transition immunity level for children
+        real, intent(in)  :: k_star     ! e-folding age to flip from children
+                                        ! to adult
+
+        real :: i_star_age              !
+            !
+            i_star_age  = i_star_a + (i_star_c - i_star_a)*exp(-age/k_star)
+
+        end function age_i_star
+        !
+        function age_m_slope(age,m_a,m_c,k_m) result(m_slope_age)
+
+        ! Return immunity level for I --> A transition as a function of age
+        ! This is the inflection point in the sigmoidal curve
+
+        implicit none
+
+        real, intent(in)  :: age        ! Agent age
+        real, intent(in)  :: m_a   ! Slope of sigmoid for adults
+        real, intent(in)  :: m_c   ! Slope of sigmoid for children
+        real, intent(in)  :: k_m   ! e-folding age to flip from children
+                                   ! to adult
+
+        real :: m_slope_age              !
+            !
+            m_slope_age  = m_a + (m_c - m_a)*exp(-age/k_m)
+
+        end function age_m_slope
         !
         function prob_symp_sig(imm,alph_max,alph_min,e_m,sig_m) result(p)
 
