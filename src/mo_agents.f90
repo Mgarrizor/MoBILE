@@ -1274,8 +1274,8 @@ USE, INTRINSIC :: ISO_C_BINDING
                             ! Transition to symptomatic with probability prob_symp() if maternal immunity 
                             if ((generate_random() < prob_symp_sig(people(iagent)%health_status%malaria_status%imm,alph_max,age_alph_min(people(iagent)%agent_ID%age,alph_min,k_alph), &
                                                                                                                              age_i_star(people(iagent)%agent_ID%age,i_star_a,i_star_c,k_star),&
-                                                                                                                             age_m_slope(people(iagent)%agent_ID%age,m_a,m_c,k_m))) &
-                                                    .and. (.not. people(iagent)%health_status%malaria_status%mat_im)) then
+                                                                                                                             age_m_slope(people(iagent)%agent_ID%age,m_a,m_c,k_m))) & 
+                                                    .and. (.not. people(iagent)%health_status%malaria_status%mat_im)) then 
                                 !
                                 people(iagent)%health_status%malaria_status%status=3
                                 !
@@ -1619,7 +1619,7 @@ USE, INTRINSIC :: ISO_C_BINDING
         real, intent(in)  :: d_c     ! Clearance baseline for children
         real, intent(in)  :: d_a     ! Clearance baseline for adults
         real, intent(in)  :: k_e ! Maturation time scale (~15yrs)
-
+        
         real :: tau_a                ! Half-life
             !
             tau_a = log(2.)/(d_c + (d_a - d_c) * (1-exp(-age/k_e)))
@@ -1633,10 +1633,10 @@ USE, INTRINSIC :: ISO_C_BINDING
         implicit none
 
         real, intent(in)  :: age        ! Agent age
-        real, intent(in)  :: alph_min   !
-        real, intent(in)  :: k          !
-
-        real :: alph_min_age                !
+        real, intent(in)  :: alph_min   ! 
+        real, intent(in)  :: k          ! 
+        
+        real :: alph_min_age                ! 
             !
             alph_min_age  = alph_min*exp(-age/k)
 
@@ -1654,8 +1654,8 @@ USE, INTRINSIC :: ISO_C_BINDING
         real, intent(in)  :: i_star_c   ! Transition immunity level for children
         real, intent(in)  :: k_star     ! e-folding age to flip from children
                                         ! to adult
-
-        real :: i_star_age              !
+        
+        real :: i_star_age              ! 
             !
             i_star_age  = i_star_a + (i_star_c - i_star_a)*exp(-age/k_star)
 
@@ -1673,8 +1673,8 @@ USE, INTRINSIC :: ISO_C_BINDING
         real, intent(in)  :: m_c   ! Slope of sigmoid for children
         real, intent(in)  :: k_m   ! e-folding age to flip from children
                                    ! to adult
-
-        real :: m_slope_age              !
+        
+        real :: m_slope_age              ! 
             !
             m_slope_age  = m_a + (m_c - m_a)*exp(-age/k_m)
 

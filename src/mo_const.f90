@@ -186,7 +186,7 @@ MODULE mo_const
     real :: i_star_a, i_star_c, k_star
 
 
-    real :: d_c, d_a, k_e              !
+    real :: d_c, d_a, k_e              ! 
 
     !--- VECTRI/Malaria ---
     ! mo_vectri.f90
@@ -202,6 +202,8 @@ MODULE mo_const
     real, allocatable :: rgonof(:)          ! Gonotrophic cycle 
     real, allocatable :: m_0(:), m_1(:), m_all(:)  ! Vector to host ratio times the vector biting rate
 
+    ! VECTRI -- soil
+    real :: soilinfil_SA=(1./3.)*(50+250+750)
 
     !********** Clima **************************
     real, allocatable :: rainfall(:,:)    ! 2D long array for rainfall (nxy,t)
@@ -311,7 +313,7 @@ MODULE mo_const
         disease_name="Malaria"
         !
         ! Default disease values for human host
-        iip = 10              ! Intrinsic incubation period [day] Cowman et al 2016 [DOI:]
+        iip = 10              ! Intrinsic incubation period [day] Cowman et al 2016 [DOI: https://doi.org/10.1016/j.cell.2016.07.055]
         bite_night = 0.       ! Base daily probability to get bitten overnight. Should be a function of wellfare index (availability of bednets, ...)
         bite_day   = 0.       ! Base daily probability to get bitten during day (relevant for short daily trips and vectors that are active during day hours)
         P_v0 = 0.3            ! Base vector to human transmission probability  Ermert et al. 2011 [DOI:]
@@ -325,9 +327,9 @@ MODULE mo_const
         k_NB = 2.5            ! Guelbéogo et al. 2018 [DOI: https://doi.org/10.7554/eLife.32625]
       !  srho = 1.0
 
-        ! mu  = 1./(61.*365)    ! Background human mortality rate [day^-1] [ref]
+        ! mu  = 1./(61.*365)    ! Background human mortality rate [day^-1] [ref] 
         mu  = 0.0416/365.   ! Birth and mortality rate - Exponential fit to Senegal's 2000 WorldPop age structure
-      !  mu  = 0.0354/365.  ! Birth and mortality rate - Exponential fit to Senegal's 2020 WorldPop age structure
+      !  mu  = 0.0354/365.  ! Birth and mortality rate - Exponential fit to Senegal's 2020 WorldPop age structure 
         !-- Immunity scheme --!
         e_0    = 0.2
         !e_0    = 0.09     ! Base increase in endemicity level [per infectious bite]                  [x]
@@ -356,11 +358,11 @@ MODULE mo_const
                                   ! The reported mean and std are those of the corresponding normal distribution.
         d_mu    = -3.54           ! mu_1 = 5.2  (MT (PfPR ~ 0 %) [Sama et al. 2006a]), mu_2 = 1.66 (Ghana (PfPR ~ 75%) [Bretscher et al. 2011])
         d_sig   =  0.47           ! sig1 = 0.73 (MT (PfPR ~ 0 %) [Sama et al. 2006a]), sig2 = 1.20 (Ghana (PfPR ~ 75%) [Bretscher et al. 2011])
-        sig_1   =  0.73           !
+        sig_1   =  0.73           ! 
         mu_1    =  5.2            !
         !---------------------------------!
         ! Symptomatic probability scheme  !
-                          ! These values are only relevant when
+                          ! These values are only relevant when 
         fA_chr   = 0.05   ! Fraction of chronic asymptomatics [unkown]
         tau_chr  = 365.*2    ! Duration of chronic parasitaemia  [unkown]
                           !
@@ -370,11 +372,11 @@ MODULE mo_const
                           !    1-0.482 (DCR)    Mvumbi      2015 [DOI:]
                           !    1-0.520 (Gabon)  Dal-Bianco  2007 [DOI:]
                           !    1-0.680 (Ghana)  Heinemann   2020 [DOI:]
-        ! So far this one ---> 1-0.721 (Ghana)  Owusu-Agyei 2002 [DOI:]
+        ! So far this one ---> 1-0.721 (Ghana)  Owusu-Agyei 2002 [DOI:] 
         alph_max = 1.    !
 
         ! sig_m  = 20.   ! Old scheme
-        ! e_m    = 0.35  ! Old scheme
+        ! e_m    = 0.35  ! Old scheme  
 
         ! Sigmoidal curve param ~ slope
         m_a = 10
@@ -382,7 +384,7 @@ MODULE mo_const
         k_m = 10
 
         ! Sigmoidal curve param ~ inflection point
-        i_star_a = 0.15
+        i_star_a = 0.15  
         i_star_c = 0.5
         k_star   = 10
 

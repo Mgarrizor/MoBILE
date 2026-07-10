@@ -189,10 +189,16 @@ MODULE mo_namelist
                              m_long, m_short, D_grav, D_pop, H_0,                        & ! mobility params gravity model
                              B_0, fS_0, fI_0, fA_0, fR_0,                                & ! initial conditions
                              K_h, b_rate, P_v0, k_NB, P_h0, P_max,                       & ! Vector-human transmission params
-                             wurbn_ratio, wperm_ratio, wpond_ratio,                       & ! Vector ecology parameters
+                             wurbn_ratio,                                                & ! "Urban" fraction
+                             wperm_ratio, wperm_default,                                 & ! Permanent fraction
+                             wpond_min, wpond_max, wpond_ratio, wpond_shapep2,           & ! Pond scheme
+                             rlarv_flushtau, rlarv_flushmin,                             & ! Rain-driven mortality
+                             soilinfil_SA,                                               & ! Soil infiltration parameter for Sensitivity Analysis purposes
+                             wpond_depthref, wpond_CN, wpond_ref,                        & ! Pond scheme (Asare et al. 2019?)
+                             dgono,dsporo,                                               & !
                              e_0, e1, e2, A1, e_th, mat_rate, rho,                       & ! Immunity scheme
                              m_a, m_c, k_m, i_star_a, i_star_c, k_star,                  & ! Symptomatic scheme
-                             d_c, d_a, k_e,                                          & !
+                             d_c, d_a, k_e,                                          & ! 
                              alph_min,k_alph                                               !
 
             ! Does the file exist?

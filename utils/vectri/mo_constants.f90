@@ -728,6 +728,7 @@ CONTAINS
   CASE(0)
     wpond_ratio=1.0   ! ratio of temporary ponds selected by vector 
     wperm_ratio=0.01   ! ratio of permanent features, higher for anoph. funestus 
+    wperm_ratio=0.007
     wurbn_ratio=0.01   ! ratio of urban sites (gutters, tires etc),
     rbeta_indoor=0.2
 

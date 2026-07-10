@@ -140,6 +140,11 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
 
            npud_scheme=npud_scheme_default
 
+
+           ! constants specific for npud_vers=2 (Asare et al. 2016a,b)
+           wpond_S=25400/wpond_CN-254
+
+
            allocate(nbites(nlon*nlat))
            nbites(:) = 0.
 
@@ -153,9 +158,9 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
            !----- Larva biomass -------------------
            !=
              allocate(rmasslarv(0:nlarv))
-             ! mass relationship of larvae - we assume a stage 4 size as Bomblies and 
-             ! we will assume a linear mass increase with age unless find other reference 
-             ! this linear growth rate is very close to that assumed by Bomblies.   
+             ! - Mass relationship of larvae: we assume a stage 4 size as Bomblies and 
+             !   we will assume a linear mass increase with age unless find other reference. 
+             ! - This linear growth rate is very close to that assumed by Bomblies.   
              do i=0,nlarv
                 rmasslarv(i)=float(i)*rmasslarv_stage4/float(nlarv)
              end do
@@ -240,6 +245,12 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
                  !   soil frac           *infil val
                ENDDO
             ENDDO
+
+            ! Single value for SA 
+            DO ixy=1,nlon*nlat
+              rsoilinfil(ixy)= soilinfil_SA
+            ENDDO
+            
          !=
          !
         end subroutine init_vectri

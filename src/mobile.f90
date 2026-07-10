@@ -218,14 +218,33 @@ itime = 1
       ! Declarations or interfaces related to the coupled mode
       !=
         call init_constants() ! VECTRI-specific constants
-        !
-        call init_vectri(pop_dens,mask_pop,nlon,nlat)
       !=
       !
 #endif
       !
       !--Init namelist constants, overriding default --> New parameter values from input
       call namelist_const()
+
+      !e1 = 0.5*e_0  ! e-folding factor in boosted maternal/naive immunity acquisition (fast) [e_0]
+      !e2 = 10*e_0   ! e-folding factor in gradual immunity acquisition (slow)                [e_0]
+        
+      !wperm_default=1.0 ! Dielmo
+      !wpond_max=1.0
+
+      ! Fitting round 1
+      !wperm_ratio=0.006 ! Dielmo
+      !soilinfil_SA=675.16
+      !wpond_CN=86.78
+      !wpond_ratio=0.48
+      !dgono=44.18
+      !
+      !
+#ifdef COUPLED
+      !=
+        ! Initialize vectri fields (soil, vectors, carrying capacity)
+        call init_vectri(pop_dens,mask_pop,nlon,nlat)
+      !=
+#endif
       !
       print*, gengam(k_NB,k_NB)
       !=
