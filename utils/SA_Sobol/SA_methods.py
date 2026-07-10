@@ -227,10 +227,15 @@ def run(irun):
         with open(indir+f'stdout-file{i}.txt', 'w') as f_out:
             with open(indir+f'stderr-file{i}.txt', 'w') as f_err:
                 result = subprocess.run(command, stdout=f_out, stderr=f_err)   # Redirect sdout & sterr to .txt files 
+              #  result = subprocess.run(command, stdout=f_out)   # Redirect sdout & sterr to .txt files 
+               
                # subprocess.run(command)
             #   subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # If run was successful
         if result.returncode == 0:
             break
+        # Otherwise we'll try again, as some failures are caused by racing conditions
+        # in the source code (likely while creating symbolic links).
         else:
             print(f"\nCommand failed on first attempt (run: {i} --> re-trying)")
     else:
@@ -257,7 +262,7 @@ def post_processing(irun):
     subprocess.run(['ncks','-6','-O',outdir+'/mobile_SA_sample'+str(i)+'.nc',
                                      outdir+'/mobile_SA_sample'+str(i)+'_3.nc'])
     subprocess.run(['cdo','-O','-L',
-                          '-yearsum','-selvar,EIR',
+                          '-yearsum','-selvar,hbr',
                             outdir+'/mobile_SA_sample'+str(i)+'_3.nc',
                             outdir+'/yearmean'+str(i)+'_3.nc',
                                       ], stdout=subprocess.DEVNULL)
