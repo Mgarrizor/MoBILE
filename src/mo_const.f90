@@ -8,14 +8,12 @@ MODULE mo_const
 !
 ! Index
 !
-! 1) Parameters
-! 2) Cases
-!    0 - Cholera
-!    1 - Malaria (VECTRI)
-!    2 - ??
+! === 1. DECLARATIONS ===
+! === 2. EXECUTABLE STATEMENTS ===
+! === 3. SUBPROGRAM SECTION ===
 
-
-! 1) Parameters ----------------------------------
+! === 1. DECLARATIONS ===
+! Model Parameters ----------------------------------
     
     !********** Integration **********************
     integer :: nsteps       ! Number of integration steps (days) (either Namelist of Read from file)
@@ -28,8 +26,8 @@ MODULE mo_const
     integer :: ncid_out     ! ID of output NetCDF file
     integer :: ncid_in      ! ID of input NetCDF files
     integer :: ncid_grp(4)  ! ID of groups: 1 - Vector ; 2 - Human ; 3 - Climate ; 4 - Hydro
-    integer :: ncid_sbgrp(6)! ID of disease subgroups: 1 - Susceptible ; 2 - Exposed ; 3 - Infected ; 4 - Asymptomatic ; 5 - Recovered
-                            !                          6 - Immunity                
+    integer :: ncid_sbgrp(7)! ID of disease subgroups: 1 - Susceptible ; 2 - Exposed ; 3 - Infected ; 4 - Asymptomatic ; 5 - Recovered
+                            !                          6 - Immunity ; 7 - New Cases (Inew)        
     integer :: TempVarID, ncTempID
     integer :: RainVarID, ncRainID
     integer :: AreaVarID, ncAreaID
@@ -66,12 +64,16 @@ MODULE mo_const
 
     real, allocatable :: age_weights(:)   ! Array with age structure
     integer, allocatable :: age_counts(:) ! 1D array of age structure (for output)
-    integer :: age_blocks(8) = (/ 1, 5, 10, 15, 20, 40, 60, 80 /)  ! Age intervals to disaggreate diagnostics
+    integer :: age_blocks(16) = (/ 1,2,3,4,5,6,7,8,10,12,15,20,30,45,60,80 /)  ! Age intervals to disaggreate diagnostics
     ! Labels of disaggregated age structure (to improve --> automatise based on age_blocks(:))
-    character(len=100) ::  I_age_names(8)= [character(len=20) :: "I_0<","I_1-4","I_5-9","I_10-14","I_15-19","I_20-39","I_40-59","I_60>"]
-    character(len=100) ::  A_age_names(8)= [character(len=20) :: "A_0<","A_1-4","A_5-9","A_10-14","A_15-19","A_20-39","A_40-59","A_60>"]
-    character(len=100) ::  imm_age_names(8)= [character(len=20) :: "imm_0<","imm_1-4","imm_5-9","imm_10-14","imm_15-19","imm_20-39","imm_40-59","imm_60>"]
-    
+    !character(len=100) ::  I_age_names(8)= [character(len=20) :: "I_0<","I_1-4","I_5-9","I_10-14","I_15-19","I_20-39","I_40-59","I_60>"]
+    !character(len=100) ::  A_age_names(8)= [character(len=20) :: "A_0<","A_1-4","A_5-9","A_10-14","A_15-19","A_20-39","A_40-59","A_60>"]
+    !character(len=100) ::  imm_age_names(8)= [character(len=20) :: "imm_0<","imm_1-4","imm_5-9","imm_10-14","imm_15-19","imm_20-39","imm_40-59","imm_60>"]
+    integer, parameter :: STR_LEN = 100
+    ! Declare as allocatable
+    character(len=STR_LEN), allocatable :: I_age_names(:), A_age_names(:), imm_age_names(:), I_new_age_names(:)
+    !character(len=10), dimension(3)      :: prefixes = ["I_  ", "A_  ", "imm_"]
+  
     !********* Spin Up ***************************
 
     real, allocatable :: SU_new(:) ! (nxy) Array with year average to test convergence
@@ -117,6 +119,8 @@ MODULE mo_const
     real, allocatable, target :: Ea(:,:)! (nxy,nage_blocks)
     real, allocatable, target :: I(:) ! 1D long array for Infected density
     real, allocatable, target :: Ia(:,:)! (nxy,nage_blocks) 
+    real, allocatable, target :: I_new(:) ! 1D long array for New cases (Infected)
+    real, allocatable, target :: Ia_new(:,:)! (nxy,nage_blocks) 
     real, allocatable, target :: A(:) ! 1D long array for Asymptomatic density
     real, allocatable, target :: Aa(:,:)! (nxy,nage_blocks)
     real, allocatable, target :: R(:) ! 1D long array for Recovered density
@@ -190,7 +194,6 @@ MODULE mo_const
     real, allocatable :: m_0(:), m_1(:), m_all(:)  ! Vector to host ratio times the vector biting rate
 
 
-
     !********** Clima **************************
     real, allocatable :: rainfall(:,:)    ! 2D long array for rainfall (nxy,t)
     real, allocatable :: t2m(:,:)         ! 2D long array for temperature (nxy,t)
@@ -207,7 +210,43 @@ MODULE mo_const
     character(len=100), allocatable ::  att_list(:)     ! List of NetCDF file attributes (system params)
 
 
+    ! === 2. SUBPROGRAM SECTION ===
     CONTAINS
+
+    subroutine init_age_labels()
+        ! Local use indexes to initialize age names
+        integer :: i_age, p_age, n_age
+        character(len=10), dimension(4) :: prefixes = ["I_   ", "A_   ", "imm_ ", "Inew_"]
+
+        n_age = size(age_blocks)
+        allocate(I_age_names(n_age), A_age_names(n_age), imm_age_names(n_age), I_new_age_names(n_age))
+
+        do i_age = 1, n_age
+            do p_age = 1, 4
+                select case(p_age)
+                    case(1); call build_label(I_age_names(i_age),     prefixes(p_age), i_age, n_age, age_blocks)
+                    case(2); call build_label(A_age_names(i_age),     prefixes(p_age), i_age, n_age, age_blocks)
+                    case(3); call build_label(imm_age_names(i_age),   prefixes(p_age), i_age, n_age, age_blocks)
+                    case(4); call build_label(I_new_age_names(i_age), prefixes(p_age), i_age, n_age, age_blocks)
+                end select
+            end do
+        end do
+    end subroutine init_age_labels
+
+    subroutine build_label(str, pre, idx, total, blocks)
+        character(len=*), intent(out) :: str
+        character(len=*), intent(in)  :: pre
+        integer, intent(in)           :: idx, total, blocks(:)
+        
+        if (idx == 1) then
+            write(str, '(A, "0-", I0)') trim(pre), blocks(idx)-1
+        else if (idx < total) then
+            write(str, '(A, I0, "-", I0)') trim(pre), blocks(idx-1), blocks(idx)-1
+        else
+            write(str, '(A, I0, "+")') trim(pre), blocks(idx-1)
+        end if
+        str = adjustl(str)
+    end subroutine build_label
 
     subroutine const_disease(idis)
       implicit none

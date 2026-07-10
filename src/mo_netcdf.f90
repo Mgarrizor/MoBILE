@@ -126,6 +126,8 @@ MODULE mo_netcdf
         integer :: k
 
         ! 3D Fields
+        ! Variable order for write_check_3D call should be the same
+        ! as the order in which they were declared
         var_out = Var3D
       
         if ((out_S)) then 
@@ -148,6 +150,14 @@ MODULE mo_netcdf
             !
             do k = 1, size(age_blocks(:))
                 call write_check_3D(itime,Ia(:,k),var_out,'NetCDF Status Ia',ncid_sbgrp(3))
+            end do
+            !
+        end if
+
+        if (out_Ia_new) then
+            !
+            do k = 1, size(age_blocks(:))
+                call write_check_3D(itime,Ia_new(:,k),var_out,'NetCDF Status Ia_new',ncid_sbgrp(7))
             end do
             !
         end if
@@ -408,6 +418,9 @@ MODULE mo_netcdf
         if (out_Aa) then
             dim = dim + size(age_blocks(:))
         end if
+        if (out_Ia_new) then
+            dim = dim + size(age_blocks(:))
+        end if
                                       
 
 #ifdef COUPLED
@@ -576,6 +589,14 @@ MODULE mo_netcdf
             end if
         end if
         !
+        if ((out_Ia_new)) then
+            status = nf90_def_grp(parent_ncid = ncid_out, name = 'Inew', new_ncid = ncid_sbgrp(7))
+            if(status /= nf90_noerr) then
+              print *, 'NetCDF Status: error creating subgroup <<Inew>> ; status =', status
+              STOP
+            end if
+        end if
+        !
         !
         if ((out_Aa)) then
             status = nf90_def_grp(parent_ncid = ncid_out, name = 'A', new_ncid = ncid_sbgrp(4))
@@ -634,6 +655,18 @@ MODULE mo_netcdf
                           dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = arr_VarID(var_out))
                 status = nf90_put_att(ncid = ncid_sbgrp(3), varid = arr_VarID(var_out), name = "units", values = "fraction")
                 status = nf90_put_att(ncid = ncid_sbgrp(3), varid = arr_VarID(var_out), name = "long_name", values = "Age-disaggregated Infected symptomatic population per person")
+                var_out = var_out + 1
+                !
+            end do
+        end if
+
+        if ((out_Ia_new)) then
+            do k = 1, size(age_blocks(:))
+                !
+                status = nf90_def_var(ncid = ncid_sbgrp(7), name = I_new_age_names(k), xtype = nf90_double, &
+                          dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = arr_VarID(var_out))
+                status = nf90_put_att(ncid = ncid_sbgrp(7), varid = arr_VarID(var_out), name = "units", values = "fraction")
+                status = nf90_put_att(ncid = ncid_sbgrp(7), varid = arr_VarID(var_out), name = "long_name", values = "Age-disaggregated NEW symptomatic population per person")
                 var_out = var_out + 1
                 !
             end do

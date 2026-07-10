@@ -257,7 +257,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                                 stat_health = 1 !(Susceptible)
                                 people(indx)%health_status%malaria_status%infc_dur=0
                                 !
-                                if (idis == 1) then  ! For malaria we generate a low percentage of chronic asymptomatics (1%)
+                                if (idis == 1) then  ! For malaria we generate a low percentage of chronic asymptomatics
                                     if (generate_random() < fA_chr) then 
                                         !
                                         stat_health = 4 !(Asymptomatic)
@@ -493,7 +493,7 @@ USE, INTRINSIC :: ISO_C_BINDING
 
             allocate(age_weights(num_elements))
             allocate(age_counts(0:num_elements-1))
-            allocate(Iage_stat_ptr(7,num_elements)) ! SEIAR = 5 + imm + N(a) 
+            allocate(Iage_stat_ptr(8,num_elements)) ! SEIAR = 5 + imm + N(a) + Inew
             !
             age_counts(:) = 0
             do i = 1, num_elements
@@ -505,160 +505,6 @@ USE, INTRINSIC :: ISO_C_BINDING
             WRITE(*,*) '=========================='
 
         end subroutine agents_read_age
-
-        subroutine agents_diagnostics_loop(idis,scale)
-        !===
-            ! Calculate bulk statistics to feed into the disease source integration
-            !
-            integer, intent(in) :: idis ! 0 = Cholera: SIAR  ; 1 = Malaria: SEIAR ; 2 = Dengue [Non-functional]
-            real, allocatable, intent(in)    :: scale(:)
-            !integer, intent(out):: counter ! Number of alive agents
-            !
-            ! Local use only
-            integer :: iagent, istat, iloc, iage, j
-            logical :: iactive
-
-            SELECT case(idis)
-            case (0) ! Cholera -------------------------------
-            !
-            S(:) = 0.
-            I(:) = 0.
-            A(:) = 0.
-            R(:) = 0.
-            do iagent = 1,nagent
-                !
-                ! Increase age by da = 1/365
-                people(iagent)%agent_ID%age =  people(iagent)%agent_ID%age + da
-                !
-                istat    =  people(iagent)%health_status%cholera_status%status
-                iactive  =  people(iagent)%health_status%active_status%status
-                iloc     =  people(iagent)%location_status%currloc
-                !
-                ! Pointer approach to allow vectorization (discarded old branching if ... elseif ...)
-                if (iactive) then
-                    status_pointer(istat)%arr_p(iloc) = &
-                    status_pointer(istat)%arr_p(iloc) + 1.
-                end if
-                !
-            end do 
-            !
-            S(:) = scale(:)*S(:)
-            I(:) = scale(:)*I(:)
-            A(:) = scale(:)*A(:)
-            R(:) = scale(:)*R(:)
-            !=================================================
-
-            !
-            case (1) ! Malaria -------------------------------
-            !
-            S(:) = 0.
-            E(:) = 0.
-            I(:) = 0.
-            A(:) = 0.
-            R(:) = 0.
-            !
-            EIR(:) = 0.
-            if (.not. in_imm) then ! If not external forcing then reset immunity
-                !
-                imm(:) = 0.
-                !
-            end if
-            hbr(:) = 0.
-            !
-            if (diag_age) then
-                Sa(:,:) = 0.
-                Ea(:,:) = 0.
-                Ia(:,:) = 0.
-                Aa(:,:) = 0.
-                Ra(:,:) = 0.
-
-                imm_a(:,:) = 0.
-                N_a(:,:)   = 0.
-            end if 
-            !
-            do iagent = 1,nagent
-                !
-                ! Increase age by da = 1/365
-                people(iagent)%agent_ID%age =  people(iagent)%agent_ID%age + da
-                !
-                istat   =  people(iagent)%health_status%malaria_status%status
-                iactive =  people(iagent)%health_status%active_status%status
-                iloc    =  people(iagent)%location_status%currloc
-                iage    =  min(floor(people(iagent)%agent_ID%age),79)
-                !
-                ! Pointer approach to allow vectorization (discarded old branching if ... elseif ...)
-                if (iactive) then
-                    ! bulk SEIAR
-                    status_pointer(istat)%arr_p(iloc) = &
-                    status_pointer(istat)%arr_p(iloc) + 1.
-                    !
-                    if (in_imm) then ! Immunity is set to that of the external forcing
-                        !
-                        people(iagent)%health_status%malaria_status%imm = imm(iloc)
-                        !
-                    else ! Otherwise we gather value from agent for diagnostics
-                        imm(iloc) = imm(iloc) + people(iagent)%health_status%malaria_status%imm
-                    end if 
-                    !
-                    if (diag_age) then
-                        ! SEIAR disaggregated by age
-                        Iage_stat_ptr(istat,iage+1)%arr_p(iloc) = &
-                        Iage_stat_ptr(istat,iage+1)%arr_p(iloc) + 1.
-                        !
-                        ! Immunity disaggregated by age
-                        Iage_stat_ptr(6,iage+1)%arr_p(iloc) = &
-                        Iage_stat_ptr(6,iage+1)%arr_p(iloc) + &
-                        people(iagent)%health_status%malaria_status%imm
-                        !
-                        ! Agent number disaggregated by age
-                        Iage_stat_ptr(7,iage+1)%arr_p(iloc) = &
-                        Iage_stat_ptr(7,iage+1)%arr_p(iloc) + 1.
-                        !
-                    end if
-                end if
-                !
-                EIR(iloc) = EIR(iloc) + people(iagent)%health_status%malaria_status%EIR_att
-                hbr(iloc) = hbr(iloc) + people(iagent)%health_status%malaria_status%hbr_att
-                !
-            end do 
-            ! Density [km^-2]
-            !
-            !S(:) = HA(:)*S(:)/A_cell(:)
-            !E(:) = HA(:)*E(:)/A_cell(:)
-            !I(:) = HA(:)*I(:)/A_cell(:)
-            !A(:) = HA(:)*A(:)/A_cell(:)
-            !R(:) = HA(:)*R(:)/A_cell(:)
-            ! Fraction [per person]  = HA*N/(rho*A_cell) = N/npeop - with mobility this will have to 
-            !                                                        be modified 
-            S(:) = S(:)/npeop(:)
-            E(:) = E(:)/npeop(:)
-            I(:) = I(:)/npeop(:)
-            A(:) = A(:)/npeop(:)
-            R(:) = R(:)/npeop(:)
-            if (diag_age) then
-                do j = 1, size(age_blocks(:))
-                    !Ia(:,j) = HA(:)*Ia(:,j)/A_cell(:)
-                    !Aa(:,j) = HA(:)*Aa(:,j)/A_cell(:)
-                    !Ia(:,j) = Ia(:,j)/npeop(:)
-                    !Aa(:,j) = Aa(:,j)/npeop(:)
-                    Ia(:,j) = Ia(:,j)/N_a(:,j)
-                    Aa(:,j) = Aa(:,j)/N_a(:,j)
-                    !
-                    imm_a(:,j) = imm_a(:,j)/N_a(:,j)  ! Normalize by number of people in that age group
-                end do
-            end if
-            !===================================================
-
-            !
-            case (2) ! Dengue [Non-functional]
-            !
-            case default
-                print *, "Incorrect case, choose disID between: 0 (cholera) & 1 (malaria)"
-                STOP
-            end SELECT
-            !
-        !===
-        end subroutine agents_diagnostics_loop
 
         subroutine agents_diagnostics(idis,iagent)
         !===
@@ -736,6 +582,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                     Iage_stat_ptr(7,iage+1)%arr_p(iloc) = &
                     Iage_stat_ptr(7,iage+1)%arr_p(iloc) + 1.
                     !
+                    ! Inew is updated on the spot
                     !$END OMP ATOMIC
                 end if
             end if
@@ -751,7 +598,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             case (2) ! Dengue [Non-functional]
             !
             case default
-                print *, "Incorrect case, choose disID between: 0 (cholera) & 1 (malaria)"
+                print *, "Dengue [Non-functional] - choose disID between: 0 (cholera) & 1 (malaria)"
                 STOP
             end SELECT
             !
@@ -822,6 +669,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                 Sa(:,:) = 0.
                 Ea(:,:) = 0.
                 Ia(:,:) = 0.
+                Ia_new(:,:) = 0.
                 Aa(:,:) = 0.
                 Ra(:,:) = 0.
 
@@ -904,6 +752,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             if (diag_age) then
                 do j = 1, size(age_blocks(:))
                     !
+                    Ia_new(:,j) = Ia_new(:,j)/N_a(:,j)
                     Ia(:,j) = Ia(:,j)/N_a(:,j)
                     Aa(:,j) = Aa(:,j)/N_a(:,j)
                     !
@@ -1345,8 +1194,8 @@ USE, INTRINSIC :: ISO_C_BINDING
                     !
                     ! 2.0) Maternal immunity
                     !
-                    if (people(iagent)%health_status%malaria_status%mat_im) then ! If maternal immunity is active
-                        if (generate_random() < mat_rate) then                   ! becomes inactive with a probability (mat_rate)
+                    if (people(iagent)%health_status%malaria_status%mat_im) then ! If maternal immunity is active it
+                        if (generate_random() < mat_rate) then                   ! becomes inactive with a probability = mat_rate
                            !
                             people(iagent)%health_status%malaria_status%mat_im = .false.
                            !
@@ -1426,6 +1275,11 @@ USE, INTRINSIC :: ISO_C_BINDING
                             if ((generate_random() < prob_symp_sig(people(iagent)%health_status%malaria_status%imm,alph_max,alph_min,e_m,sig_m)) .and. (.not. people(iagent)%health_status%malaria_status%mat_im)) then 
                                 !
                                 people(iagent)%health_status%malaria_status%status=3
+                                !
+                                ! Update here Inew
+                                ! j is the agent location (accessed before)
+                                Iage_stat_ptr(8,min(floor(people(iagent)%agent_ID%age+1),79))%arr_p(j) = &
+                                Iage_stat_ptr(8,min(floor(people(iagent)%agent_ID%age+1),79))%arr_p(j) + 1.
                                 !
                                 ! Log-normally distributed times - function of imm
                                 people(iagent)%health_status%malaria_status%infc_dur=tau_log(people(iagent)%health_status%malaria_status%imm,d_mu,mu_1,d_sig,sig_1)

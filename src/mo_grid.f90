@@ -58,9 +58,12 @@ MODULE mo_grid
 
         if (diag_age) then
           !
+          call init_age_labels()
+          !
           allocate(Sa(nxy,size(age_blocks(:))))
           allocate(Ea(nxy,size(age_blocks(:))))
           allocate(Ia(nxy,size(age_blocks(:))))
+          allocate(Ia_new(nxy,size(age_blocks(:))))
           allocate(Aa(nxy,size(age_blocks(:))))
           allocate(Ra(nxy,size(age_blocks(:))))
           !
@@ -83,6 +86,7 @@ MODULE mo_grid
             !
             Iage_stat_ptr(7,indx+1)%arr_p => N_a(:,k)
             !
+            Iage_stat_ptr(8,indx+1)%arr_p => Ia_new(:,k)
           end do
         else 
           !allocate(I(nxy))

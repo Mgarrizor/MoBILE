@@ -38,23 +38,24 @@ MODULE mo_control
     logical :: out_HA   =.true.  ! Human to agent ratio
     !
     !======= Disease
-    logical :: out_S    =.true.  ! Susceptible
-    logical :: out_E    =.true.  ! Exposed
-    logical :: out_I    =.true.  ! Infected
-    logical :: out_Ia   =.true.  ! Age-disaggregated Infected
-    logical :: out_A    =.true.  ! Asymptomatic
-    logical :: out_Aa   =.true.  ! Age-disaggregated Asymptomatic
-    logical :: out_R    =.true.  ! Recovered
+    logical :: out_S       =.false.  ! Susceptible
+    logical :: out_E       =.true.  ! Exposed
+    logical :: out_I       =.true.  ! Infected
+    logical :: out_Ia_new  =.true.  ! Age-disaggregated new infections (Ianew)
+    logical :: out_Ia      =.false.  ! Age-disaggregated symptomatic (Ia)
+    logical :: out_A       =.true.  ! Asymptomatic
+    logical :: out_Aa      =.false.  ! Age-disaggregated asymptomatic (Aa)
+    logical :: out_R       =.false.  ! Recovered
 
-    logical :: diag_age = .true. ! Create age-stratified diagnostics
+    logical :: diag_age =.true.  ! Create age-stratified diagnostics
     !--- Cholera ----
-    logical :: out_B    =.true.  ! Bacterial density (could be changed to generic source of disease, e.g., B, V,...)
-    logical :: out_F    =.true.  ! Force of infection
+    logical :: out_B    =.false.  ! Bacterial density (could be changed to generic source of disease, e.g., B, V,...)
+    logical :: out_F    =.false.  ! Force of infection
     !--- Malaria ----
     logical :: out_EIR  =.true.  ! Entomological Inoculation Rate
     logical :: out_imm  =.true.  ! Endemicity level / Immunity
-    logical :: out_imm_a=.true.  ! Age-disaggregated Immunity
-    logical :: out_hbr  =.true.  ! Human Biting Rate
+    logical :: out_imm_a=.false.  ! Age-disaggregated Immunity
+    logical :: out_hbr  =.false.  ! Human Biting Rate
     logical :: in_imm   =.false. ! Input immunity forcing flag: always false and automatically set to true is the corresponding
                                  ! forcing file is found.
     !
@@ -81,7 +82,7 @@ MODULE mo_control
     character(len=100) ::  lat_names(3) = [character(len=20) :: "lat", "latitude", "Y"]
     character(len=100) ::  pop_names(4) = [character(len=20) :: "pop", "population", "population density", "Band1"]
     character(len=100) ::  rain_names(5)= [character(len=20) :: "rain", "rainfall", "precipitation", "tp", "precip"]
-    character(len=100) ::  temp_names(1)= [character(len=20) :: "temperature"]
+    character(len=100) ::  temp_names(2)= [character(len=20) :: "temperature","t2m"]
     character(len=100) ::  area_names(1)= [character(len=20) :: "cell_area"]
     character(len=100) ::  imm_names(2)= [character(len=20) :: "imm","imm_bulk"]
 
