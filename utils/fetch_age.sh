@@ -34,22 +34,37 @@
 #--------------------------------------------------------
 country1='SEN'                                             # Country code
 country2='sen'
-year=2020                                                  # Available years are 2020
+year=2000                                                  # Available years are 2020
 ages=(0 1 5 10 15 20 25 30 35 40 45 50 55 60 65 70 75 80)  # This is hardcoded WorldPop age structure resolution
 DIRECTORY="age_structure"
+
+constrained=false   # If True then we're fetching 2015-2030
+                   # otherwise we are using 2000-2020 
+
 
 if [ ! -d "$DIRECTORY" ]; then
 
     mkdir -p ${DIRECTORY} && cd ${DIRECTORY}
     echo 'Downloading age files'
+    echo 'Country:' ${country1} - 'Year:' ${year}
     for age in ${ages[@]}; do
         echo 'Age:' $age
-        # Female
-        wget -q https://data.worldpop.org/GIS/AgeSex_structures/Global_2000_2020_Constrained_UNadj/2020/${country1}//${country2}_f_${age}_${year}_constrained_UNadj.tif
-        gdal_translate -q -of NetCDF ${country2}_f_${age}_${year}_constrained_UNadj.tif ${country2}_f_${age}_${year}_constrained_UNadj.nc
-        # Male
-        wget -q https://data.worldpop.org/GIS/AgeSex_structures/Global_2000_2020_Constrained_UNadj/2020/${country1}//${country2}_m_${age}_${year}_constrained_UNadj.tif
-        gdal_translate -q -of NetCDF ${country2}_m_${age}_${year}_constrained_UNadj.tif ${country2}_m_${age}_${year}_constrained_UNadj.nc
+
+        if ( ${constrained} ) ; then
+            # Female
+            wget -q https://data.worldpop.org/GIS/AgeSex_structures/Global_2000_2020_Constrained_UNadj/2020/${country1}//${country2}_f_${age}_${year}_constrained_UNadj.tif
+            gdal_translate -q -of NetCDF ${country2}_f_${age}_${year}_constrained_UNadj.tif ${country2}_f_${age}_${year}.nc
+            # Male
+            wget -q https://data.worldpop.org/GIS/AgeSex_structures/Global_2000_2020_Constrained_UNadj/2020/${country1}//${country2}_m_${age}_${year}_constrained_UNadj.tif
+            gdal_translate -q -of NetCDF ${country2}_m_${age}_${year}_constrained_UNadj.tif ${country2}_m_${age}_${year}.nc
+        else
+            # Female
+            wget -q https://data.worldpop.org/GIS/AgeSex_structures/Global_2000_2020_1km/unconstrained/${year}/${country1}/${country2}_f_${age}_${year}_1km.tif
+            gdal_translate -q -of NetCDF ${country2}_f_${age}_${year}_1km.tif ${country2}_f_${age}_${year}.nc
+            # Male
+            wget -q https://data.worldpop.org/GIS/AgeSex_structures/Global_2000_2020_1km/unconstrained/${year}/${country1}/${country2}_m_${age}_${year}_1km.tif
+            gdal_translate -q -of NetCDF ${country2}_m_${age}_${year}_1km.tif ${country2}_m_${age}_${year}.nc
+        fi    
     done
     
     mkdir -p 'GeoTiff'
@@ -73,13 +88,13 @@ import scipy
 ages=[1, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80]
 
 # Female population
-ds_f = xr.open_dataset(f'NetCDF/${country2}_f_0_${year}_constrained_UNadj.nc')['Band1']
+ds_f = xr.open_dataset(f'NetCDF/${country2}_f_0_${year}.nc')['Band1']
 # Male population
-ds_m = xr.open_dataset(f'NetCDF/${country2}_m_0_${year}_constrained_UNadj.nc')['Band1']
+ds_m = xr.open_dataset(f'NetCDF/${country2}_m_0_${year}.nc')['Band1']
 for a in ages:
-    ds_dummy = xr.open_dataset(f'NetCDF/${country2}_f_{a}_${year}_constrained_UNadj.nc')['Band1']
+    ds_dummy = xr.open_dataset(f'NetCDF/${country2}_f_{a}_${year}.nc')['Band1']
     ds_f += ds_dummy
-    ds_dummy = xr.open_dataset(f'NetCDF/${country2}_m_{a}_${year}_constrained_UNadj.nc')['Band1']
+    ds_dummy = xr.open_dataset(f'NetCDF/${country2}_m_{a}_${year}.nc')['Band1']
     ds_m += ds_dummy
 
 
@@ -94,12 +109,12 @@ ax = ax.flatten()
 for i,a in enumerate(ages):
     plt.subplot(6,3,i+1)
 
-    ds_dummy = xr.open_dataset(f'NetCDF/${country2}_f_{a}_${year}_constrained_UNadj.nc')['Band1']
+    ds_dummy = xr.open_dataset(f'NetCDF/${country2}_f_{a}_${year}.nc')['Band1']
     x_f =  (np.array(ds_dummy/ds_f)).flatten()
     hist, bins, _ = plt.hist(x_f, bins=nbins, range=(0,0.5), edgecolor = "k", facecolor = "none")
     hist, bins, _ = plt.hist(x_f, bins=nbins, range=(0,0.5), edgecolor = "k", facecolor = 'orange', alpha = 0.3)   
 
-    ds_dummy = xr.open_dataset(f'NetCDF/${country2}_m_{a}_${year}_constrained_UNadj.nc')['Band1'] 
+    ds_dummy = xr.open_dataset(f'NetCDF/${country2}_m_{a}_${year}.nc')['Band1'] 
     x_m =  (np.array(ds_dummy/ds_m)).flatten()
     hist, bins, _ = plt.hist(x_m, bins=nbins, range=(0,0.5), edgecolor = "k", facecolor = "none")
     hist, bins, _ = plt.hist(x_m, bins=nbins, range=(0,0.5), edgecolor = "k", facecolor = 'skyblue', alpha = 0.3)   
@@ -236,7 +251,7 @@ plt.savefig('decay_rate_fit.pdf',dpi = 100, transparent = True)
 plt.close()
 
 #================= Save cummulative array =======
-np.savetxt('cumm_age.txt', y_new, fmt='%.3f', delimiter=' ', newline='\n', header='', footer='', comments='# ', encoding=None)
+np.savetxt('cumm_age.txt', y_new, fmt='%.4f', delimiter=' ', newline='\n', header='', footer='', comments='# ', encoding=None)
 EOF
 fi
 
