@@ -154,6 +154,16 @@ MODULE mo_netcdf
             !
         end if
 
+        if ((out_I_new) .and. (out_Ia_new)) then
+            !
+            call write_check_3D(itime,I_new,var_out,'NetCDF Status I_new',ncid_sbgrp(7))
+            !
+        else if (out_I_new) then
+            !
+            call write_check_3D(itime,I_new,var_out,'NetCDF Status I_new',ncid_grp(2))
+            !
+        end if
+
         if (out_Ia_new) then
             !
             do k = 1, size(age_blocks(:))
@@ -403,14 +413,15 @@ MODULE mo_netcdf
 
 
         ! Horrible, clean it up!
-        ! Lon+Lat+Time+ Rest
+        ! Lon+Lat+Time(=3) + Rest
         dim = 3 + merge(1, 0, out_pop)+merge(1, 0, out_S)  &
                                       +merge(1, 0, out_I)+merge(1, 0, out_R) &
                                       +merge(1, 0, out_B)+merge(1, 0, out_F) &
                                       +merge(1, 0, out_A)+merge(1, 0, out_Q) &
                                       +merge(1, 0, out_D)+merge(1, 0, out_rain) &
                                       +merge(1, 0, out_t2m) &
-                                      +merge(1, 0, out_age)
+                                      +merge(1, 0, out_age) &
+                                      +merge(1, 0, out_I_new)
 
         if (out_Ia) then
             dim = dim + size(age_blocks(:))
@@ -424,7 +435,7 @@ MODULE mo_netcdf
                                       
 
 #ifdef COUPLED
-        ! Declarations or interfaces related to the coupled mode
+        ! Declarations or interfaces related to the coupled (to VECTRI) mode
         dim = dim +merge(1, 0, out_wurbn) +merge(1, 0, out_wperm)   +merge(1, 0, out_wpond) &
                   +merge(1, 0, out_vect)  +merge(1, 0, out_vecinfc) +merge(1, 0, out_larv)&
                   +merge(1, 0, out_EIR)   +merge(1, 0, out_hbr)     +merge(1, 0, out_E)&
@@ -635,7 +646,7 @@ MODULE mo_netcdf
             status = nf90_def_var(ncid = ncid_sbgrp(3), name = "I_bulk", xtype = nf90_double, &
                       dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = arr_VarID(var_out))
             status = nf90_put_att(ncid = ncid_sbgrp(3), varid = arr_VarID(var_out), name = "units", values = "fraction")
-            status = nf90_put_att(ncid = ncid_sbgrp(3), varid = arr_VarID(var_out), name = "long_name", values = "Infected symptomatic population per person")
+            status = nf90_put_att(ncid = ncid_sbgrp(3), varid = arr_VarID(var_out), name = "long_name", values = "Infected symptomatic prevalence per person")
             var_out = var_out + 1
             !
         else if (out_I) then
@@ -643,7 +654,7 @@ MODULE mo_netcdf
             status = nf90_def_var(ncid = ncid_grp(2), name = "I", xtype = nf90_double, &
                       dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = arr_VarID(var_out))
             status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "units", values = "fraction")
-            status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "long_name", values = "Infected symptomatic population per person")
+            status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "long_name", values = "Infected symptomatic prevalence per person")
             var_out = var_out + 1
             !
         end if
@@ -654,10 +665,28 @@ MODULE mo_netcdf
                 status = nf90_def_var(ncid = ncid_sbgrp(3), name = I_age_names(k), xtype = nf90_double, &
                           dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = arr_VarID(var_out))
                 status = nf90_put_att(ncid = ncid_sbgrp(3), varid = arr_VarID(var_out), name = "units", values = "fraction")
-                status = nf90_put_att(ncid = ncid_sbgrp(3), varid = arr_VarID(var_out), name = "long_name", values = "Age-disaggregated Infected symptomatic population per person")
+                status = nf90_put_att(ncid = ncid_sbgrp(3), varid = arr_VarID(var_out), name = "long_name", values = "Age-disaggregated Infected symptomatic prevalence per person")
                 var_out = var_out + 1
                 !
             end do
+        end if
+
+        if ((out_I_new) .and. (out_Ia_new)) then
+            !
+            status = nf90_def_var(ncid = ncid_sbgrp(7), name = "Inew_bulk", xtype = nf90_double, &
+                      dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = arr_VarID(var_out))
+            status = nf90_put_att(ncid = ncid_sbgrp(7), varid = arr_VarID(var_out), name = "units", values = "fraction")
+            status = nf90_put_att(ncid = ncid_sbgrp(7), varid = arr_VarID(var_out), name = "long_name", values = "NEW symptomatic population per person")
+            var_out = var_out + 1
+            !
+        else if (out_I_new) then
+            !
+            status = nf90_def_var(ncid = ncid_grp(2), name = "Inew", xtype = nf90_double, &
+                      dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = arr_VarID(var_out))
+            status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "units", values = "fraction")
+            status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "long_name", values = "NEW symptomatic population per person")
+            var_out = var_out + 1
+            !
         end if
 
         if ((out_Ia_new)) then

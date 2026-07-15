@@ -38,16 +38,18 @@ MODULE mo_control
     logical :: out_HA   =.true.  ! Human to agent ratio
     !
     !======= Disease
+    logical :: diag_age =.true.  ! Create age-stratified diagnostics
+
     logical :: out_S       =.false.  ! Susceptible
-    logical :: out_E       =.true.  ! Exposed
-    logical :: out_I       =.true.  ! Infected
-    logical :: out_Ia_new  =.true.  ! Age-disaggregated new infections (Ianew)
+    logical :: out_E       =.false.   ! Exposed
+    logical :: out_I       =.true.   ! Infected
     logical :: out_Ia      =.false.  ! Age-disaggregated symptomatic (Ia)
-    logical :: out_A       =.true.  ! Asymptomatic
+    logical :: out_I_new   =.true.   ! New infections (I_new)
+    logical :: out_Ia_new  =.false.   ! Age-disaggregated new infections (Ia_new)
+    logical :: out_A       =.false.   ! Asymptomatic
     logical :: out_Aa      =.false.  ! Age-disaggregated asymptomatic (Aa)
     logical :: out_R       =.false.  ! Recovered
 
-    logical :: diag_age =.true.  ! Create age-stratified diagnostics
     !--- Cholera ----
     logical :: out_B    =.false.  ! Bacterial density (could be changed to generic source of disease, e.g., B, V,...)
     logical :: out_F    =.false.  ! Force of infection

@@ -45,6 +45,7 @@ MODULE mo_grid
         allocate(S(nxy))
         allocate(E(nxy))
         allocate(I(nxy))
+        allocate(I_new(nxy))
         allocate(A(nxy))
         allocate(R(nxy))
         !
@@ -98,6 +99,8 @@ MODULE mo_grid
         status_pointer(3)%arr_p => I 
         status_pointer(4)%arr_p => A
         status_pointer(5)%arr_p => R
+
+        status_pointer(6)%arr_p => I_new
 
 
       case (2) ! Dengue [Non-functional]

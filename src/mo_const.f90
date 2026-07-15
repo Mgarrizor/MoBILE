@@ -130,7 +130,7 @@ MODULE mo_const
       real, pointer :: arr_p(:)
     end type array_pointers
     
-    type(array_pointers) :: status_pointer(5)  ! SEIAR 
+    type(array_pointers) :: status_pointer(6)  ! SEIAR+I_new
     type(array_pointers), allocatable :: Iage_stat_ptr(:,:)  !(istatus,iage)
 
     !--- Cholera ---

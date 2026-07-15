@@ -493,7 +493,7 @@ USE, INTRINSIC :: ISO_C_BINDING
 
             allocate(age_weights(num_elements))
             allocate(age_counts(0:num_elements-1))
-            allocate(Iage_stat_ptr(8,num_elements)) ! SEIAR = 5 + imm + N(a) + Inew
+            allocate(Iage_stat_ptr(8,num_elements)) ! SEIAR = 5 + imm + N(a) + Inew(a)
             !
             age_counts(:) = 0
             do i = 1, num_elements
@@ -582,7 +582,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                     Iage_stat_ptr(7,iage+1)%arr_p(iloc) = &
                     Iage_stat_ptr(7,iage+1)%arr_p(iloc) + 1.
                     !
-                    ! Inew is updated on the spot
+                    ! Inew and Inew(a) are updated on the spot
                     !$END OMP ATOMIC
                 end if
             end if
@@ -654,6 +654,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             S(:) = 0.
             E(:) = 0.
             I(:) = 0.
+            I_new(:) = 0.
             A(:) = 0.
             R(:) = 0.
             !
@@ -745,6 +746,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             S(:) = S(:)/npeop(:)
             E(:) = E(:)/npeop(:)
             I(:) = I(:)/npeop(:)
+            I_new(:) = I_new(:)/npeop(:)
             A(:) = A(:)/npeop(:)
             R(:) = R(:)/npeop(:)
 
@@ -1280,10 +1282,17 @@ USE, INTRINSIC :: ISO_C_BINDING
                                 people(iagent)%health_status%malaria_status%status=3
                                 !
                                 ! Update here Inew
+                                !
+                                !$OMP ATOMIC
+                                ! Total new infections
                                 ! j is the agent location (accessed before)
+                                status_pointer(6)%arr_p(j) = status_pointer(6)%arr_p(j) + 1.
+                                !
+                                ! New infections broken down by age
                                 Iage_stat_ptr(8,min(floor(people(iagent)%agent_ID%age+1),79))%arr_p(j) = &
                                 Iage_stat_ptr(8,min(floor(people(iagent)%agent_ID%age+1),79))%arr_p(j) + 1.
                                 !
+                                !$END OMP ATOMIC
                                 ! Log-normally distributed times - function of imm
                                 people(iagent)%health_status%malaria_status%infc_dur=tau_log(people(iagent)%health_status%malaria_status%imm,d_mu,mu_1,d_sig,sig_1)
                                 !
