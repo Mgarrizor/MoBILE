@@ -162,14 +162,41 @@ implicit none
   CALL SYSTEM_CLOCK(COUNT=start_count, COUNT_RATE=count_rate)
 !******************************************************************
 !
-! Initialize generators
-phrase = 'randomizer'
+! Get basic information for the current run
+call namelist_inout(run_name,disID,nsteps,seed,spin_up)
+!
+! ---------------------------------------------------------------------
+! Reproducibility: make a run repeatable bit-for-bit when it is re-run
+! with the same `seed`, the same number of OpenMP threads, and the same
+! schedule. Two things used to stop this from being possible, both fixed
+! here:
+!   1) RNGLIB (used below, and for the agent-weight sampler gengam) was
+!      always seeded from the fixed word 'randomizer', so the namelist
+!      `seed` never actually reached it -- every run drew the same
+!      RNGLIB numbers regardless of what `seed` was set to. Also, the
+!      namelist used to be read further below, i.e. after this seeding
+!      already happened, so `seed` could not have been used here even if
+!      we had wanted to.
+!   2) The intrinsic random number generator (RANDOM_NUMBER, used almost
+!      everywhere else: agent health transitions, mobility choices,
+!      disease-profile draws) was reseeded from the system clock once at
+!      agent start-up and again on every single simulated day -- so two
+!      runs of the exact same namelist never produced the same numbers.
+! ---------------------------------------------------------------------
+!
+! Seed RNGLIB from the namelist `seed` (write() turns the integer into a
+! phrase, since phrtsd expects a character string to hash into the pair
+! of integers (seed1,seed2) that set_initial_seed needs).
+write( phrase, '(i0)' ) seed
 call initialize( )
 call phrtsd( phrase, seed1, seed2 )
 call set_initial_seed( seed1, seed2 )
 !
-! Get basic information for the current run
-call namelist_inout(run_name,disID,nsteps,seed,spin_up)
+! Give every OpenMP thread its own persistent, deterministically-seeded
+! random stream (both RNGLIB and the intrinsic generator) -- see
+! agents_seed_threads (mo_agents.f90) for why a dedicated one-time
+! subroutine is needed instead of a single random_seed() call here.
+call agents_seed_threads(seed)
 !
 ! Initialization of the grid and agent worlds
 itime = 1
@@ -440,13 +467,14 @@ elapsed_time = REAL(end_count - start_count) / REAL(count_rate)
 print '("Wall time: ",f6.3," seconds")',elapsed_time
 print *, '------------------------'
 ! 
+print *, wperm_default
 !********************************************************
 ! 0.6 Spin-up
 !=
 if (spin_up==1) then
   !
   SU_conv=.false.
-  SU_tol=0.01
+  SU_tol=0.015
 
   allocate(SU_old(nxy))
   allocate(SU_new(nxy))
@@ -455,7 +483,12 @@ if (spin_up==1) then
   ispinup = 0
   !
   print '("Starting Spin-up")'
-  
+
+  ! Redirect t2m/rainfall to a capped multi-year climatology so the
+  ! convergence loop below integrates against a typical seasonal cycle
+  ! instead of replaying the raw first year; time_step is untouched.
+  call build_spinup_climatology()
+
   do while (.not. SU_conv)
     !
     SU_old(:) = SU_new(:)
@@ -487,6 +520,9 @@ if (spin_up==1) then
     ispinup = ispinup + 1
     !
   end do
+  !
+  ! Swap t2m/rainfall back to the real driver record for the main loop.
+  call restore_spinup_forcing()
   !
   deallocate(SU_new)
   deallocate(SU_old)

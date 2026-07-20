@@ -111,7 +111,7 @@ MODULE mo_source
             real, intent(in) :: m                          ! Mobility parameters
             real, intent(in) :: eps                        ! Numerical tolerance
             logical, intent(in)              :: out_rain   ! Rainfall flag
-            real, allocatable, intent(in)    :: rainfall(:,:)! 2D long array for rainfall (nxy,t=itime)
+            real, intent(in)                 :: rainfall(:,:)! 2D long array for rainfall (nxy,t=itime); accepts allocatable or pointer actual arg
             real, allocatable, intent(in)    :: I(:)       ! Density of infected symptomatic people (len=nxy)
             real, allocatable, intent(in)    :: A_old(:)   ! Old density of infected asymptomatic people (len=nxy)
             real, allocatable, intent(in)    :: D(:)       ! Dilution factor (len=nxy)

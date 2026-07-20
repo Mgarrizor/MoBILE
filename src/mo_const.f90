@@ -206,8 +206,11 @@ MODULE mo_const
     real :: soilinfil_SA=(1./3.)*(50+250+750)
 
     !********** Clima **************************
-    real, allocatable :: rainfall(:,:)    ! 2D long array for rainfall (nxy,t)
-    real, allocatable :: t2m(:,:)         ! 2D long array for temperature (nxy,t)
+    ! Pointers (not allocatable) so that spin-up can redirect them to a
+    ! climatology and swap back to the real record afterwards -- see
+    ! mo_spinup.f90. ALLOCATE works on POINTER arrays exactly as before.
+    real, pointer :: rainfall(:,:) => null()    ! 2D long array for rainfall (nxy,t)
+    real, pointer :: t2m(:,:) => null()         ! 2D long array for temperature (nxy,t)
 
     real :: point_rain, point_temp
 

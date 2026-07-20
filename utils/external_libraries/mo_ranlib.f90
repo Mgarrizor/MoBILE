@@ -2573,7 +2573,15 @@ function sexpo ( )
     umin = min ( umin, ustar )
     i = i + 1
 
-    if ( u <= q(i) ) then
+    ! Bug fix: q(8) = 0.9999999, just short of 1. In rare floating-point cases
+    ! u can end up larger than that, so the original "if (u <= q(i))" test below
+    ! never triggers and i keeps counting past 8, reading past the end of q(:)
+    ! -- caught this as a real crash (only for some seeds, since it depends on
+    ! the exact draws) once the model's random numbers became seed-controlled.
+    ! Fix: also stop once we reach the last table entry, i.e. treat "i >= 8" as
+    ! reaching the tail of the distribution too. The bit of probability this
+    ! cuts off is about 1 in 10 million, i.e. of no practical consequence.
+    if ( u <= q(i) .or. i >= 8 ) then
       exit
     end if
 

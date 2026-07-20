@@ -118,9 +118,15 @@ USE, INTRINSIC :: ISO_C_BINDING
 #ifdef MOBILITY
             integer :: j          ! Short trip location index
 #endif
-            
+
             !
-            call random_seed()       ! Each simulation generates a different series of random numbers
+            ! Note: this used to call random_seed() here with no arguments, which draws
+            ! a fresh seed from the system clock -- meaning every simulation drew a
+            ! different series of random numbers, even for two runs of the same
+            ! namelist. The random number generator is now seeded once, deterministically,
+            ! from the namelist `seed`, at program start (see agents_seed_threads,
+            ! called from mobile.f90) -- do not reseed here or the run stops being
+            ! reproducible.
 
             ! Calculate number of agents per grid cell for a given total, nagent, and
             ! the input human population density, pop_dens
@@ -208,7 +214,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                             !
                             ! Initialize main agent attributes
                             people(indx)%agent_ID%age=find_face0(generate_random(),age_weights(:),size(age_weights(:))) &
-                                                      + generate_random() 
+                                                      + generate_random()
                             age_counts(floor(people(indx)%agent_ID%age)) = age_counts(floor(people(indx)%agent_ID%age)) + 1
                             people(indx)%agent_ID%name=indx     !
                             people(indx)%agent_ID%sex=0         ! F = 0, M = 1 [Not in use]
@@ -458,6 +464,85 @@ USE, INTRINSIC :: ISO_C_BINDING
             !deallocate(A_cell)
         end subroutine agents_init
 
+        ! -----------------------------------------------------------------------
+        ! Make a run reproducible: give every OpenMP thread its own private,
+        ! repeatable random number stream, so that re-running the model with the
+        ! same namelist `seed` and the same number of threads reproduces exactly
+        ! the same agent-level decisions (health transitions, mobility choices,
+        ! disease-profile draws, ...) and therefore exactly the same output.
+        !
+        ! Before this subroutine existed, neither random number generator used
+        ! by the model could be trusted to repeat a run:
+        !   - RNGLIB (the library behind gengam, the agent inter-event-time
+        !     sampler) had no per-thread state at all: every thread shared the
+        !     same "which generator am I" index, so which thread ran first was
+        !     free to change the outcome -- a genuine race, not only a
+        !     reproducibility gap (see the THREADPRIVATE fix in mo_rnglib.f90).
+        !   - The intrinsic random number generator (RANDOM_NUMBER, used almost
+        !     everywhere else) was being reseeded from the system clock once at
+        !     agent start-up and again on every single simulated day, so two
+        !     runs of the same namelist never drew the same numbers.
+        !
+        ! This subroutine must be called exactly once, early in the run
+        ! (mobile.f90), before the model's first daily !$OMP PARALLEL DO
+        ! (mo_timestep.f90). OpenMP guarantees that thread-private state set up
+        ! here survives every later re-entry into that parallel loop, as long as
+        ! the number of threads stays fixed and OMP_DYNAMIC stays off for the
+        ! rest of the run -- which is exactly what is enforced below.
+        ! -----------------------------------------------------------------------
+        subroutine agents_seed_threads(master_seed)
+
+            implicit none
+            integer, intent(in) :: master_seed   ! Namelist `seed`: same value everywhere below -> same run
+            !
+            ! Local use only
+            integer :: ithread                   ! OpenMP thread number (0 .. number of threads - 1)
+            integer :: n_seed                     ! Length of the seed array RANDOM_SEED expects (compiler-dependent)
+            integer :: k                          ! Dummy looping index
+            integer, allocatable :: put_seed(:)   ! Seed array handed to RANDOM_SEED(put=...)
+
+            ! Fix the thread count for the rest of the run: OpenMP's guarantee that
+            ! thread-private state survives across separate parallel regions only
+            ! holds when the number of threads does not change mid-run.
+            call omp_set_dynamic(.false.)
+
+            if (omp_get_max_threads() > 32) then
+                print *, 'RNGLIB supports at most 32 independent generators --> STOP'
+                STOP
+            end if
+
+            ! Seed the serial-mode RNG state directly, outside any parallel region.
+            ! Code that runs serially (e.g. agents_init, called right after this
+            ! subroutine) executes on the master thread, but its RNG storage is not
+            ! guaranteed to be the same slot gfortran uses for "thread 0 inside a
+            ! team" below -- so both need seeding, with the same formula (ithread=0).
+            call random_seed( size = n_seed )
+            allocate( put_seed(n_seed) )
+            put_seed(:) = master_seed + 104729 + [ (k, k = 1, n_seed) ]
+            call random_seed( put = put_seed )
+            deallocate( put_seed )
+            call cgn_set( 1 )   ! RNGLIB generator 1 for the master/serial stream
+
+!$OMP PARALLEL DEFAULT(SHARED) PRIVATE(ithread,n_seed,k,put_seed)
+            ithread = omp_get_thread_num()
+            ! Serialize the one-time setup itself -- concurrent RANDOM_SEED/cgn_set
+            ! calls during initialization are not safe to assume thread-independent,
+            ! even though the resulting per-thread state is. This block runs exactly
+            ! once per thread, for the whole program, so the cost is negligible.
+!$OMP CRITICAL
+            call cgn_set( ithread + 1 )                 ! One RNGLIB generator per thread (1..N)
+            call random_seed( size = n_seed )
+            allocate( put_seed(n_seed) )
+            ! 104729 (the 10 000th prime) only decorrelates the per-thread seed
+            ! words deterministically -- no statistical-quality requirement beyond
+            ! "different threads get different, repeatable seeds" is needed here.
+            put_seed(:) = master_seed + (ithread + 1) * 104729 + [ (k, k = 1, n_seed) ]
+            call random_seed( put = put_seed )
+            deallocate( put_seed )
+!$OMP END CRITICAL
+!$OMP END PARALLEL
+        end subroutine agents_seed_threads
+
         subroutine agents_read_age(age_weights,age_counts)
         !===
             ! Reads file 'cumm_age.txt' into an array
@@ -567,7 +652,20 @@ USE, INTRINSIC :: ISO_C_BINDING
                 end if 
                 !
                 if (diag_age) then
-                    !$OMP ATOMIC
+                    ! Bug fix: this block adds to three shared, age-indexed running
+                    ! totals in a row. !$OMP ATOMIC only ever protects the ONE
+                    ! statement right after it -- it was written here as if it
+                    ! covered the whole block, but really only the first of the
+                    ! three additions below was ever protected; the other two could
+                    ! be overwritten mid-update by another thread doing the same
+                    ! agent-count math for a different agent at the same grid cell
+                    ! and age bracket. Since every agent here shares the same
+                    ! handful of (cell, age) totals, this happens often enough to
+                    ! visibly change the output. !$OMP CRITICAL covers the whole
+                    ! block correctly, at the cost of the three additions no longer
+                    ! running concurrently with each other -- negligible next to the
+                    ! per-agent work done elsewhere in this loop.
+                    !$OMP CRITICAL
                     !
                     ! SEIAR disaggregated by age
                     Iage_stat_ptr(istat,iage+1)%arr_p(iloc) = &
@@ -583,16 +681,21 @@ USE, INTRINSIC :: ISO_C_BINDING
                     Iage_stat_ptr(7,iage+1)%arr_p(iloc) + 1.
                     !
                     ! Inew and Inew(a) are updated on the spot
-                    !$END OMP ATOMIC
+                    !$OMP END CRITICAL
                 end if
             end if
             !
-            !$OMP ATOMIC
+            ! Bug fix: same issue as the block above -- EIR and hbr are two
+            ! separate additions to shared per-cell totals, but the old !$OMP
+            ! ATOMIC only protected the first (EIR); hbr could be, and was,
+            ! silently corrupted by concurrent updates from other agents at the
+            ! same cell. !$OMP CRITICAL protects both together.
+            !$OMP CRITICAL
             !
             EIR(iloc) = EIR(iloc) + people(iagent)%health_status%malaria_status%EIR_att
             hbr(iloc) = hbr(iloc) + people(iagent)%health_status%malaria_status%hbr_att
             !
-            !$END OMP ATOMIC
+            !$OMP END CRITICAL
             !===================================================
             !
             case (2) ! Dengue [Non-functional]
@@ -676,7 +779,7 @@ USE, INTRINSIC :: ISO_C_BINDING
 
                 imm_a(:,:) = 0.
                 N_a(:,:)   = 0.
-            end if 
+            end if
             !
             !===================================================
             !
@@ -1155,10 +1258,10 @@ USE, INTRINSIC :: ISO_C_BINDING
 
                                 ! Update number of agents in either grid cell
                                 !$OMP ATOMIC
-                                npeop(i) = npeop(i) - 1 
+                                npeop(i) = npeop(i) - 1
                                 npeop(j) = npeop(j) + 1
                                 !$END OMP ATOMIC
-                            else 
+                            else
                                 ! Update duration of trip counter --> useful if we implement not exponential travelling times
                                 people(iagent)%location_status%longdur = people(iagent)%location_status%longdur + 1
 
@@ -1179,7 +1282,7 @@ USE, INTRINSIC :: ISO_C_BINDING
 
                                 ! Update number of agents in either grid cell
                                 !$OMP ATOMIC
-                                npeop(i) = npeop(i) - 1 
+                                npeop(i) = npeop(i) - 1
                                 npeop(j) = npeop(j) + 1
                                 !$END OMP ATOMIC
                             !
@@ -1283,7 +1386,12 @@ USE, INTRINSIC :: ISO_C_BINDING
                                 !
                                 ! Update here Inew
                                 !
-                                !$OMP ATOMIC
+                                ! Bug fix: same pattern as the age-disaggregated block further
+                                ! up (see the comment there) -- two additions to shared totals in
+                                ! a row, but only the first (Inew) was ever actually protected by
+                                ! the old !$OMP ATOMIC; Inew(a) could be corrupted by another
+                                ! agent's new-infection event at the same cell and age bracket.
+                                !$OMP CRITICAL
                                 ! Total new infections
                                 ! j is the agent location (accessed before)
                                 status_pointer(6)%arr_p(j) = status_pointer(6)%arr_p(j) + 1.
@@ -1292,7 +1400,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                                 Iage_stat_ptr(8,min(floor(people(iagent)%agent_ID%age+1),79))%arr_p(j) = &
                                 Iage_stat_ptr(8,min(floor(people(iagent)%agent_ID%age+1),79))%arr_p(j) + 1.
                                 !
-                                !$END OMP ATOMIC
+                                !$OMP END CRITICAL
                                 ! Log-normally distributed times - function of imm
                                 people(iagent)%health_status%malaria_status%infc_dur=tau_log(people(iagent)%health_status%malaria_status%imm,d_mu,mu_1,d_sig,sig_1)
                                 !
@@ -1413,9 +1521,15 @@ USE, INTRINSIC :: ISO_C_BINDING
                             people(iagent)%health_status%malaria_status%EIR_att=0.
                             people(iagent)%health_status%malaria_status%hbr_att=0.
                             people(iagent)%health_status%malaria_status%imm=0.
-                            !$OMP ATOMIC
+                            ! Bug fix: this has to be CRITICAL, not ATOMIC, even though it is
+                            ! only one statement -- npeop is also updated by the regrowth
+                            ! do-while loop just below, inside its own CRITICAL region, and in
+                            ! OpenMP an ATOMIC update and a CRITICAL region do NOT exclude each
+                            ! other. Using ATOMIC here would still let a death and a birth
+                            ! collide on the same npeop entry at the same time.
+                            !$OMP CRITICAL
                             npeop(j) = npeop(j) - 1
-                            !$END OMP ATOMIC
+                            !$OMP END CRITICAL
                             !
                         end if
                         !
@@ -1424,7 +1538,18 @@ USE, INTRINSIC :: ISO_C_BINDING
                    !
                    ! We try to activate agent "iagent" a maximum number of (npeop(i) - nattempt(i)) times
                    ! If successful then cycle (cyc=.true.) to next agent
+                   !
+                   ! Bug fix: the whole loop, including its condition, must run inside one
+                   ! CRITICAL region. n_attempt(i) and npeop(i) are read on every pass
+                   ! through "do while (...)", and other dead agents at this same cell can be
+                   ! running this exact loop at the same time on other threads. Without the
+                   ! CRITICAL region, that read is not just liable to see a stale value -- it
+                   ! changes how many times the loop repeats, and each extra pass consumes
+                   ! another generate_random() draw. So a race here does not just get the
+                   ! headcount wrong for one cell; it shifts how many random numbers this
+                   ! thread has drawn so far, throwing off every later agent it processes.
                    cyc=.false.
+!$OMP CRITICAL
                    do while ((n_attempt(i) .le. npeop(i)) .and. (.not. cyc))
                         if (generate_random() <= mu) then ! Growth event
                              !
@@ -1437,20 +1562,17 @@ USE, INTRINSIC :: ISO_C_BINDING
                              !
                              if (generate_random() <= 0.51) then ! Sex
                                  people(iagent)%agent_ID%sex=0   ! Female = 0
-                             else 
+                             else
                                  people(iagent)%agent_ID%sex=1   ! Male = 0
                              end if
                              cyc=.true.
-                             !$OMP ATOMIC
                              n_attempt(i) = n_attempt(i) + 1
                              npeop(i) = npeop(i) + 1
-                             !$END OMP ATOMIC
                         else
-                             !$OMP ATOMIC
                              n_attempt(i) = n_attempt(i) + 1
-                             !$END OMP ATOMIC
-                        end if 
+                        end if
                     end do
+!$OMP END CRITICAL
                 end if ! If (active)
             end if ! If (mask_pop(currloc))
         !==

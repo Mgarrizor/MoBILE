@@ -124,14 +124,28 @@ subroutine time_step(disID,itime)
       if ((agents)) then
       !=
         !
-        ! "Re-initialise" random number generator
-        call random_seed()
+        ! Note: this used to call random_seed() here, with no arguments, at the start
+        ! of every single simulated day. That draws a fresh seed from the system clock
+        ! each time, which broke reproducibility twice over: it discarded the
+        ! deterministic sequence the run started with, and it only ever reset the
+        ! calling (master) thread's numbers anyway, doing nothing for the other
+        ! threads below. The random number generator is now seeded once, for every
+        ! thread, at program start (see agents_seed_threads in mo_agents.f90) and
+        ! never touched again -- do not add a reseed call back here.
         !
         ! Pre-diagnostics calculations
         call agents_pre_diagnostics(disID)
         !
-!$OMP PARALLEL DO
-        agent_loop: do iagent=1,nagent   
+        ! SCHEDULE(STATIC) is made explicit (rather than left as the unstated
+        ! compiler default) because reproducibility depends on it: which thread
+        ! processes a given agent determines which random number stream that
+        ! agent's decisions are drawn from (see agents_seed_threads). STATIC is the
+        ! only schedule kind whose thread-to-agent assignment is a fixed function of
+        ! (nagent, number of threads) alone -- DYNAMIC/GUIDED depend on runtime
+        ! timing and would silently break reproducibility even with everything else
+        ! in place.
+!$OMP PARALLEL DO SCHEDULE(STATIC)
+        agent_loop: do iagent=1,nagent
         !
         ! 3.1) Update health status
         !=
