@@ -1423,21 +1423,28 @@ USE, INTRINSIC :: ISO_C_BINDING
                                 !
                                 ! Update here Inew
                                 !
-                                ! Bug fix: same pattern as the age-disaggregated block further
-                                ! up (see the comment there) -- two additions to shared totals in
-                                ! a row, but only the first (Inew) was ever actually protected by
-                                ! the old !$OMP ATOMIC; Inew(a) could be corrupted by another
-                                ! agent's new-infection event at the same cell and age bracket.
-                                !$OMP CRITICAL
+                                ! Bug fix (updated): same pattern as the age-disaggregated and
+                                ! EIR/hbr blocks further up (see those comments) -- two additions
+                                ! to shared totals in a row, but only the first (Inew) was ever
+                                ! actually protected by the old !$OMP ATOMIC; Inew(a) could be
+                                ! corrupted by another agent's new-infection event at the same
+                                ! cell and age bracket. This was fixed with !$OMP CRITICAL
+                                ! wrapping both lines, which -- as with the other two blocks --
+                                ! was more than the race needed and shared the same program-wide
+                                ! lock as every other unnamed CRITICAL. status_pointer(6) and
+                                ! Iage_stat_ptr(8,...) are different arrays, never the same
+                                ! address, so they never needed to exclude each other; a separate
+                                ! !$OMP ATOMIC per line fixes the same race per-address instead.
+                                !
                                 ! Total new infections
                                 ! j is the agent location (accessed before)
+                                !$OMP ATOMIC
                                 status_pointer(6)%arr_p(j) = status_pointer(6)%arr_p(j) + 1.
                                 !
                                 ! New infections broken down by age
+                                !$OMP ATOMIC
                                 Iage_stat_ptr(8,min(floor(people(iagent)%agent_ID%age+1),79))%arr_p(j) = &
                                 Iage_stat_ptr(8,min(floor(people(iagent)%agent_ID%age+1),79))%arr_p(j) + 1.
-                                !
-                                !$OMP END CRITICAL
                                 ! Log-normally distributed times - function of imm
                                 people(iagent)%health_status%malaria_status%infc_dur=tau_log(people(iagent)%health_status%malaria_status%imm,d_mu,mu_1,d_sig,sig_1)
                                 !
