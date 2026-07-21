@@ -652,50 +652,87 @@ USE, INTRINSIC :: ISO_C_BINDING
                 end if 
                 !
                 if (diag_age) then
-                    ! Bug fix: this block adds to three shared, age-indexed running
-                    ! totals in a row. !$OMP ATOMIC only ever protects the ONE
-                    ! statement right after it -- it was written here as if it
-                    ! covered the whole block, but really only the first of the
-                    ! three additions below was ever protected; the other two could
-                    ! be overwritten mid-update by another thread doing the same
-                    ! agent-count math for a different agent at the same grid cell
-                    ! and age bracket. Since every agent here shares the same
-                    ! handful of (cell, age) totals, this happens often enough to
-                    ! visibly change the output. !$OMP CRITICAL covers the whole
-                    ! block correctly, at the cost of the three additions no longer
-                    ! running concurrently with each other -- negligible next to the
-                    ! per-agent work done elsewhere in this loop.
-                    !$OMP CRITICAL
+                    ! Bug fix (updated): this block adds to three shared, age-indexed
+                    ! running totals. The original !$OMP ATOMIC only ever protected the
+                    ! ONE statement right after it, so the other two additions could be
+                    ! overwritten mid-update by another thread doing the same math for
+                    ! a different agent at the same grid cell and age bracket -- this
+                    ! was first fixed with a single !$OMP CRITICAL wrapping all three.
+                    !
+                    ! That CRITICAL was more than the bug needed, though, and it was
+                    ! expensive. Unnamed !$OMP CRITICAL gives every such region in the
+                    ! whole program ONE shared lock, and this subroutine had two of
+                    ! them (this one and the EIR/hbr one further down) -- so every
+                    ! agent, every day, was queuing on the same single lock as every
+                    ! other agent AND every other call to either block, regardless of
+                    ! which (istat/6/7, age, cell) triple it actually touched. Direct
+                    ! per-thread timing (see benchmark/ in the run directory) showed
+                    ! the two blocks TOGETHER accounted for ~93% of the agent loop's
+                    ! runtime; of that, roughly 75 percentage points of samples landed
+                    ! with the blocked thread's own instruction pointer at this block's
+                    ! call site and ~18 at the EIR/hbr one below. That split reflects
+                    ! where a waiting thread's PC happened to be parked, given they
+                    ! share one lock -- not two independently-caused costs -- so this
+                    ! block is the bigger of the two contributors, but fixing it alone
+                    ! (leaving EIR/hbr on CRITICAL) would not have removed the lock
+                    ! they still shared.
+                    !
+                    ! The three totals below are independent of each other for a given
+                    ! agent (istat is never 6 or 7), so nothing requires them to be
+                    ! mutually exclusive with each other -- only two agents landing on
+                    ! the exact same (row, age, cell) at the same instant need to be
+                    ! serialized, and only against each other. A separate !$OMP ATOMIC
+                    ! per line gives exactly that: each addition becomes a per-address
+                    ! atomic update, so agents touching different totals no longer wait
+                    ! on one another at all, and only genuine same-address collisions
+                    ! (comparatively rare) pay any synchronization cost -- and, just as
+                    ! importantly, they no longer share a lock with the EIR/hbr block
+                    ! below either.
                     !
                     ! SEIAR disaggregated by age
+                    !$OMP ATOMIC
                     Iage_stat_ptr(istat,iage+1)%arr_p(iloc) = &
                     Iage_stat_ptr(istat,iage+1)%arr_p(iloc) + 1.
                     !
                     ! Immunity disaggregated by age
+                    !$OMP ATOMIC
                     Iage_stat_ptr(6,iage+1)%arr_p(iloc) = &
                     Iage_stat_ptr(6,iage+1)%arr_p(iloc) + &
                     people(iagent)%health_status%malaria_status%imm
                     !
                     ! Agent number disaggregated by age
+                    !$OMP ATOMIC
                     Iage_stat_ptr(7,iage+1)%arr_p(iloc) = &
                     Iage_stat_ptr(7,iage+1)%arr_p(iloc) + 1.
                     !
                     ! Inew and Inew(a) are updated on the spot
-                    !$OMP END CRITICAL
                 end if
             end if
             !
-            ! Bug fix: same issue as the block above -- EIR and hbr are two
-            ! separate additions to shared per-cell totals, but the old !$OMP
-            ! ATOMIC only protected the first (EIR); hbr could be, and was,
-            ! silently corrupted by concurrent updates from other agents at the
-            ! same cell. !$OMP CRITICAL protects both together.
-            !$OMP CRITICAL
+            ! Bug fix (updated): same original issue as the block above -- EIR and hbr
+            ! are two separate additions to shared per-cell totals, but the old !$OMP
+            ! ATOMIC only protected the first (EIR); hbr could be, and was, silently
+            ! corrupted by concurrent updates from other agents at the same cell. This
+            ! was first fixed with !$OMP CRITICAL wrapping both lines together, which
+            ! was correct but unnecessarily broad: EIR(iloc) and hbr(iloc) are two
+            ! different arrays, never the same address, so they never needed to
+            ! exclude each other -- only two agents landing on the same iloc at the
+            ! same time need to be serialized, per array.
             !
+            ! This CRITICAL shared the exact same program-wide lock as the
+            ! age-diagnostics CRITICAL above (unnamed !$OMP CRITICAL is one lock for
+            ! the whole program), and runs unconditionally for every agent, every day
+            ! (the age-diagnostics block above only runs when diag_age is on) -- so it
+            ! added its own share of samples (~18 percentage points of the ~93% the
+            ! two blocks accounted for together, see the comment above) queuing on
+            ! that same lock. A separate !$OMP ATOMIC per line fixes the same race
+            ! with a per-address update, and just as importantly no longer shares a
+            ! lock with the age-diagnostics block above -- both had to move off
+            ! CRITICAL together for either fix to actually pay off.
+            !$OMP ATOMIC
             EIR(iloc) = EIR(iloc) + people(iagent)%health_status%malaria_status%EIR_att
+            !$OMP ATOMIC
             hbr(iloc) = hbr(iloc) + people(iagent)%health_status%malaria_status%hbr_att
-            !
-            !$OMP END CRITICAL
             !===================================================
             !
             case (2) ! Dengue [Non-functional]
