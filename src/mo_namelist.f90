@@ -185,7 +185,7 @@ MODULE mo_namelist
             ! Define namelist
             ! - We should have here all model parameters that are being changed to their params.txt value
             !
-            namelist /CONST/ mu_B, theta_e, theta_p, mu, rho, sigma, gamma, alpha, beta, & ! cholera disease params
+            namelist /CONST/ mu_B, theta_e, theta_p, mu, birth_rate, rho, sigma, gamma, alpha, beta, & ! cholera disease params
                              m_long, m_short, D_grav, D_pop, H_0,                        & ! mobility params gravity model
                              B_0, fS_0, fI_0, fA_0, fR_0,                                & ! initial conditions
                              K_h, b_rate, P_v0, k_NB, P_h0, P_max,                       & ! Vector-human transmission params
@@ -223,8 +223,13 @@ MODULE mo_namelist
                 read(file_unit,fmt='(A)') line
                 write(stderr,'(A)') 'Invalid line in namelist is: '//trim(line)
             end if
-            
+
             close (file_unit)
+
+            ! Default birth_rate to mu if not set in params.txt (see const_disease's sentinel)
+            if (birth_rate < 0.) then
+                birth_rate = mu
+            end if
         end subroutine namelist_const
 
 

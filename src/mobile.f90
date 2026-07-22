@@ -403,7 +403,7 @@ itime = 1
      if (random .and. (.not. rand_seed)) then
         print *, '-- Random initial disease profiles --'
      end if
-     call agents_init(nxy,disID,nagent,npeop,nattempt,mask_pop,pop_dens,scale,A_cell)
+     call agents_init(nxy,disID,nagent,npeop,nbirths_left,mask_pop,pop_dens,scale,A_cell)
      !
      !
      if (in_imm) then

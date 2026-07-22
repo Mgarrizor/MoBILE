@@ -86,9 +86,9 @@ USE, INTRINSIC :: ISO_C_BINDING
 
     CONTAINS
 
-        subroutine agents_init(nxy,idis,nagent,npeop,n_attempt,mask_pop,pop_dens,scale,A_cell)
-            ! 
-            ! 
+        subroutine agents_init(nxy,idis,nagent,npeop,nbirths_left,mask_pop,pop_dens,scale,A_cell)
+            !
+            !
             !
             implicit none
             !
@@ -96,7 +96,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             integer, intent(in) :: nxy                          !
             integer, intent(in) :: nagent                       !
             integer, allocatable, intent(inout) :: npeop(:)     !
-            integer, allocatable, intent(out) :: n_attempt(:)   !
+            integer, allocatable, intent(out) :: nbirths_left(:) ! (nxy) Births left to hand out today, per cell -- see mo_const.f90
             real, allocatable, intent(in) :: pop_dens(:)      ! Human population density (len=nxy)
             logical, allocatable, intent(in) :: mask_pop(:)   ! (nxy)
 
@@ -157,8 +157,9 @@ USE, INTRINSIC :: ISO_C_BINDING
             ! Allocate array of the human to agent ratio
             allocate(HA(nxy))
             HA(:) = 0.
-            ! Allocate array of number of growth attempts 
-            allocate(n_attempt(nxy))
+            ! Allocate births-remaining-today array (values are set daily in
+            ! agents_pre_diagnostics, before first use, so no reset needed here)
+            allocate(nbirths_left(nxy))
             !
             ! CDF for initial health status
             if (random) then
@@ -652,42 +653,11 @@ USE, INTRINSIC :: ISO_C_BINDING
                 end if 
                 !
                 if (diag_age) then
-                    ! Bug fix (updated): this block adds to three shared, age-indexed
-                    ! running totals. The original !$OMP ATOMIC only ever protected the
-                    ! ONE statement right after it, so the other two additions could be
-                    ! overwritten mid-update by another thread doing the same math for
-                    ! a different agent at the same grid cell and age bracket -- this
-                    ! was first fixed with a single !$OMP CRITICAL wrapping all three.
-                    !
-                    ! That CRITICAL was more than the bug needed, though, and it was
-                    ! expensive. Unnamed !$OMP CRITICAL gives every such region in the
-                    ! whole program ONE shared lock, and this subroutine had two of
-                    ! them (this one and the EIR/hbr one further down) -- so every
-                    ! agent, every day, was queuing on the same single lock as every
-                    ! other agent AND every other call to either block, regardless of
-                    ! which (istat/6/7, age, cell) triple it actually touched. Direct
-                    ! per-thread timing (see benchmark/ in the run directory) showed
-                    ! the two blocks TOGETHER accounted for ~93% of the agent loop's
-                    ! runtime; of that, roughly 75 percentage points of samples landed
-                    ! with the blocked thread's own instruction pointer at this block's
-                    ! call site and ~18 at the EIR/hbr one below. That split reflects
-                    ! where a waiting thread's PC happened to be parked, given they
-                    ! share one lock -- not two independently-caused costs -- so this
-                    ! block is the bigger of the two contributors, but fixing it alone
-                    ! (leaving EIR/hbr on CRITICAL) would not have removed the lock
-                    ! they still shared.
-                    !
-                    ! The three totals below are independent of each other for a given
-                    ! agent (istat is never 6 or 7), so nothing requires them to be
-                    ! mutually exclusive with each other -- only two agents landing on
-                    ! the exact same (row, age, cell) at the same instant need to be
-                    ! serialized, and only against each other. A separate !$OMP ATOMIC
-                    ! per line gives exactly that: each addition becomes a per-address
-                    ! atomic update, so agents touching different totals no longer wait
-                    ! on one another at all, and only genuine same-address collisions
-                    ! (comparatively rare) pay any synchronization cost -- and, just as
-                    ! importantly, they no longer share a lock with the EIR/hbr block
-                    ! below either.
+                    ! These three totals are independent for a given agent (istat is
+                    ! never 6 or 7), so they don't need to exclude each other -- only
+                    ! same-address collisions across agents do. Per-line ATOMIC covers
+                    ! that without the shared program-wide lock a CRITICAL block would
+                    ! need (unnamed CRITICAL is one lock for the whole program).
                     !
                     ! SEIAR disaggregated by age
                     !$OMP ATOMIC
@@ -709,26 +679,10 @@ USE, INTRINSIC :: ISO_C_BINDING
                 end if
             end if
             !
-            ! Bug fix (updated): same original issue as the block above -- EIR and hbr
-            ! are two separate additions to shared per-cell totals, but the old !$OMP
-            ! ATOMIC only protected the first (EIR); hbr could be, and was, silently
-            ! corrupted by concurrent updates from other agents at the same cell. This
-            ! was first fixed with !$OMP CRITICAL wrapping both lines together, which
-            ! was correct but unnecessarily broad: EIR(iloc) and hbr(iloc) are two
-            ! different arrays, never the same address, so they never needed to
-            ! exclude each other -- only two agents landing on the same iloc at the
-            ! same time need to be serialized, per array.
-            !
-            ! This CRITICAL shared the exact same program-wide lock as the
-            ! age-diagnostics CRITICAL above (unnamed !$OMP CRITICAL is one lock for
-            ! the whole program), and runs unconditionally for every agent, every day
-            ! (the age-diagnostics block above only runs when diag_age is on) -- so it
-            ! added its own share of samples (~18 percentage points of the ~93% the
-            ! two blocks accounted for together, see the comment above) queuing on
-            ! that same lock. A separate !$OMP ATOMIC per line fixes the same race
-            ! with a per-address update, and just as importantly no longer shares a
-            ! lock with the age-diagnostics block above -- both had to move off
-            ! CRITICAL together for either fix to actually pay off.
+            ! EIR(iloc) and hbr(iloc) are different arrays, never the same address,
+            ! so they don't need to exclude each other -- same reasoning as the
+            ! age-diagnostics block above, and needs to move off CRITICAL together
+            ! with it, since unnamed CRITICAL shares one lock program-wide.
             !$OMP ATOMIC
             EIR(iloc) = EIR(iloc) + people(iagent)%health_status%malaria_status%EIR_att
             !$OMP ATOMIC
@@ -751,8 +705,16 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             integer, intent(in) :: idis ! 0 = Cholera: SIAR  ; 1 = Malaria: SEIAR ; 2 = Dengue [Non-functional]
             !
-            ! Reset growth array
-            nattempt(:) = 0.
+            ! Local use only
+            integer :: ixy ! Looping spatial index
+            !
+            ! Draw today's births per cell up front (Binomial via ignbin); dead
+            ! slots claim from nbirths_left atomically in agents_malaria/agents_cholera.
+            do ixy = 1, nxy
+                if (mask_pop(ixy)) then
+                    nbirths_left(ixy) = ignbin(npeop(ixy), birth_rate)
+                end if
+            end do
             !
             SELECT case(idis)
             case (0) ! Cholera -------------------------------
@@ -930,7 +892,7 @@ USE, INTRINSIC :: ISO_C_BINDING
         !===
         end subroutine agents_post_diagnostics
 
-        subroutine agents_update(idis,iagent,itime,n_attempt,npeop,nbites,m_0,m_1,m_all)
+        subroutine agents_update(idis,iagent,itime,nbirths_left,npeop,nbites,m_0,m_1,m_all)
         !===
             ! This subroutine updates agent disease and mobility statuses (mobility non-functional - to be implemented if Marie-Curie is funded)
             implicit none
@@ -938,24 +900,24 @@ USE, INTRINSIC :: ISO_C_BINDING
             real, allocatable, intent(in) :: m_0(:)  ! Susceptible vector to host ratio times the vector biting rate
             real, allocatable, intent(in) :: m_1(:)  ! Infective   vector to host ratio times the vector biting rate
             real, allocatable, intent(in) :: m_all(:)  ! Vector to host ratio times the vector biting rate
-            
+
             integer, intent(in) :: idis              ! Disease ID (0: Cholera, 1: Malaria)
             integer, intent(in) :: iagent            ! Agent ID (integer number)
             integer, intent(in) :: itime             ! Current time step
-            integer, allocatable, intent(inout) :: n_attempt(:)   ! (nxy) Number of growth attempts at location of iagent at time itime
-            integer, allocatable, intent(inout) :: npeop(:)       ! (nxy) Number of agents in each grid cell 
+            integer, allocatable, intent(inout) :: nbirths_left(:) ! (nxy) Births left to hand out today, per cell
+            integer, allocatable, intent(inout) :: npeop(:)       ! (nxy) Number of agents in each grid cell
             integer, allocatable, intent(inout) :: nbites(:)      ! (nxy) Infective bites (vectors that were infected upon bitting a human)
 
             ! *************** Start subroutine *******************
-            ! 
+            !
             SELECT case(idis)
             case (0) ! Cholera
             !
-            call agents_cholera(iagent,itime,n_attempt)
+            call agents_cholera(iagent,itime,nbirths_left,npeop)
             !
             case (1) ! Malaria
-            ! 
-            call agents_malaria(iagent,n_attempt,npeop,nbites,m_0,m_1,m_all) 
+            !
+            call agents_malaria(iagent,nbirths_left,npeop,nbites,m_0,m_1,m_all)
             !
             case (2) ! Dengue [Non-functional]
             !
@@ -981,22 +943,23 @@ USE, INTRINSIC :: ISO_C_BINDING
         end subroutine agents_age
         !
         !
-        subroutine agents_cholera(iagent,itime,n_attempt)
+        subroutine agents_cholera(iagent,itime,nbirths_left,npeop)
 
             implicit none
             integer, intent(in) :: iagent            ! Agent ID (integer number)
             integer, intent(in) :: itime             ! Time step
-            integer, allocatable, intent(inout) :: n_attempt(:)   ! (nxy) Number of growth attempts at location of iagent at time itime
+            integer, allocatable, intent(inout) :: nbirths_left(:) ! (nxy) Births left to hand out today, per cell
+            integer, allocatable, intent(inout) :: npeop(:)        ! (nxy) Number of agents in each grid cell
 
             ! Local use only
             real :: rand    ! Uniformly distributed random number to throw dices
             integer :: stat ! Agent health status
             integer :: i    ! Agent location
             integer :: j    ! Location where agent moves
+            integer :: claimed ! [birth claim] this agent's ticket, if any, from nbirths_left(i)
             logical :: active ! Is the agent alive?
-            logical :: cyc    ! Cycle flag for growth event
 
-        ! Events depend on health status and physical location. 
+        ! Events depend on health status and physical location.
         active =  people(iagent)%health_status%active_status%status
         stat   =  people(iagent)%health_status%cholera_status%status
         i      =  people(iagent)%location_status%currloc
@@ -1062,6 +1025,9 @@ USE, INTRINSIC :: ISO_C_BINDING
                         if (generate_random() <= mu) then ! Death
                             !
                             people(iagent)%health_status%active_status%status=.false.
+                            ! npeop(i) is shared with other agents dying/being born at
+                            ! this cell on other threads -- needs ATOMIC.
+                            !$OMP ATOMIC
                             npeop(i) = npeop(i) - 1
                             !
                         end if
@@ -1103,6 +1069,9 @@ USE, INTRINSIC :: ISO_C_BINDING
                         if (generate_random() <= mu) then ! Death
                             !
                             people(iagent)%health_status%active_status%status=.false.
+                            ! npeop(i) is shared with other agents dying/being born at
+                            ! this cell on other threads -- needs ATOMIC.
+                            !$OMP ATOMIC
                             npeop(i) = npeop(i) - 1
                             !
                         end if
@@ -1170,6 +1139,9 @@ USE, INTRINSIC :: ISO_C_BINDING
                         if (generate_random() <= mu) then ! Death
                             !
                             people(iagent)%health_status%active_status%status=.false.
+                            ! npeop(i) is shared with other agents dying/being born at
+                            ! this cell on other threads -- needs ATOMIC.
+                            !$OMP ATOMIC
                             npeop(i) = npeop(i) - 1
                             !
                         end if
@@ -1187,9 +1159,10 @@ USE, INTRINSIC :: ISO_C_BINDING
                         !
                         ! Base mortality
                         !
-                        if (generate_random() <= mu) then 
+                        if (generate_random() <= mu) then
                             !
                             people(iagent)%health_status%active_status%status=.false.
+                            !$OMP ATOMIC
                             npeop(i) = npeop(i) - 1
                             !
                         end if
@@ -1197,41 +1170,40 @@ USE, INTRINSIC :: ISO_C_BINDING
                     end if 
                 else ! If agent is dead
                    !
-                   ! We try to activate agent "iagent" a maximum number of (npeop(i) - nattempt(i)) times
-                   ! If successful then cycle (cyc=.true.) to next agent
-                   cyc=.false.
-                   do while ((n_attempt(i) .le. npeop(i)) .and. (.not. cyc))
-                        if (generate_random() <= mu) then ! Growth event
-                             !
-                             people(iagent)%health_status%active_status%status=.true. ! You are now alive,
-                             people(iagent)%health_status%cholera_status%status=1     ! born susceptible
-                             people(iagent)%agent_ID%age=0.                            ! and as a baby
-                             people(iagent)%agent_ID%w_NB=gengam(k_NB,k_NB)
-                             !
-                             if (generate_random() <= 0.51) then ! Sex
-                                 people(iagent)%agent_ID%sex=0   ! Female = 0
-                             else  
-                                 people(iagent)%agent_ID%sex=1   ! Male = 1
-                             end if
-                             cyc=.true.
-                             n_attempt(i) = n_attempt(i) + 1
-                             npeop(i) = npeop(i) + 1
+                   ! nbirths_left(i) (Binomial(npeop(i), birth_rate), drawn once per
+                   ! cell in agents_pre_diagnostics) is a shared pool of birth tickets;
+                   ! each dead agent atomically claims one instead of drawing its own.
+                   !$OMP ATOMIC CAPTURE
+                   claimed = nbirths_left(i)
+                   nbirths_left(i) = nbirths_left(i) - 1
+                   !$OMP END ATOMIC
+                   if (claimed > 0) then
+                        !
+                        people(iagent)%health_status%active_status%status=.true. ! You are now alive,
+                        people(iagent)%health_status%cholera_status%status=1     ! born susceptible
+                        people(iagent)%agent_ID%age=0.                            ! and as a baby
+                        people(iagent)%agent_ID%w_NB=gengam(k_NB,k_NB)
+                        !
+                        if (generate_random() <= 0.51) then ! Sex
+                            people(iagent)%agent_ID%sex=0   ! Female = 0
                         else
-                             n_attempt(i) = n_attempt(i) + 1
-                        end if 
-                    end do
+                            people(iagent)%agent_ID%sex=1   ! Male = 1
+                        end if
+                        !$OMP ATOMIC
+                        npeop(i) = npeop(i) + 1
+                   end if
                 end if ! If (active)
             end if ! If (mask_pop(currloc))
         !==
         end subroutine agents_cholera
         !
         !
-        subroutine agents_malaria(iagent,n_attempt,npeop,nbites,m_0,m_1,m_all)
+        subroutine agents_malaria(iagent,nbirths_left,npeop,nbites,m_0,m_1,m_all)
 
             implicit none
             integer, intent(in) :: iagent            ! Agent ID (integer number)
-            integer, allocatable, intent(inout) :: n_attempt(:)   ! (nxy) Number of growth attempts at location of iagent at time itime
-            integer, allocatable, intent(inout) :: npeop(:)       ! (nxy) Number of agents in each grid cell 
+            integer, allocatable, intent(inout) :: nbirths_left(:) ! (nxy) Births left to hand out today, per cell
+            integer, allocatable, intent(inout) :: npeop(:)       ! (nxy) Number of agents in each grid cell
             integer, allocatable, intent(inout) :: nbites(:)      ! (nlon*nlat) Infective bites
                                                      ! (vectors that were infected upon
                                                      ! bitting a human)
@@ -1244,8 +1216,8 @@ USE, INTRINSIC :: ISO_C_BINDING
             integer :: i    ! Agent location
             integer :: j    ! Location where agent moves
             integer :: home ! Home location
+            integer :: claimed ! [birth claim] this agent's ticket, if any, from nbirths_left(i)
             logical :: active ! Is the agent alive?
-            logical :: cyc    ! Cycle flag for growth event
 
             ! Disease transmission 
             ! 0: Human to vector  1: Vector to human
@@ -1423,18 +1395,8 @@ USE, INTRINSIC :: ISO_C_BINDING
                                 !
                                 ! Update here Inew
                                 !
-                                ! Bug fix (updated): same pattern as the age-disaggregated and
-                                ! EIR/hbr blocks further up (see those comments) -- two additions
-                                ! to shared totals in a row, but only the first (Inew) was ever
-                                ! actually protected by the old !$OMP ATOMIC; Inew(a) could be
-                                ! corrupted by another agent's new-infection event at the same
-                                ! cell and age bracket. This was fixed with !$OMP CRITICAL
-                                ! wrapping both lines, which -- as with the other two blocks --
-                                ! was more than the race needed and shared the same program-wide
-                                ! lock as every other unnamed CRITICAL. status_pointer(6) and
-                                ! Iage_stat_ptr(8,...) are different arrays, never the same
-                                ! address, so they never needed to exclude each other; a separate
-                                ! !$OMP ATOMIC per line fixes the same race per-address instead.
+                                ! status_pointer(6) and Iage_stat_ptr(8,...) are different
+                                ! arrays -- same independent-updates reasoning as above.
                                 !
                                 ! Total new infections
                                 ! j is the agent location (accessed before)
@@ -1565,58 +1527,38 @@ USE, INTRINSIC :: ISO_C_BINDING
                             people(iagent)%health_status%malaria_status%EIR_att=0.
                             people(iagent)%health_status%malaria_status%hbr_att=0.
                             people(iagent)%health_status%malaria_status%imm=0.
-                            ! Bug fix: this has to be CRITICAL, not ATOMIC, even though it is
-                            ! only one statement -- npeop is also updated by the regrowth
-                            ! do-while loop just below, inside its own CRITICAL region, and in
-                            ! OpenMP an ATOMIC update and a CRITICAL region do NOT exclude each
-                            ! other. Using ATOMIC here would still let a death and a birth
-                            ! collide on the same npeop entry at the same time.
-                            !$OMP CRITICAL
+                            !$OMP ATOMIC
                             npeop(j) = npeop(j) - 1
-                            !$OMP END CRITICAL
                             !
                         end if
                         !
                     !===
                 else ! If agent is dead
                    !
-                   ! We try to activate agent "iagent" a maximum number of (npeop(i) - nattempt(i)) times
-                   ! If successful then cycle (cyc=.true.) to next agent
-                   !
-                   ! Bug fix: the whole loop, including its condition, must run inside one
-                   ! CRITICAL region. n_attempt(i) and npeop(i) are read on every pass
-                   ! through "do while (...)", and other dead agents at this same cell can be
-                   ! running this exact loop at the same time on other threads. Without the
-                   ! CRITICAL region, that read is not just liable to see a stale value -- it
-                   ! changes how many times the loop repeats, and each extra pass consumes
-                   ! another generate_random() draw. So a race here does not just get the
-                   ! headcount wrong for one cell; it shifts how many random numbers this
-                   ! thread has drawn so far, throwing off every later agent it processes.
-                   cyc=.false.
-!$OMP CRITICAL
-                   do while ((n_attempt(i) .le. npeop(i)) .and. (.not. cyc))
-                        if (generate_random() <= mu) then ! Growth event
-                             !
-                             people(iagent)%health_status%active_status%status=.true.  ! You are now alive,
-                             people(iagent)%health_status%malaria_status%status=1      ! born susceptible
-                             people(iagent)%agent_ID%age=0.                             ! and as a baby
-                             people(iagent)%health_status%malaria_status%imm=0.        ! Immunity level is zero
-                             people(iagent)%health_status%malaria_status%mat_im=.true. ! Maternal immunity is active
-                             people(iagent)%agent_ID%w_NB=gengam(k_NB,k_NB)
-                             !
-                             if (generate_random() <= 0.51) then ! Sex
-                                 people(iagent)%agent_ID%sex=0   ! Female = 0
-                             else
-                                 people(iagent)%agent_ID%sex=1   ! Male = 0
-                             end if
-                             cyc=.true.
-                             n_attempt(i) = n_attempt(i) + 1
-                             npeop(i) = npeop(i) + 1
+                   ! nbirths_left(i) (Binomial(npeop(i), birth_rate), drawn once per
+                   ! cell in agents_pre_diagnostics) is a shared pool of birth tickets;
+                   ! each dead agent atomically claims one instead of drawing its own.
+                   !$OMP ATOMIC CAPTURE
+                   claimed = nbirths_left(i)
+                   nbirths_left(i) = nbirths_left(i) - 1
+                   !$OMP END ATOMIC
+                   if (claimed > 0) then
+                        !
+                        people(iagent)%health_status%active_status%status=.true.  ! You are now alive,
+                        people(iagent)%health_status%malaria_status%status=1      ! born susceptible
+                        people(iagent)%agent_ID%age=0.                             ! and as a baby
+                        people(iagent)%health_status%malaria_status%imm=0.        ! Immunity level is zero
+                        people(iagent)%health_status%malaria_status%mat_im=.true. ! Maternal immunity is active
+                        people(iagent)%agent_ID%w_NB=gengam(k_NB,k_NB)
+                        !
+                        if (generate_random() <= 0.51) then ! Sex
+                            people(iagent)%agent_ID%sex=0   ! Female = 0
                         else
-                             n_attempt(i) = n_attempt(i) + 1
+                            people(iagent)%agent_ID%sex=1   ! Male = 0
                         end if
-                    end do
-!$OMP END CRITICAL
+                        !$OMP ATOMIC
+                        npeop(i) = npeop(i) + 1
+                   end if
                 end if ! If (active)
             end if ! If (mask_pop(currloc))
         !==

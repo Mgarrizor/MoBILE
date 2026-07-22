@@ -136,36 +136,20 @@ subroutine time_step(disID,itime)
         ! Pre-diagnostics calculations
         call agents_pre_diagnostics(disID)
         !
-        ! SCHEDULE(STATIC) is made explicit (rather than left as the unstated
-        ! compiler default) because reproducibility depends on it: which thread
-        ! processes a given agent determines which random number stream that
-        ! agent's decisions are drawn from (see agents_seed_threads). STATIC is
-        ! the only schedule kind whose thread-to-agent assignment is a fixed
-        ! function of (nagent, number of threads) alone -- DYNAMIC/GUIDED
-        ! depend on runtime timing and would silently break reproducibility
-        ! even with everything else in place.
-        !
-        ! SCHEDULE(DYNAMIC, 500) was tried here, on the assumption (from an
-        ! earlier gperftools profile) that per-agent cost varies enough to
-        ! leave threads waiting ~46% of the time at the end of this loop
-        ! under STATIC. A direct measurement -- summing each thread's actual
-        ! busy time across a full run, not just sampling call stacks --
-        ! showed real imbalance under STATIC is only ~6-7%, and a real
-        ! Kericho benchmark (6 seeds, static vs dynamic, wall-clock timed)
-        ! showed DYNAMIC running ~5% *slower*, not faster: its per-chunk
-        ! dispatch overhead and worse memory locality (agents are no longer
-        ! visited in a fixed contiguous order per thread) cost more than the
-        ! small imbalance it removes. So the STATIC schedule stays; see
-        ! benchmark/ in the run directory for the scripts and results behind
-        ! this conclusion, if the imbalance question needs revisiting later
-        ! (e.g. at a much larger nagent, or after other loop costs change).
-!$OMP PARALLEL DO SCHEDULE(STATIC)
+        ! STATIC (any chunk size) is required, not DYNAMIC/GUIDED: thread-to-agent
+        ! assignment must be a fixed function of (nagent, chunk, nthreads) alone,
+        ! since it determines which RNG stream each agent draws from (see
+        ! agents_seed_threads). A chunk size of 500, rather than one contiguous
+        ! block per thread, round-robins chunks across threads -- agents are laid
+        ! out grouped by cell (see agents_init), so a bare per-thread block gave
+        ! one thread far more of the expensive die/rebirth agents than the others.
+!$OMP PARALLEL DO SCHEDULE(STATIC, 500)
         agent_loop: do iagent=1,nagent
         !
         ! 3.1) Update health status
         !=
           ! Update health status
-          call agents_update(disID,iagent,itime,nattempt,npeop,nbites,m_0,m_1,m_all)
+          call agents_update(disID,iagent,itime,nbirths_left,npeop,nbites,m_0,m_1,m_all)
           !
           ! Gather diagnostics of iagent
           call agents_diagnostics(disID,iagent)

@@ -53,9 +53,11 @@ MODULE mo_const
     logical, allocatable :: mask_grav(:,:) ! (nxy,nxy) 2D long array with r_cut off information 
     logical, allocatable :: mask_mob(:)    ! (nxy) Mask with the grid points where agents can move - combines mask_pop and mask_grav
 
-    integer, allocatable :: npeop(:)    ! Number of agents in each grid cell 
+    integer, allocatable :: npeop(:)    ! Number of agents in each grid cell
     real, allocatable :: HA(:)          ! Human to agent ratio
-    integer, allocatable :: nattempt(:) ! Number of growth attempts in a given time step
+    ! Births left to hand out today, per cell -- set daily in agents_pre_diagnostics,
+    ! claimed one at a time (atomically) by dead agent slots in agents_malaria/agents_cholera.
+    integer, allocatable :: nbirths_left(:)
     real, allocatable :: pop_dens(:)    ! 1D long array for human population density 
     real, allocatable :: Ipop_dens(:)   ! Inverse of 1D long array for human population density 
     real, allocatable :: D(:)           ! Dilution factor
@@ -146,6 +148,7 @@ MODULE mo_const
     ! Cholera parameters 
     
     real :: mu_B, theta_e, theta_p, mu, rho, sigma, gamma, alpha, beta ! Disease
+    real :: birth_rate ! Daily per-agent birth probability; defaults to mu (see namelist_const)
     real :: D_pop, H_0, D_grav, m       ! Pop. density and mobility
     real :: B_0, fS_0, fI_0, fA_0, fR_0 ! Initial conditions
 
@@ -275,7 +278,8 @@ MODULE mo_const
 
       integer, intent(in) :: idis
       character(len=100) :: disease_name
-      ! Disease-specific values 
+      birth_rate = -1. ! Sentinel: namelist_const sets birth_rate = mu if still negative
+      ! Disease-specific values
       SELECT case(idis)
       case (0)
         disease_name="Cholera"
