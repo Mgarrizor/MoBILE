@@ -721,6 +721,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             integer :: n_tot       ! Today's total ticket draw for one cell
             integer :: remaining   ! Tickets not yet handed to a thread
             integer :: dead_t      ! Thread t's current dead-slot capacity in this cell
+            real :: active_pop_dens(nxy) ! pop_dens(:) scaled by today's active-agent fraction (malaria only)
             !
             ! Draw today's total births per cell, then hand tickets to threads
             ! in a fixed order up to each thread's own dead-slot capacity
@@ -770,17 +771,26 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             ! Compute base interaction rates
             !
+            ! Scale the reference density pop_dens(:) by today's active-agent
+            ! fraction, so vector-bite saturation below reflects live agents,
+            ! not dead slots. Kept as an explicit factor on pop_dens(:) --
+            ! not folded into the init-time-fixed HA(:) -- so pop_dens(:) can
+            ! later become a time-varying growth profile without this
+            ! formula changing.
+            where((pop_dens(:) > 0.) .and. (npeop(:) > 0)) &
+                active_pop_dens(:) = pop_dens(:)*real(npeop(:))/real(sum(nslots_thread(:,:), dim=2))
+            !
             ! Human to vector transmission
             !
-            where((pop_dens(:) > 0.) .and. (npeop(:) > 0)) m_0(:) = b_rate*rgonof(:)*rvect(0,:)/(pop_dens(:)+K_h)*HA(:)!
+            where((pop_dens(:) > 0.) .and. (npeop(:) > 0)) m_0(:) = b_rate*rgonof(:)*rvect(0,:)/(active_pop_dens(:)+K_h)*HA(:)!
             !
             ! Infected vector to human transmission
             !
-            where((pop_dens(:) > 0.) .and. (npeop(:) > 0)) m_1(:) = b_rate*rgonof(:)*rvect(ninfv,:)/(pop_dens(:)+K_h)*HA(:)!
+            where((pop_dens(:) > 0.) .and. (npeop(:) > 0)) m_1(:) = b_rate*rgonof(:)*rvect(ninfv,:)/(active_pop_dens(:)+K_h)*HA(:)!
             !
             ! All vector to human (human biting rate - hbr)
             !
-            where((pop_dens(:) > 0.) .and. (npeop(:) > 0)) m_all(:) = b_rate*rgonof(:)*SUM(rvect(:,:), DIM=1)/(pop_dens(:)+K_h)*HA(:)!
+            where((pop_dens(:) > 0.) .and. (npeop(:) > 0)) m_all(:) = b_rate*rgonof(:)*SUM(rvect(:,:), DIM=1)/(active_pop_dens(:)+K_h)*HA(:)!
             !
             S(:) = 0.
             E(:) = 0.
