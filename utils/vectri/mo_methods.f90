@@ -103,8 +103,9 @@ USE mo_constants
               ! zoophilic rates - well actually is anthropophilic rate.
               rzoophilic(ixy)=1.0-(1.0-rzoophilic_min*EXP(-rpopdensity(ixy)/rzoophilic_tau))
               !
-              !rvect(0,ixy)=MAX(rvect(0,ixy),rvect_min)
-              rlarv(0,ixy)=MAX(rlarv(0,ixy),rvect_min)
+              ! rvect(0,ixy)=MAX(rvect(0,ixy),rvect_min)
+              rvect(1,ixy)=MAX(rvect(1,ixy),rvect_min)  ! Residual infected
+              rlarv(0,ixy)=MAX(rlarv(0,ixy),rvect_min)  ! Residual eggs
               !
            end if
 

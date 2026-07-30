@@ -43,11 +43,11 @@ implicit none
 ! Default output if VECTRI is active
 
 logical :: out_vect   =.true.        ! Vector density
-logical :: out_vecinfc=.false.        ! Infective vector density
+logical :: out_vecinfc=.true.        ! Infective vector density
 logical :: out_larv   =.false.       ! Larval density
-logical :: out_wpond  =.false.        ! Pond fraction
+logical :: out_wpond  =.true.        ! Pond fraction
 logical :: out_wurbn  =.false.        ! Urban fraction
-logical :: out_wperm  =.false.        ! Permanent fraction
+logical :: out_wperm  =.true.        ! Permanent fraction
 
 !=============================================
 
@@ -64,7 +64,7 @@ integer, parameter :: nlarv=25                   ! mo_control.f90
 !integer, parameter :: ninfv=25                   ! mo_control.f90 --> Moved to AB constants file as needed in agents methods
 !
 !
-real :: rvect_min=1.e-4                          ! mo_control.f90
+real :: rvect_min=1.e-5                          ! mo_control.f90
 !
 !
 ! Vector ================================================
