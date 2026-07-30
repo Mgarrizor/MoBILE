@@ -457,6 +457,8 @@ USE, INTRINSIC :: ISO_C_BINDING
             ! Snapshot each (cell,thread)'s fixed capacity now that every agent
             ! has been created and is alive -- see nslots_thread, mo_const.f90.
             nslots_thread(:,:) = npeop_thread(:,:)
+            allocate(npeop_init(nxy))
+            npeop_init(:) = sum(nslots_thread(:,:), dim=2)
             !
             ! Assign human to agent ratio once all agents have been initialised
             !
@@ -771,26 +773,21 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             ! Compute base interaction rates
             !
-            ! Scale the reference density pop_dens(:) by today's active-agent
-            ! fraction, so vector-bite saturation below reflects live agents,
-            ! not dead slots. Kept as an explicit factor on pop_dens(:) --
-            ! not folded into the init-time-fixed HA(:) -- so pop_dens(:) can
-            ! later become a time-varying growth profile without this
-            ! formula changing.
-            where((pop_dens(:) > 0.) .and. (npeop(:) > 0)) &
-                active_pop_dens(:) = pop_dens(:)*real(npeop(:))/real(sum(nslots_thread(:,:), dim=2))
-            !
-            ! Human to vector transmission
-            !
-            where((pop_dens(:) > 0.) .and. (npeop(:) > 0)) m_0(:) = b_rate*rgonof(:)*rvect(0,:)/(active_pop_dens(:)+K_h)*HA(:)!
-            !
-            ! Infected vector to human transmission
-            !
-            where((pop_dens(:) > 0.) .and. (npeop(:) > 0)) m_1(:) = b_rate*rgonof(:)*rvect(ninfv,:)/(active_pop_dens(:)+K_h)*HA(:)!
-            !
-            ! All vector to human (human biting rate - hbr)
-            !
-            where((pop_dens(:) > 0.) .and. (npeop(:) > 0)) m_all(:) = b_rate*rgonof(:)*SUM(rvect(:,:), DIM=1)/(active_pop_dens(:)+K_h)*HA(:)!
+            ! active_pop_dens(:) scales the reference density pop_dens(:) by
+            ! today's active-agent fraction, so vector-bite saturation below
+            ! reflects live agents, not dead slots. Kept as an explicit
+            ! factor on pop_dens(:) -- not folded into the init-time-fixed
+            ! HA(:) -- so pop_dens(:) can later become a time-varying growth
+            ! profile without these formulas changing.
+            where ((pop_dens(:) > 0.) .and. (npeop(:) > 0))
+                active_pop_dens(:) = pop_dens(:)*real(npeop(:))/real(npeop_init(:))
+                ! Human to vector transmission
+                m_0(:) = b_rate*rgonof(:)*rvect(0,:)/(active_pop_dens(:)+K_h)*HA(:)
+                ! Infected vector to human transmission
+                m_1(:) = b_rate*rgonof(:)*rvect(ninfv,:)/(active_pop_dens(:)+K_h)*HA(:)
+                ! All vector to human (human biting rate - hbr)
+                m_all(:) = b_rate*rgonof(:)*SUM(rvect(:,:), DIM=1)/(active_pop_dens(:)+K_h)*HA(:)
+            end where
             !
             S(:) = 0.
             E(:) = 0.

@@ -64,6 +64,10 @@ MODULE mo_const
     ! Fixed total (dead+alive) slots per (cell,thread), snapshotted once at
     ! init. nslots_thread-npeop_thread = a thread's current dead-slot capacity.
     integer, allocatable :: nslots_thread(:,:)
+    ! sum(nslots_thread,dim=2), cached once at init -- each cell's initial
+    ! (all-active) agent count, used as the denominator for today's
+    ! active-agent fraction in agents_pre_diagnostics.
+    integer, allocatable :: npeop_init(:)
     real, allocatable :: HA(:)          ! Human to agent ratio
     ! Today's claimable birth tickets per (cell,thread), set in
     ! agents_pre_diagnostics; claimed lock-free by each thread from its own
