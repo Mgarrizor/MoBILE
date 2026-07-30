@@ -96,7 +96,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             integer, intent(in) :: nxy                          !
             integer, intent(in) :: nagent                       !
             integer, allocatable, intent(inout) :: npeop(:)     !
-            integer, allocatable, intent(out) :: nbirths_left(:) ! (nxy) Births left to hand out today, per cell -- see mo_const.f90
+            integer, allocatable, intent(out) :: nbirths_left(:,:) ! (nxy,nthreads) Births left to hand out today, per (cell,thread) -- see mo_const.f90
             real, allocatable, intent(in) :: pop_dens(:)      ! Human population density (len=nxy)
             logical, allocatable, intent(in) :: mask_pop(:)   ! (nxy)
 
@@ -110,6 +110,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             integer :: k   ! Dummy looping index
             integer :: ixy ! Looping long index
             integer :: ipeo, indx, loc
+            integer :: nthreads, ithread_init ! Thread count and this agent's owning thread (see npeop_thread, mo_const.f90)
             real :: norm, norm_check, rand
             integer :: nfaces
             real, allocatable :: cdf_health(:) ! Cumulative distribution to asign agent health based on initial profile
@@ -154,12 +155,19 @@ USE, INTRINSIC :: ISO_C_BINDING
             ! Allocate array of the number of agents in each grid cell
             allocate(npeop(nxy))
             npeop(:) = 0
+            ! Per-thread breakdown of npeop (see mo_const.f90) -- filled in
+            ! below, as each agent is created, using the same thread formula
+            ! the daily agent_loop schedule uses.
+            nthreads = omp_get_max_threads()
+            allocate(npeop_thread(nxy,nthreads))
+            npeop_thread(:,:) = 0
+            allocate(nslots_thread(nxy,nthreads)) ! Filled once population is created below
             ! Allocate array of the human to agent ratio
             allocate(HA(nxy))
             HA(:) = 0.
             ! Allocate births-remaining-today array (values are set daily in
             ! agents_pre_diagnostics, before first use, so no reset needed here)
-            allocate(nbirths_left(nxy))
+            allocate(nbirths_left(nxy,nthreads))
             !
             ! CDF for initial health status
             if (random) then
@@ -299,6 +307,11 @@ USE, INTRINSIC :: ISO_C_BINDING
                             people(indx)%location_status%longloc=j
                             people(indx)%location_status%longdur=0
 #endif
+                            ! This agent's owning thread for the rest of the run
+                            ! (see npeop_thread, mo_const.f90) -- must match the
+                            ! agent_loop schedule in mo_timestep.f90 exactly.
+                            ithread_init = mod((indx-1)/agent_chunk, nthreads) + 1
+                            npeop_thread(ixy,ithread_init) = npeop_thread(ixy,ithread_init) + 1
                             indx = indx + 1
                             !
                         end do
@@ -431,10 +444,19 @@ USE, INTRINSIC :: ISO_C_BINDING
                    people(indx)%location_status%longdur=0
 #endif
                    !
+                   ! This agent's owning thread for the rest of the run (see
+                   ! npeop_thread, mo_const.f90) -- must match the agent_loop
+                   ! schedule in mo_timestep.f90 exactly.
+                   ithread_init = mod((indx-1)/agent_chunk, nthreads) + 1
+                   npeop_thread(loc,ithread_init) = npeop_thread(loc,ithread_init) + 1
                    indx = indx + 1
                end if
                !
             end do
+            !
+            ! Snapshot each (cell,thread)'s fixed capacity now that every agent
+            ! has been created and is alive -- see nslots_thread, mo_const.f90.
+            nslots_thread(:,:) = npeop_thread(:,:)
             !
             ! Assign human to agent ratio once all agents have been initialised
             !
@@ -600,8 +622,12 @@ USE, INTRINSIC :: ISO_C_BINDING
             integer, intent(in) :: iagent ! Agent ID (integer number)
             !
             ! Local use only
-            integer :: istat, iloc, iage
+            integer :: istat, iloc, iage, ithread
             logical :: iactive
+
+            ! Per-thread private column: lock-free writes here, merged into the
+            ! shared arrays once a day in agents_post_diagnostics.
+            ithread = omp_get_thread_num() + 1
 
             SELECT case(idis)
             case (0) ! Cholera -------------------------------
@@ -615,10 +641,8 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             ! Pointer approach to allow vectorization (discarded old branching if ... elseif ...)
             if (iactive) then
-                !$OMP ATOMIC
-                status_pointer(istat)%arr_p(iloc) = &
-                status_pointer(istat)%arr_p(iloc) + 1.
-                !$END OMP ATOMIC
+                status_pointer(istat)%arr_p_priv(iloc,ithread) = &
+                status_pointer(istat)%arr_p_priv(iloc,ithread) + 1.
             end if
             !
             !=================================================
@@ -637,56 +661,43 @@ USE, INTRINSIC :: ISO_C_BINDING
             ! Pointer approach to allow vectorization (discarded old branching if ... elseif ...)
             if (iactive) then
                 ! bulk SEIAR
-                !$OMP ATOMIC
-                status_pointer(istat)%arr_p(iloc) = &
-                status_pointer(istat)%arr_p(iloc) + 1.
-                !$END OMP ATOMIC
+                status_pointer(istat)%arr_p_priv(iloc,ithread) = &
+                status_pointer(istat)%arr_p_priv(iloc,ithread) + 1.
                 !
                 if (in_imm) then ! Immunity is set to that of the external forcing
                     !
                     people(iagent)%health_status%malaria_status%imm = imm(iloc)
                     !
                 else ! Otherwise we gather value from agent for diagnostics
-                    !$OMP ATOMIC
-                    imm(iloc) = imm(iloc) + people(iagent)%health_status%malaria_status%imm
-                    !$END OMP ATOMIC
-                end if 
+                    imm_priv(iloc,ithread) = imm_priv(iloc,ithread) + &
+                    people(iagent)%health_status%malaria_status%imm
+                end if
                 !
                 if (diag_age) then
-                    ! These three totals are independent for a given agent (istat is
-                    ! never 6 or 7), so they don't need to exclude each other -- only
-                    ! same-address collisions across agents do. Per-line ATOMIC covers
-                    ! that without the shared program-wide lock a CRITICAL block would
-                    ! need (unnamed CRITICAL is one lock for the whole program).
-                    !
-                    ! SEIAR disaggregated by age
-                    !$OMP ATOMIC
-                    Iage_stat_ptr(istat,iage+1)%arr_p(iloc) = &
-                    Iage_stat_ptr(istat,iage+1)%arr_p(iloc) + 1.
+                    ! Symptomatic/asymptomatic disaggregated by age (S/E/R by
+                    ! age have no output flag and no reader -- not staged).
+                    if (istat == 3 .or. istat == 4) then
+                        Iage_stat_ptr(istat,iage+1)%arr_p_priv(iloc,ithread) = &
+                        Iage_stat_ptr(istat,iage+1)%arr_p_priv(iloc,ithread) + 1.
+                    end if
                     !
                     ! Immunity disaggregated by age
-                    !$OMP ATOMIC
-                    Iage_stat_ptr(6,iage+1)%arr_p(iloc) = &
-                    Iage_stat_ptr(6,iage+1)%arr_p(iloc) + &
+                    Iage_stat_ptr(6,iage+1)%arr_p_priv(iloc,ithread) = &
+                    Iage_stat_ptr(6,iage+1)%arr_p_priv(iloc,ithread) + &
                     people(iagent)%health_status%malaria_status%imm
                     !
                     ! Agent number disaggregated by age
-                    !$OMP ATOMIC
-                    Iage_stat_ptr(7,iage+1)%arr_p(iloc) = &
-                    Iage_stat_ptr(7,iage+1)%arr_p(iloc) + 1.
+                    Iage_stat_ptr(7,iage+1)%arr_p_priv(iloc,ithread) = &
+                    Iage_stat_ptr(7,iage+1)%arr_p_priv(iloc,ithread) + 1.
                     !
                     ! Inew and Inew(a) are updated on the spot
                 end if
             end if
             !
-            ! EIR(iloc) and hbr(iloc) are different arrays, never the same address,
-            ! so they don't need to exclude each other -- same reasoning as the
-            ! age-diagnostics block above, and needs to move off CRITICAL together
-            ! with it, since unnamed CRITICAL shares one lock program-wide.
-            !$OMP ATOMIC
-            EIR(iloc) = EIR(iloc) + people(iagent)%health_status%malaria_status%EIR_att
-            !$OMP ATOMIC
-            hbr(iloc) = hbr(iloc) + people(iagent)%health_status%malaria_status%hbr_att
+            EIR_priv(iloc,ithread) = EIR_priv(iloc,ithread) + &
+            people(iagent)%health_status%malaria_status%EIR_att
+            hbr_priv(iloc,ithread) = hbr_priv(iloc,ithread) + &
+            people(iagent)%health_status%malaria_status%hbr_att
             !===================================================
             !
             case (2) ! Dengue [Non-functional]
@@ -706,13 +717,26 @@ USE, INTRINSIC :: ISO_C_BINDING
             integer, intent(in) :: idis ! 0 = Cholera: SIAR  ; 1 = Malaria: SEIAR ; 2 = Dengue [Non-functional]
             !
             ! Local use only
-            integer :: ixy ! Looping spatial index
+            integer :: ixy, m, t   ! Looping spatial/status/thread indices
+            integer :: n_tot       ! Today's total ticket draw for one cell
+            integer :: remaining   ! Tickets not yet handed to a thread
+            integer :: dead_t      ! Thread t's current dead-slot capacity in this cell
             !
-            ! Draw today's births per cell up front (Binomial via ignbin); dead
-            ! slots claim from nbirths_left atomically in agents_malaria/agents_cholera.
+            ! Draw today's total births per cell, then hand tickets to threads
+            ! in a fixed order up to each thread's own dead-slot capacity
+            ! (nslots_thread-npeop_thread, see mo_const.f90) -- a ticket only
+            ! goes unclaimed when the whole cell is out of dead slots. Dead
+            ! slots claim from their own thread's column (lock-free) in
+            ! agents_malaria/agents_cholera.
             do ixy = 1, nxy
                 if (mask_pop(ixy)) then
-                    nbirths_left(ixy) = ignbin(npeop(ixy), birth_rate)
+                    n_tot = ignbin(npeop(ixy), birth_rate)
+                    remaining = n_tot
+                    do t = 1, size(nbirths_left,dim=2)
+                        dead_t = nslots_thread(ixy,t) - npeop_thread(ixy,t)
+                        nbirths_left(ixy,t) = min(remaining, dead_t)
+                        remaining = remaining - nbirths_left(ixy,t)
+                    end do
                 end if
             end do
             !
@@ -731,6 +755,11 @@ USE, INTRINSIC :: ISO_C_BINDING
             I(:) = 0.
             A(:) = 0.
             R(:) = 0.
+            !
+            ! Reset per-thread staging columns (agents_diagnostics writes here lock-free)
+            do m = 1, 4 ! SIAR
+                status_pointer(m)%arr_p_priv(:,:) = 0.
+            end do
             !
             !=================================================
             !
@@ -780,6 +809,27 @@ USE, INTRINSIC :: ISO_C_BINDING
                 N_a(:,:)   = 0.
             end if
             !
+            ! Reset per-thread staging columns (agents_diagnostics/agents_malaria
+            ! write here lock-free; merged in agents_post_diagnostics)
+            do m = 1, 6 ! SEIAR(a) + i_m(a) + N(a)
+                status_pointer(m)%arr_p_priv(:,:) = 0.
+            end do
+            EIR_priv(:,:) = 0.
+            hbr_priv(:,:) = 0.
+            if (.not. in_imm) then
+                imm_priv(:,:) = 0.
+            end if
+            if (diag_age) then
+                ! Reset directly (one shot per BLOCK), not per exact age --
+                ! Iage_stat_ptr(:,iage)%arr_p_priv aliases these same arrays.
+                ! Sa/Ea/Ra have no output flag and no reader -- not staged.
+                Ia_priv(:,:,:) = 0.
+                Aa_priv(:,:,:) = 0.
+                imm_a_priv(:,:,:) = 0.
+                N_a_priv(:,:,:) = 0.
+                Ia_new_priv(:,:,:) = 0.
+            end if
+            !
             !===================================================
             !
             case (2) ! Dengue [Non-functional]
@@ -807,8 +857,19 @@ USE, INTRINSIC :: ISO_C_BINDING
             !logical :: iactive
             !real :: conv1, conv2
 
+            ! npeop(:) is derived, not written directly -- see npeop_thread,
+            ! mo_const.f90.
+            npeop(:) = sum(npeop_thread(:,:), dim=2)
+
             SELECT case(idis)
             case (0) ! Cholera -------------------------------
+            !
+            ! Merge per-thread staging columns into the shared arrays before
+            ! normalizing below.
+            S(:) = S(:) + sum(status_pointer(1)%arr_p_priv(:,:), dim=2)
+            I(:) = I(:) + sum(status_pointer(2)%arr_p_priv(:,:), dim=2)
+            A(:) = A(:) + sum(status_pointer(3)%arr_p_priv(:,:), dim=2)
+            R(:) = R(:) + sum(status_pointer(4)%arr_p_priv(:,:), dim=2)
             !
             S(:) = S(:)/npeop(:)
             I(:) = I(:)/npeop(:)
@@ -832,19 +893,48 @@ USE, INTRINSIC :: ISO_C_BINDING
             !  if (mask_pop(ixy)) then
             !      !
             !      conv1 = conv1 + (scale(ixy)*npeop(ixy) - alpha/mu * I(ixy))
-            !      conv2 = conv2 + (1+ gamma/(rho+mu))*(I(ixy)+ A(ixy)) + S(ixy)  
+            !      conv2 = conv2 + (1+ gamma/(rho+mu))*(I(ixy)+ A(ixy)) + S(ixy)
             !      !
             !  end if
             !end do
             !=================================================
 
-            ! Age-structured 
+            ! Age-structured
 
             !=================================================
             case (1) ! Malaria -------------------------------
             !
-            ! Fraction [per person]  = HA*N/(rho*A_cell) = N/npeop - with mobility this will have to 
-            !                                                        be modified 
+            ! Merge per-thread staging columns into the shared arrays before
+            ! normalizing below.
+            S(:) = S(:) + sum(status_pointer(1)%arr_p_priv(:,:), dim=2)
+            E(:) = E(:) + sum(status_pointer(2)%arr_p_priv(:,:), dim=2)
+            I(:) = I(:) + sum(status_pointer(3)%arr_p_priv(:,:), dim=2)
+            A(:) = A(:) + sum(status_pointer(4)%arr_p_priv(:,:), dim=2)
+            R(:) = R(:) + sum(status_pointer(5)%arr_p_priv(:,:), dim=2)
+            I_new(:) = I_new(:) + sum(status_pointer(6)%arr_p_priv(:,:), dim=2)
+            !
+            EIR(:) = EIR(:) + sum(EIR_priv(:,:), dim=2)
+            hbr(:) = hbr(:) + sum(hbr_priv(:,:), dim=2)
+            if (.not. in_imm) then
+                imm(:) = imm(:) + sum(imm_priv(:,:), dim=2)
+            end if
+            !
+            if (diag_age) then
+                ! Merge once per BLOCK (not per exact age -- Iage_stat_ptr(:,iage)
+                ! for ages sharing a block alias the same *_priv column set, so
+                ! merging per exact age would double-count shared blocks).
+                ! Sa/Ea/Ra have no output flag and no reader -- not merged.
+                do j = 1, size(age_blocks(:))
+                    Ia(:,j) = Ia(:,j) + sum(Ia_priv(:,:,j), dim=2)
+                    Aa(:,j) = Aa(:,j) + sum(Aa_priv(:,:,j), dim=2)
+                    imm_a(:,j) = imm_a(:,j) + sum(imm_a_priv(:,:,j), dim=2)
+                    N_a(:,j) = N_a(:,j) + sum(N_a_priv(:,:,j), dim=2)
+                    Ia_new(:,j) = Ia_new(:,j) + sum(Ia_new_priv(:,:,j), dim=2)
+                end do
+            end if
+            !
+            ! Fraction [per person]  = HA*N/(rho*A_cell) = N/npeop - with mobility this will have to
+            !                                                        be modified
             S(:) = S(:)/npeop(:)
             E(:) = E(:)/npeop(:)
             I(:) = I(:)/npeop(:)
@@ -852,7 +942,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             A(:) = A(:)/npeop(:)
             R(:) = R(:)/npeop(:)
 
-            ! Age-structured 
+            ! Age-structured
             if (diag_age) then
                 do j = 1, size(age_blocks(:))
                     !
@@ -868,11 +958,11 @@ USE, INTRINSIC :: ISO_C_BINDING
             ! Calculate average daily EIR on a per person basis (use human to agent ratio: HA(:))
             !
             where((mask_pop(:)) .and. (npeop(:)>0)) EIR(:) = EIR(:)/npeop(:)/HA(:)!P_a!/HA(:)
-  
+
             ! Calculate average daily hbr
             !
             where((mask_pop(:)) .and. (npeop(:)>0)) hbr(:) = hbr(:)/npeop(:)/HA(:)!P_a!/HA(:)
-  
+
             ! Calculate average daily imm (immunity level)
             !
             if (.not. in_imm) then
@@ -904,7 +994,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             integer, intent(in) :: idis              ! Disease ID (0: Cholera, 1: Malaria)
             integer, intent(in) :: iagent            ! Agent ID (integer number)
             integer, intent(in) :: itime             ! Current time step
-            integer, allocatable, intent(inout) :: nbirths_left(:) ! (nxy) Births left to hand out today, per cell
+            integer, allocatable, intent(inout) :: nbirths_left(:,:) ! (nxy,nthreads) Births left to hand out today, per (cell,thread)
             integer, allocatable, intent(inout) :: npeop(:)       ! (nxy) Number of agents in each grid cell
             integer, allocatable, intent(inout) :: nbites(:)      ! (nxy) Infective bites (vectors that were infected upon bitting a human)
 
@@ -948,7 +1038,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             implicit none
             integer, intent(in) :: iagent            ! Agent ID (integer number)
             integer, intent(in) :: itime             ! Time step
-            integer, allocatable, intent(inout) :: nbirths_left(:) ! (nxy) Births left to hand out today, per cell
+            integer, allocatable, intent(inout) :: nbirths_left(:,:) ! (nxy,nthreads) Births left to hand out today, per (cell,thread)
             integer, allocatable, intent(inout) :: npeop(:)        ! (nxy) Number of agents in each grid cell
 
             ! Local use only
@@ -956,8 +1046,11 @@ USE, INTRINSIC :: ISO_C_BINDING
             integer :: stat ! Agent health status
             integer :: i    ! Agent location
             integer :: j    ! Location where agent moves
-            integer :: claimed ! [birth claim] this agent's ticket, if any, from nbirths_left(i)
+            integer :: claimed ! [birth claim] this agent's ticket, if any, from nbirths_left(i,ithread)
+            integer :: ithread ! This agent's owning thread -- see npeop_thread, mo_const.f90
             logical :: active ! Is the agent alive?
+
+        ithread = omp_get_thread_num() + 1
 
         ! Events depend on health status and physical location.
         active =  people(iagent)%health_status%active_status%status
@@ -1025,10 +1118,9 @@ USE, INTRINSIC :: ISO_C_BINDING
                         if (generate_random() <= mu) then ! Death
                             !
                             people(iagent)%health_status%active_status%status=.false.
-                            ! npeop(i) is shared with other agents dying/being born at
-                            ! this cell on other threads -- needs ATOMIC.
-                            !$OMP ATOMIC
-                            npeop(i) = npeop(i) - 1
+                            ! Update this thread's column, not npeop(:) -- npeop(:) is
+                            ! derived once/day in agents_post_diagnostics (mo_const.f90).
+                            npeop_thread(i,ithread) = npeop_thread(i,ithread) - 1
                             !
                         end if
                     !==    
@@ -1069,10 +1161,9 @@ USE, INTRINSIC :: ISO_C_BINDING
                         if (generate_random() <= mu) then ! Death
                             !
                             people(iagent)%health_status%active_status%status=.false.
-                            ! npeop(i) is shared with other agents dying/being born at
-                            ! this cell on other threads -- needs ATOMIC.
-                            !$OMP ATOMIC
-                            npeop(i) = npeop(i) - 1
+                            ! Update this thread's column, not npeop(:) -- npeop(:) is
+                            ! derived once/day in agents_post_diagnostics (mo_const.f90).
+                            npeop_thread(i,ithread) = npeop_thread(i,ithread) - 1
                             !
                         end if
                         ! end Health  
@@ -1139,10 +1230,9 @@ USE, INTRINSIC :: ISO_C_BINDING
                         if (generate_random() <= mu) then ! Death
                             !
                             people(iagent)%health_status%active_status%status=.false.
-                            ! npeop(i) is shared with other agents dying/being born at
-                            ! this cell on other threads -- needs ATOMIC.
-                            !$OMP ATOMIC
-                            npeop(i) = npeop(i) - 1
+                            ! Update this thread's column, not npeop(:) -- npeop(:) is
+                            ! derived once/day in agents_post_diagnostics (mo_const.f90).
+                            npeop_thread(i,ithread) = npeop_thread(i,ithread) - 1
                             !
                         end if
                     !===  
@@ -1162,21 +1252,19 @@ USE, INTRINSIC :: ISO_C_BINDING
                         if (generate_random() <= mu) then
                             !
                             people(iagent)%health_status%active_status%status=.false.
-                            !$OMP ATOMIC
-                            npeop(i) = npeop(i) - 1
+                            ! Update this thread's column, not npeop(:) -- npeop(:) is
+                            ! derived once/day in agents_post_diagnostics (mo_const.f90).
+                            npeop_thread(i,ithread) = npeop_thread(i,ithread) - 1
                             !
                         end if
                         !
                     end if 
                 else ! If agent is dead
                    !
-                   ! nbirths_left(i) (Binomial(npeop(i), birth_rate), drawn once per
-                   ! cell in agents_pre_diagnostics) is a shared pool of birth tickets;
-                   ! each dead agent atomically claims one instead of drawing its own.
-                   !$OMP ATOMIC CAPTURE
-                   claimed = nbirths_left(i)
-                   nbirths_left(i) = nbirths_left(i) - 1
-                   !$OMP END ATOMIC
+                   ! nbirths_left(i,ithread) is this thread's own ticket pool for cell i
+                   ! (set in agents_pre_diagnostics) -- no ATOMIC needed to claim from it.
+                   claimed = nbirths_left(i,ithread)
+                   nbirths_left(i,ithread) = nbirths_left(i,ithread) - 1
                    if (claimed > 0) then
                         !
                         people(iagent)%health_status%active_status%status=.true. ! You are now alive,
@@ -1189,8 +1277,9 @@ USE, INTRINSIC :: ISO_C_BINDING
                         else
                             people(iagent)%agent_ID%sex=1   ! Male = 1
                         end if
-                        !$OMP ATOMIC
-                        npeop(i) = npeop(i) + 1
+                        ! Update this thread's column, not npeop(:) -- npeop(:) is
+                        ! derived once/day in agents_post_diagnostics (mo_const.f90).
+                        npeop_thread(i,ithread) = npeop_thread(i,ithread) + 1
                    end if
                 end if ! If (active)
             end if ! If (mask_pop(currloc))
@@ -1202,7 +1291,7 @@ USE, INTRINSIC :: ISO_C_BINDING
 
             implicit none
             integer, intent(in) :: iagent            ! Agent ID (integer number)
-            integer, allocatable, intent(inout) :: nbirths_left(:) ! (nxy) Births left to hand out today, per cell
+            integer, allocatable, intent(inout) :: nbirths_left(:,:) ! (nxy,nthreads) Births left to hand out today, per (cell,thread)
             integer, allocatable, intent(inout) :: npeop(:)       ! (nxy) Number of agents in each grid cell
             integer, allocatable, intent(inout) :: nbites(:)      ! (nlon*nlat) Infective bites
                                                      ! (vectors that were infected upon
@@ -1216,22 +1305,24 @@ USE, INTRINSIC :: ISO_C_BINDING
             integer :: i    ! Agent location
             integer :: j    ! Location where agent moves
             integer :: home ! Home location
-            integer :: claimed ! [birth claim] this agent's ticket, if any, from nbirths_left(i)
+            integer :: claimed ! [birth claim] this agent's ticket, if any, from nbirths_left(i,ithread)
+            integer :: ithread ! Per-thread private column for I_new/Ia_new staging
             logical :: active ! Is the agent alive?
 
-            ! Disease transmission 
+            ! Disease transmission
             ! 0: Human to vector  1: Vector to human
             !
             real :: lambda_0, lambda_1, lambda_all
             real :: P_0                     ! Human to vector
             real :: P_1                     ! Vector to human
- 
 
-        ! Events depend on health status and physical location. 
+
+        ! Events depend on health status and physical location.
         active =  people(iagent)%health_status%active_status%status
         stat   =  people(iagent)%health_status%malaria_status%status
         i      =  people(iagent)%location_status%currloc
         home   =  people(iagent)%location_status%homeloc
+        ithread = omp_get_thread_num() + 1
 
 
         ! ToC ===========================
@@ -1265,11 +1356,11 @@ USE, INTRINSIC :: ISO_C_BINDING
                                 people(iagent)%location_status%currloc = home
                                 j = home
 
-                                ! Update number of agents in either grid cell
-                                !$OMP ATOMIC
-                                npeop(i) = npeop(i) - 1
-                                npeop(j) = npeop(j) + 1
-                                !$END OMP ATOMIC
+                                ! npeop_thread live-updated here (npeop(:) is derived once/day,
+                                ! see mo_const.f90); no ATOMIC needed since the same agent/thread
+                                ! writes both npeop_thread(i,*) and npeop_thread(j,*) below.
+                                npeop_thread(i,ithread) = npeop_thread(i,ithread) - 1
+                                npeop_thread(j,ithread) = npeop_thread(j,ithread) + 1
                             else
                                 ! Update duration of trip counter --> useful if we implement not exponential travelling times
                                 people(iagent)%location_status%longdur = people(iagent)%location_status%longdur + 1
@@ -1289,11 +1380,11 @@ USE, INTRINSIC :: ISO_C_BINDING
                                 people(iagent)%location_status%currloc = j
                                 people(iagent)%location_status%longdur = 1     ! Counter in case trip durations are not exponentially distributed
 
-                                ! Update number of agents in either grid cell
-                                !$OMP ATOMIC
-                                npeop(i) = npeop(i) - 1
-                                npeop(j) = npeop(j) + 1
-                                !$END OMP ATOMIC
+                                ! npeop_thread live-updated here (npeop(:) is derived once/day,
+                                ! see mo_const.f90); no ATOMIC needed since the same agent/thread
+                                ! writes both npeop_thread(i,*) and npeop_thread(j,*) below.
+                                npeop_thread(i,ithread) = npeop_thread(i,ithread) - 1
+                                npeop_thread(j,ithread) = npeop_thread(j,ithread) + 1
                             !
                             ! else agent does not move
                             !
@@ -1395,18 +1486,13 @@ USE, INTRINSIC :: ISO_C_BINDING
                                 !
                                 ! Update here Inew
                                 !
-                                ! status_pointer(6) and Iage_stat_ptr(8,...) are different
-                                ! arrays -- same independent-updates reasoning as above.
-                                !
-                                ! Total new infections
-                                ! j is the agent location (accessed before)
-                                !$OMP ATOMIC
-                                status_pointer(6)%arr_p(j) = status_pointer(6)%arr_p(j) + 1.
+                                ! Total new infections (j is the agent location, accessed before)
+                                status_pointer(6)%arr_p_priv(j,ithread) = &
+                                status_pointer(6)%arr_p_priv(j,ithread) + 1.
                                 !
                                 ! New infections broken down by age
-                                !$OMP ATOMIC
-                                Iage_stat_ptr(8,min(floor(people(iagent)%agent_ID%age+1),79))%arr_p(j) = &
-                                Iage_stat_ptr(8,min(floor(people(iagent)%agent_ID%age+1),79))%arr_p(j) + 1.
+                                Iage_stat_ptr(8,min(floor(people(iagent)%agent_ID%age+1),79))%arr_p_priv(j,ithread) = &
+                                Iage_stat_ptr(8,min(floor(people(iagent)%agent_ID%age+1),79))%arr_p_priv(j,ithread) + 1.
                                 ! Log-normally distributed times - function of imm
                                 people(iagent)%health_status%malaria_status%infc_dur=tau_log(people(iagent)%health_status%malaria_status%imm,d_mu,mu_1,d_sig,sig_1)
                                 !
@@ -1527,21 +1613,19 @@ USE, INTRINSIC :: ISO_C_BINDING
                             people(iagent)%health_status%malaria_status%EIR_att=0.
                             people(iagent)%health_status%malaria_status%hbr_att=0.
                             people(iagent)%health_status%malaria_status%imm=0.
-                            !$OMP ATOMIC
-                            npeop(j) = npeop(j) - 1
+                            ! Update this thread's column, not npeop(:) -- npeop(:) is
+                            ! derived once/day in agents_post_diagnostics (mo_const.f90).
+                            npeop_thread(j,ithread) = npeop_thread(j,ithread) - 1
                             !
                         end if
                         !
                     !===
                 else ! If agent is dead
                    !
-                   ! nbirths_left(i) (Binomial(npeop(i), birth_rate), drawn once per
-                   ! cell in agents_pre_diagnostics) is a shared pool of birth tickets;
-                   ! each dead agent atomically claims one instead of drawing its own.
-                   !$OMP ATOMIC CAPTURE
-                   claimed = nbirths_left(i)
-                   nbirths_left(i) = nbirths_left(i) - 1
-                   !$OMP END ATOMIC
+                   ! nbirths_left(i,ithread) is this thread's own ticket pool for cell i
+                   ! (set in agents_pre_diagnostics) -- no ATOMIC needed to claim from it.
+                   claimed = nbirths_left(i,ithread)
+                   nbirths_left(i,ithread) = nbirths_left(i,ithread) - 1
                    if (claimed > 0) then
                         !
                         people(iagent)%health_status%active_status%status=.true.  ! You are now alive,
@@ -1556,8 +1640,9 @@ USE, INTRINSIC :: ISO_C_BINDING
                         else
                             people(iagent)%agent_ID%sex=1   ! Male = 0
                         end if
-                        !$OMP ATOMIC
-                        npeop(i) = npeop(i) + 1
+                        ! Update this thread's column, not npeop(:) -- npeop(:) is
+                        ! derived once/day in agents_post_diagnostics (mo_const.f90).
+                        npeop_thread(i,ithread) = npeop_thread(i,ithread) + 1
                    end if
                 end if ! If (active)
             end if ! If (mask_pop(currloc))

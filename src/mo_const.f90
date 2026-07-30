@@ -54,10 +54,21 @@ MODULE mo_const
     logical, allocatable :: mask_mob(:)    ! (nxy) Mask with the grid points where agents can move - combines mask_pop and mask_grav
 
     integer, allocatable :: npeop(:)    ! Number of agents in each grid cell
+    ! Chunk size for SCHEDULE(STATIC, agent_chunk) in mo_timestep.f90 -- keep
+    ! in sync with the pragma there.
+    integer, parameter :: agent_chunk = 500
+    ! npeop(:), broken down by each agent's owning thread (nxy,nthreads) --
+    ! fixed per agent for its life under STATIC scheduling, so written
+    ! lock-free, one column per thread.
+    integer, allocatable :: npeop_thread(:,:)
+    ! Fixed total (dead+alive) slots per (cell,thread), snapshotted once at
+    ! init. nslots_thread-npeop_thread = a thread's current dead-slot capacity.
+    integer, allocatable :: nslots_thread(:,:)
     real, allocatable :: HA(:)          ! Human to agent ratio
-    ! Births left to hand out today, per cell -- set daily in agents_pre_diagnostics,
-    ! claimed one at a time (atomically) by dead agent slots in agents_malaria/agents_cholera.
-    integer, allocatable :: nbirths_left(:)
+    ! Today's claimable birth tickets per (cell,thread), set in
+    ! agents_pre_diagnostics; claimed lock-free by each thread from its own
+    ! column.
+    integer, allocatable :: nbirths_left(:,:)
     real, allocatable :: pop_dens(:)    ! 1D long array for human population density 
     real, allocatable :: Ipop_dens(:)   ! Inverse of 1D long array for human population density 
     real, allocatable :: D(:)           ! Dilution factor
@@ -128,8 +139,24 @@ MODULE mo_const
     real, allocatable, target :: R(:) ! 1D long array for Recovered density
     real, allocatable, target :: Ra(:,:)! (nxy,nage_blocks)
 
+    ! Per-thread, per-block staging (nxy,nthreads,nage_blocks) for the age-
+    ! disaggregated arrays above -- one column set per BLOCK, not per exact
+    ! age, mirroring how Iage_stat_ptr(:,:)%arr_p already aliases many ages
+    ! onto the same block array (see find_block in mo_grid.f90).
+    ! Sa/Ea/Ra have no output flag and no reader anywhere (mo_netcdf.f90) --
+    ! not staged here; agents_diagnostics skips writing them (see istat check).
+    real, allocatable, target :: Ia_priv(:,:,:), Aa_priv(:,:,:), Ia_new_priv(:,:,:)
+    real, allocatable, target :: imm_a_priv(:,:,:), N_a_priv(:,:,:)
+
     type array_pointers
       real, pointer :: arr_p(:)
+      ! Per-thread staging (nxy, nthreads): each thread accumulates into its own
+      ! column lock-free; agents_post_diagnostics sums columns into arr_p once a day.
+      ! Pointer (not allocatable): age-disaggregated entries that share an age
+      ! block (see find_block) must also share the same staging column, or the
+      ! reset/merge cost scales with the number of exact ages (80) instead of
+      ! blocks (16) -- see Sa_priv etc. below.
+      real, pointer :: arr_p_priv(:,:)
     end type array_pointers
     
     type(array_pointers) :: status_pointer(6)  ! SEIAR+I_new
@@ -157,6 +184,8 @@ MODULE mo_const
     real, allocatable :: EIR(:)   ! 1D long array for Entomological Inoculation Rate
     real, allocatable :: hbr(:)   ! 1D long array for Human Biting Rate
     real, allocatable :: imm(:)   ! 1D long array for Endemicity level / Immunity
+    ! Per-thread staging (nxy, nthreads) for EIR/hbr/imm -- same pattern as arr_p_priv above
+    real, allocatable :: EIR_priv(:,:), hbr_priv(:,:), imm_priv(:,:)
     real, allocatable :: imm_2D(:,:) ! (nx,ny) 2D array for immunity forcing at slice itime
     real, allocatable, target :: imm_a(:,:) !(nxy,nage_blocks) Immunity disaggregated by age
     real, allocatable, target :: N_a(:,:) !(nxy,nage_blocks)   Agent number disaggregated by age

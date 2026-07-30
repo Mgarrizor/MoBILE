@@ -6,6 +6,7 @@ MODULE mo_grid
   !
   USE mo_const
   USE mo_control
+  USE omp_lib
   !
   !
   implicit none
@@ -23,7 +24,9 @@ MODULE mo_grid
       real, allocatable, intent(out) :: A_old(:),EIR(:),imm(:), hbr(:)
 
       ! Local use only
-      integer :: indx, k
+      integer :: indx, k, nthreads
+
+      nthreads = omp_get_max_threads()
 
       SELECT case(idis)
       case (0) ! Cholera (SIAR)
@@ -39,6 +42,10 @@ MODULE mo_grid
         status_pointer(2)%arr_p => I
         status_pointer(3)%arr_p => A
         status_pointer(4)%arr_p => R
+        allocate(status_pointer(1)%arr_p_priv(nxy,nthreads))
+        allocate(status_pointer(2)%arr_p_priv(nxy,nthreads))
+        allocate(status_pointer(3)%arr_p_priv(nxy,nthreads))
+        allocate(status_pointer(4)%arr_p_priv(nxy,nthreads))
 
       case (1) ! Malaria (SEIR)
 
@@ -52,6 +59,9 @@ MODULE mo_grid
         allocate(EIR(nxy))
         allocate(imm(nxy))
         allocate(hbr(nxy))
+        allocate(EIR_priv(nxy,nthreads))
+        allocate(imm_priv(nxy,nthreads))
+        allocate(hbr_priv(nxy,nthreads))
 
         EIR(:) = 0.
         imm(:) = 0.
@@ -72,6 +82,15 @@ MODULE mo_grid
           !
           allocate(N_a(nxy,size(age_blocks(:))))
           !
+          ! Per-block staging (see array_pointers in mo_const.f90): one column
+          ! set per BLOCK, shared by every exact age that maps to it below.
+          ! Sa/Ea/Ra are never output or read anywhere -- no staging for them.
+          allocate(Ia_priv(nxy,nthreads,size(age_blocks(:))))
+          allocate(Aa_priv(nxy,nthreads,size(age_blocks(:))))
+          allocate(imm_a_priv(nxy,nthreads,size(age_blocks(:))))
+          allocate(N_a_priv(nxy,nthreads,size(age_blocks(:))))
+          allocate(Ia_new_priv(nxy,nthreads,size(age_blocks(:))))
+          !
           ! Look up table for age blocks
           do indx = 0, size(Iage_stat_ptr(1,:))-1 ! Loop over ages, starting at 0
             !
@@ -88,6 +107,12 @@ MODULE mo_grid
             Iage_stat_ptr(7,indx+1)%arr_p => N_a(:,k)
             !
             Iage_stat_ptr(8,indx+1)%arr_p => Ia_new(:,k)
+            !
+            Iage_stat_ptr(3,indx+1)%arr_p_priv => Ia_priv(:,:,k)
+            Iage_stat_ptr(4,indx+1)%arr_p_priv => Aa_priv(:,:,k)
+            Iage_stat_ptr(6,indx+1)%arr_p_priv => imm_a_priv(:,:,k)
+            Iage_stat_ptr(7,indx+1)%arr_p_priv => N_a_priv(:,:,k)
+            Iage_stat_ptr(8,indx+1)%arr_p_priv => Ia_new_priv(:,:,k)
           end do
         else 
           !allocate(I(nxy))
@@ -96,11 +121,18 @@ MODULE mo_grid
         ! Look up table for pointer approach to gather bulk diagnostics
         status_pointer(1)%arr_p => S
         status_pointer(2)%arr_p => E
-        status_pointer(3)%arr_p => I 
+        status_pointer(3)%arr_p => I
         status_pointer(4)%arr_p => A
         status_pointer(5)%arr_p => R
 
         status_pointer(6)%arr_p => I_new
+
+        allocate(status_pointer(1)%arr_p_priv(nxy,nthreads))
+        allocate(status_pointer(2)%arr_p_priv(nxy,nthreads))
+        allocate(status_pointer(3)%arr_p_priv(nxy,nthreads))
+        allocate(status_pointer(4)%arr_p_priv(nxy,nthreads))
+        allocate(status_pointer(5)%arr_p_priv(nxy,nthreads))
+        allocate(status_pointer(6)%arr_p_priv(nxy,nthreads))
 
 
       case (2) ! Dengue [Non-functional]

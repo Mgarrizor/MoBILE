@@ -143,7 +143,7 @@ subroutine time_step(disID,itime)
         ! block per thread, round-robins chunks across threads -- agents are laid
         ! out grouped by cell (see agents_init), so a bare per-thread block gave
         ! one thread far more of the expensive die/rebirth agents than the others.
-!$OMP PARALLEL DO SCHEDULE(STATIC, 500)
+!$OMP PARALLEL DO SCHEDULE(STATIC, agent_chunk)
         agent_loop: do iagent=1,nagent
         !
         ! 3.1) Update health status
@@ -163,7 +163,7 @@ subroutine time_step(disID,itime)
           !
           call read_slice_imm(itime,imm)
           !
-        end if 
+        end if
         !
         ! Post-diagnostics calculations
         call agents_post_diagnostics(disID)
