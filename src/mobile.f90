@@ -551,6 +551,7 @@ end if
 !=
 !
 ! Write initial conditions (after spin-up)
+call agents_update_age_counts() ! itime = 1 is always a year boundary
 call netcdf_3D_output(1,Var3D) ! itime = 1
 ! 
 print '("Integrate: ",i6," days.")', nsteps
@@ -565,6 +566,9 @@ time_loop: do itime=2,nsteps
   WRITE(*,'(1a1,A11,I6,A2,I6,A2,F6.1,A2)', advance='no') char(13),'Integrating',itime,' /',nsteps,' -',(real(itime)/(nsteps)*100.),' %'
   !
   ! Write 3D fields (x,y,t) here
+  if (mod(itime-1, 365) == 0) then
+      call agents_update_age_counts()
+  end if
   call netcdf_3D_output(itime,Var3D)
   !
 end do time_loop

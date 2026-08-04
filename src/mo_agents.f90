@@ -659,6 +659,25 @@ USE, INTRINSIC :: ISO_C_BINDING
 
         end subroutine agents_read_age
 
+        subroutine agents_update_age_counts()
+        !===
+            ! Rebuilds age_counts(:) from the live population (called yearly,
+            ! see mobile.f90) -- same floor(age) binning as the init-time
+            ! count, but scanning 1..nagent_max and filtering to active
+            ! agents, since growth-reserve slots (nagent+1..nagent_max) are
+            ! inactive until claimed via a birth.
+            implicit none
+            integer :: k, abin
+
+            age_counts(:) = 0
+            do k = 1, nagent_max
+                if (people(k)%health_status%active_status%status) then
+                    abin = min(floor(people(k)%agent_ID%age), size(age_weights)-1)
+                    age_counts(abin) = age_counts(abin) + 1
+                end if
+            end do
+        end subroutine agents_update_age_counts
+
         subroutine agents_diagnostics(idis,iagent)
         !===
             ! Calculate bulk statistics to feed into the disease source integration

@@ -61,13 +61,6 @@ MODULE mo_netcdf
             var_out = var_out + 1
         end if 
 
-        if ((out_age)) then            
-            
-            status = nf90_put_var(ncid = ncid_grp(2), varid = arr_VarID(var_out), & 
-                                 values = age_counts(:))
-            var_out = var_out + 1
-        end if 
-
 
 #ifdef COUPLED
         ! Declarations or interfaces related to the coupled mode
@@ -124,13 +117,27 @@ MODULE mo_netcdf
         ! Local use
         integer :: var_out
         integer :: k
+        integer :: status
 
         ! 3D Fields
         ! Variable order for write_check_3D call should be the same
         ! as the order in which they were declared
         var_out = Var3D
-      
-        if ((out_S)) then 
+
+        ! Age(time,age): written only on year boundaries (day 1 of each year,
+        ! never during spin-up -- this subroutine isn't called during spin-up
+        ! at all). Slot is always reserved so later variables' arr_VarID stay
+        ! aligned, even on days that don't write.
+        if (out_age) then
+            if (mod(itime-1, 365) == 0) then
+                status = nf90_put_var(ncid = ncid_grp(2), varid = arr_VarID(var_out), &
+                                      values = age_counts(:), start = (/ 1, itime /), &
+                                      count = (/ size(age_counts), 1 /))
+            end if
+            var_out = var_out + 1
+        end if
+
+        if ((out_S)) then
           !
           call write_check_3D(itime,S,var_out,'NetCDF Status S',ncid_grp(2))
           !
@@ -550,15 +557,6 @@ MODULE mo_netcdf
             !
         end if
         
-        if ((out_age)) then
-            !
-            status = nf90_def_var(ncid = ncid_grp(2), name = "Age", xtype = nf90_double, &
-                     dimids = DimId(4), varid = arr_VarID(var_out))
-            status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "units", values = "[counts]")
-            var_out = var_out + 1
-            !
-        end if
-
 
 #ifdef COUPLED
         !
@@ -629,6 +627,18 @@ MODULE mo_netcdf
         ! 3D Fields (x,y,t)
         !
         Var3D = var_out
+
+        ! Age(time,age): written yearly (see netcdf_3D_output), not daily -- reuses
+        ! the existing time dimension instead of a new one, sparse (most days are
+        ! left at the default fill value).
+        if ((out_age)) then
+            !
+            status = nf90_def_var(ncid = ncid_grp(2), name = "Age", xtype = nf90_double, &
+                     dimids = (/ DimId(4), DimId(3) /), varid = arr_VarID(var_out))
+            status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "units", values = "[counts]")
+            var_out = var_out + 1
+            !
+        end if
 
         ! ============================== Disease ======================================
         if ((out_S)) then
