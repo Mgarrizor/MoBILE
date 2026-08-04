@@ -494,7 +494,12 @@ MODULE mo_const
             READ(UNIT=21, FMT=*, IOSTAT=io_status) age_val, rate_val
             if (io_status /= 0) EXIT
             if (age_val >= 0 .and. age_val <= 79) then
-                mu_age(age_val) = rate_val
+                ! CSV values are per capita per YEAR (the AGEING notebook
+                ! convention); mu_age(:) must stay in the same per-day units
+                ! as the scalar mu fallback (mo_const.f90), which every
+                ! per-agent death check compares directly against a daily
+                ! generate_random() draw.
+                mu_age(age_val) = rate_val * da
                 n_read = n_read + 1
             end if
         end do
@@ -541,7 +546,11 @@ MODULE mo_const
         allocate(birth_years(num_elements))
         allocate(birth_vals(num_elements))
         birth_years(:) = dummy_years(1:num_elements) - dummy_years(1)
-        birth_vals(:) = dummy_vals(1:num_elements)
+        ! CSV values are per capita per YEAR (the AGEING notebook convention);
+        ! birth_vals(:) must stay in the same per-day units as the scalar
+        ! birth_rate fallback (namelist_const), which agents_pre_diagnostics
+        ! feeds directly into ignbin() as a daily probability.
+        birth_vals(:) = dummy_vals(1:num_elements) * da
     end subroutine read_birthrate_file
 
 
