@@ -60,6 +60,8 @@ MODULE mo_control
     logical :: out_hbr  =.false.  ! Human Biting Rate
     logical :: in_imm   =.false. ! Input immunity forcing flag: always false and automatically set to true is the corresponding
                                  ! forcing file is found.
+    logical :: in_spinup =.false. ! True only while the spin-up loop (mobile.f90) is running --
+                                  ! demographics (aging, births, deaths) are frozen during spin-up.
     !
     ! Defined in mo_vectri.f90
     !
@@ -75,6 +77,8 @@ MODULE mo_control
     character(len=100) :: t2m_file   ! Name of temperature file
     character(len=100) :: area_file  ! Name of cell area file
     character(len=100) :: imm_file   ! Name of immunity forcing file
+    character(len=100) :: mortality_file = '' ! Name of age-specific mortality-rate file; blank = scalar mu
+    character(len=100) :: birthrate_file = '' ! Name of yearly birth-rate file; blank = scalar birth_rate
     character(len=100) :: namelist_filename
     !----------------------------------------------------------
 

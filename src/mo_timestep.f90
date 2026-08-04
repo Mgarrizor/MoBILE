@@ -134,7 +134,7 @@ subroutine time_step(disID,itime)
         ! never touched again -- do not add a reseed call back here.
         !
         ! Pre-diagnostics calculations
-        call agents_pre_diagnostics(disID)
+        call agents_pre_diagnostics(disID,itime)
         !
         ! STATIC (any chunk size) is required, not DYNAMIC/GUIDED: thread-to-agent
         ! assignment must be a fixed function of (nagent, chunk, nthreads) alone,
@@ -144,7 +144,7 @@ subroutine time_step(disID,itime)
         ! out grouped by cell (see agents_init), so a bare per-thread block gave
         ! one thread far more of the expensive die/rebirth agents than the others.
 !$OMP PARALLEL DO SCHEDULE(STATIC, agent_chunk)
-        agent_loop: do iagent=1,nagent
+        agent_loop: do iagent=1,nagent_max
         !
         ! 3.1) Update health status
         !=

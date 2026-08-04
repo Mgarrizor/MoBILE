@@ -412,9 +412,9 @@ itime = 1
        !
      end if 
      !
-     call agents_pre_diagnostics(disID)
+     call agents_pre_diagnostics(disID,itime)
      !
-     agent_loop: do oagent=1,nagent
+     agent_loop: do oagent=1,nagent_max
         call agents_diagnostics(disID,oagent)
      end do agent_loop
      !
@@ -473,6 +473,7 @@ print *, wperm_default
 !=
 if (spin_up==1) then
   !
+  in_spinup = .true. ! Freezes aging/births/deaths (mo_agents.f90) until spin-up ends below
   SU_conv=.false.
   SU_tol=0.015
 
@@ -520,6 +521,8 @@ if (spin_up==1) then
     ispinup = ispinup + 1
     !
   end do
+  !
+  in_spinup = .false. ! Real simulation starts fresh: aging/births/deaths resume below
   !
   ! Swap t2m/rainfall back to the real driver record for the main loop.
   call restore_spinup_forcing()

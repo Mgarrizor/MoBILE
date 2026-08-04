@@ -67,13 +67,14 @@ MODULE mo_namelist
 
             character(len=100), intent(out):: pop_file, imm_file
             integer, intent(out) :: nagent
-            
+
             ! Local use only
             character(len=1000) :: line
             integer:: file_unit, iostats
-            
+            real :: growth_ratio ! nagent_max = ceiling(nagent*growth_ratio); 1.0 = no growth
+
             ! Define namelist
-            namelist /HUMAN/ pop_file, nagent, imm_file
+            namelist /HUMAN/ pop_file, nagent, growth_ratio, imm_file
 
             ! Does the file exist?
             inquire (file=namelist_filename, iostat=iostats)
@@ -82,6 +83,8 @@ MODULE mo_namelist
                  write (stderr, '("Error: namelist file does not exist")')
                  return
              end if
+
+            growth_ratio = 1.0 ! Default: no population growth (nagent_max = nagent)
 
             ! Open and read namelist
             open (action='read', file=namelist_filename, iostat=iostats, newunit=file_unit)
@@ -101,9 +104,18 @@ MODULE mo_namelist
                 print *, '--> Immunity forcing ', imm_file
                 in_imm = .true.
             end if
-            
+
+            ! growth_ratio < 1.0 (shrinkage) isn't supported by the additive
+            ! extra-capacity mechanism in agents_init -- clamp instead of
+            ! silently ignoring it.
+            if (growth_ratio < 1.0) then
+                print *, 'Warning: growth_ratio < 1.0 is not supported; clamping to 1.0'
+                growth_ratio = 1.0
+            end if
+            nagent_max = ceiling(real(nagent) * growth_ratio)
+
             close (file_unit)
-            
+
         end subroutine namelist_human
 
 
@@ -186,6 +198,7 @@ MODULE mo_namelist
             ! - We should have here all model parameters that are being changed to their params.txt value
             !
             namelist /CONST/ mu_B, theta_e, theta_p, mu, birth_rate, rho, sigma, gamma, alpha, beta, & ! cholera disease params
+                             mortality_file, birthrate_file,                               & ! age/time-varying demographic rate files (blank = scalar mu/birth_rate)
                              m_long, m_short, D_grav, D_pop, H_0,                        & ! mobility params gravity model
                              B_0, fS_0, fI_0, fA_0, fR_0,                                & ! initial conditions
                              K_h, b_rate, P_v0, k_NB, P_h0, P_max,                       & ! Vector-human transmission params
@@ -229,6 +242,25 @@ MODULE mo_namelist
             ! Default birth_rate to mu if not set in params.txt (see const_disease's sentinel)
             if (birth_rate < 0.) then
                 birth_rate = mu
+            end if
+
+            ! Materialize mu_age(:)/birth_years(:)/birth_vals(:): from the
+            ! external files if given, else broadcast/collapse from the
+            ! scalars above (reproduces today's constant-rate behavior).
+            if (len(trim(mortality_file)) == 0) then
+                mu_age(:) = mu
+            else
+                print *, '--> Age-specific mortality ', mortality_file
+                call read_mortality_file(mortality_file, mu_age)
+            end if
+
+            if (len(trim(birthrate_file)) == 0) then
+                allocate(birth_years(1), birth_vals(1))
+                birth_years(1) = 0.
+                birth_vals(1) = birth_rate
+            else
+                print *, '--> Time-varying birth rate ', birthrate_file
+                call read_birthrate_file(birthrate_file, birth_years, birth_vals)
             end if
         end subroutine namelist_const
 

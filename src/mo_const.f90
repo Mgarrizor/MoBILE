@@ -18,6 +18,7 @@ MODULE mo_const
     !********** Integration **********************
     integer :: nsteps       ! Number of integration steps (days) (either Namelist of Read from file)
     integer :: nagent       ! Number of agents
+    integer :: nagent_max   ! Max agent-slot capacity for population growth; defaults to nagent
     real, allocatable    :: scale(:)   ! Scale factor to transform numbers into a densities
     real, allocatable    :: scaleI(:)  ! Inverse of scale
     !integer :: nalive       ! Number of alive agents
@@ -180,6 +181,16 @@ MODULE mo_const
     
     real :: mu_B, theta_e, theta_p, mu, rho, sigma, gamma, alpha, beta ! Disease
     real :: birth_rate ! Daily per-agent birth probability; defaults to mu (see namelist_const)
+    ! Per-agent daily death probability by integer age (0-79); materialized
+    ! from mortality_file if given, else broadcast from the scalar mu (see
+    ! namelist_const). Agent-based death checks only -- the non-agent bulk
+    ! SIAR path keeps using the scalar mu.
+    real :: mu_age(0:79)
+    ! b(t): yearly birth-rate series, linearly interpolated daily (see
+    ! interp1). birth_years(:) is years elapsed since simulation start
+    ! (0,1,2,...), not calendar years -- rebased on read. Materialized from
+    ! birthrate_file if given, else a length-1 series equal to birth_rate.
+    real, allocatable :: birth_years(:), birth_vals(:)
     real :: D_pop, H_0, D_grav, m       ! Pop. density and mobility
     real :: B_0, fS_0, fI_0, fA_0, fR_0 ! Initial conditions
 
@@ -460,6 +471,113 @@ MODULE mo_const
 
       print *, "Disease: ", disease_name
     end subroutine const_disease
+
+
+    subroutine read_mortality_file(path, mu_age)
+    !===
+        ! Reads a two-column (age,mortality_rate) CSV with a header row into
+        ! mu_age(0:79), indexed by the file's own age column (not line order).
+        implicit none
+        character(len=*), intent(in) :: path
+        real, intent(inout) :: mu_age(0:79)
+
+        ! Local use only
+        character(len=200) :: header
+        integer :: age_val, io_status, n_read
+        real :: rate_val
+
+        OPEN(UNIT=21, FILE=trim(path), STATUS='OLD', ACTION='READ')
+        READ(UNIT=21, FMT='(A)') header ! Skip header row
+
+        n_read = 0
+        do
+            READ(UNIT=21, FMT=*, IOSTAT=io_status) age_val, rate_val
+            if (io_status /= 0) EXIT
+            if (age_val >= 0 .and. age_val <= 79) then
+                mu_age(age_val) = rate_val
+                n_read = n_read + 1
+            end if
+        end do
+        CLOSE(UNIT=21)
+
+        if (n_read /= 80) then
+            print *, "Warning: mortality_file did not have exactly 80 age rows (0-79); found", n_read
+        end if
+    end subroutine read_mortality_file
+
+
+    subroutine read_birthrate_file(path, birth_years, birth_vals)
+    !===
+        ! Reads a two-column (year,birth_rate) CSV with a header row.
+        ! birth_years(:) is rebased to years-since-first-row (0,1,2,...) --
+        ! the model never needs to know the real calendar year.
+        implicit none
+        character(len=*), intent(in) :: path
+        real, allocatable, intent(out) :: birth_years(:), birth_vals(:)
+
+        ! Local use only
+        character(len=200) :: header
+        real :: dummy_years(200), dummy_vals(200)
+        integer :: year_val, num_elements, io_status
+        real :: rate_val
+
+        OPEN(UNIT=22, FILE=trim(path), STATUS='OLD', ACTION='READ')
+        READ(UNIT=22, FMT='(A)') header ! Skip header row
+
+        num_elements = 0
+        do
+            READ(UNIT=22, FMT=*, IOSTAT=io_status) year_val, rate_val
+            if (io_status /= 0) EXIT
+            num_elements = num_elements + 1
+            dummy_years(num_elements) = real(year_val)
+            dummy_vals(num_elements) = rate_val
+            if (num_elements >= size(dummy_years)) then
+                print *, "Warning: The birth-rate array is full. Some data may not have been read."
+                EXIT
+            end if
+        end do
+        CLOSE(UNIT=22)
+
+        allocate(birth_years(num_elements))
+        allocate(birth_vals(num_elements))
+        birth_years(:) = dummy_years(1:num_elements) - dummy_years(1)
+        birth_vals(:) = dummy_vals(1:num_elements)
+    end subroutine read_birthrate_file
+
+
+    function interp1(x, xs, ys) result(y)
+    !===
+        ! Linear interpolation, clamped at both ends. Guards the length-1
+        ! case (constant series -- no file supplied) so it never divides
+        ! by zero.
+        implicit none
+        real, intent(in) :: x
+        real, intent(in) :: xs(:), ys(:)
+        real :: y
+
+        ! Local use only
+        integer :: i, n
+
+        n = size(xs)
+        if (n == 1) then
+            y = ys(1)
+            return
+        end if
+
+        if (x <= xs(1)) then
+            y = ys(1)
+        else if (x >= xs(n)) then
+            y = ys(n)
+        else
+            do i = 1, n-1
+                if (x >= xs(i) .and. x <= xs(i+1)) then
+                    y = ys(i) + (x-xs(i))/(xs(i+1)-xs(i))*(ys(i+1)-ys(i))
+                    return
+                end if
+            end do
+            y = ys(n) ! Unreachable given the bounds checks above
+        end if
+    end function interp1
 
 
 end MODULE mo_const
