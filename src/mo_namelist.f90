@@ -62,10 +62,10 @@ MODULE mo_namelist
 
         end subroutine namelist_inout
 
-        subroutine namelist_human(pop_file,nagent,imm_file)
+        subroutine namelist_human(pop_file,nagent,imm_file,mortality_file,birthrate_file)
             implicit none
 
-            character(len=100), intent(out):: pop_file, imm_file
+            character(len=100), intent(out):: pop_file, imm_file, mortality_file, birthrate_file
             integer, intent(out) :: nagent
 
             ! Local use only
@@ -73,7 +73,7 @@ MODULE mo_namelist
             integer:: file_unit, iostats
 
             ! Define namelist
-            namelist /HUMAN/ pop_file, nagent, imm_file
+            namelist /HUMAN/ pop_file, nagent, imm_file, mortality_file, birthrate_file
 
             ! Does the file exist?
             inquire (file=namelist_filename, iostat=iostats)
@@ -95,6 +95,7 @@ MODULE mo_namelist
                 backspace(file_unit)
                 read(file_unit,fmt='(A)') line
                 write(stderr,'(A)') 'Invalid line in namelist is: '//trim(line)
+                STOP
             end if
 
             if (len(trim(imm_file)) /= 0) then
@@ -140,6 +141,7 @@ MODULE mo_namelist
                 backspace(file_unit)
                 read(file_unit,fmt='(A)') line
                 write(stderr,'(A)') 'Invalid line in namelist is: '//trim(line)
+                STOP
             end if
 
             if (len(trim(rain_file)) == 0) then
@@ -187,7 +189,7 @@ MODULE mo_namelist
             ! - We should have here all model parameters that are being changed to their params.txt value
             !
             namelist /CONST/ mu_B, theta_e, theta_p, mu, birth_rate, rho, sigma, gamma, alpha, beta, & ! cholera disease params
-                             mortality_file, birthrate_file, growth_ratio,                  & ! age/time-varying demographic rate files (blank = scalar mu/birth_rate) and population growth
+                             growth_ratio,                                               & ! population growth (nagent_max = ceiling(nagent*growth_ratio))
                              m_long, m_short, D_grav, D_pop, H_0,                        & ! mobility params gravity model
                              B_0, fS_0, fI_0, fA_0, fR_0,                                & ! initial conditions
                              K_h, b_rate, P_v0, k_NB, P_h0, P_max,                       & ! Vector-human transmission params
@@ -226,6 +228,7 @@ MODULE mo_namelist
                 backspace(file_unit)
                 read(file_unit,fmt='(A)') line
                 write(stderr,'(A)') 'Invalid line in namelist is: '//trim(line)
+                STOP
             end if
 
             close (file_unit)

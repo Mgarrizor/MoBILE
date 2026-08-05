@@ -30,12 +30,20 @@ usage() { echo "Usage:              \n
                 -?: Vector ID [0: gambiae, ...] \n
                 -x: Area of grid cells \n
                 -i: Immunity forcing file \n
+                -M: Age-specific mortality-rate file (Optional; blank = scalar mu) \n
+                -B: Time-varying birth-rate file (Optional; blank = scalar birth_rate) \n
 
                  "; }
 # Resources
 # https://stackoverflow.com/questions/16483119/an-example-of-how-to-use-getopts-in-bash
 # https://serverfault.com/questions/266867/bash-getops-allow-but-not-require-arg
-while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:x:i:l:" flag; do
+
+# Optional -- defaulted here so the &HUMAN block below is always well-formed
+# even when a caller's run script predates these flags.
+mortality_file=""
+birthrate_file=""
+
+while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:x:i:l:M:B:" flag; do
  case $flag in
    h) # Handle the -h flag
    # Display script help information
@@ -93,6 +101,20 @@ while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:x:i:l:" flag; do
    # This case handles '-i "my_string"'
    else
      imm_file="$OPTARG"
+   fi
+   ;;
+   M) # Handle the -M flag (age-specific mortality-rate file; 'NONE' = blank = scalar mu)
+   if [ "$OPTARG" = "NONE" ]; then
+     mortality_file=""
+   else
+     mortality_file="$OPTARG"
+   fi
+   ;;
+   B) # Handle the -B flag (time-varying birth-rate file; 'NONE' = blank = scalar birth_rate)
+   if [ "$OPTARG" = "NONE" ]; then
+     birthrate_file=""
+   else
+     birthrate_file="$OPTARG"
    fi
    ;;
    \?) # Handle invalid options
@@ -248,6 +270,8 @@ area_file='${area_file}'
 pop_file='${pop_file}',
 nagent=${nagent},
 imm_file='${imm_file}',
+mortality_file='${mortality_file}',
+birthrate_file='${birthrate_file}',
 /
 &CONST
 ${lines}
