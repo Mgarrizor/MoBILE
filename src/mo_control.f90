@@ -83,7 +83,7 @@ MODULE mo_control
     !----------------------------------------------------------
 
     ! https://fortran-lang.org/en/learn/quickstart/arrays_strings/#array-of-strings
-    character(len=100) ::  time_names(1)= [character(len=20) :: "time"]
+    character(len=100) ::  time_names(2)= [character(len=20) :: "time", "valid_time"]
     character(len=100) ::  lon_names(3) = [character(len=20) :: "lon", "longitude", "X"]
     character(len=100) ::  lat_names(3) = [character(len=20) :: "lat", "latitude", "Y"]
     character(len=100) ::  pop_names(4) = [character(len=20) :: "pop", "population", "population density", "Band1"]

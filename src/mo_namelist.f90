@@ -71,10 +71,9 @@ MODULE mo_namelist
             ! Local use only
             character(len=1000) :: line
             integer:: file_unit, iostats
-            real :: growth_ratio ! nagent_max = ceiling(nagent*growth_ratio); 1.0 = no growth
 
             ! Define namelist
-            namelist /HUMAN/ pop_file, nagent, growth_ratio, imm_file
+            namelist /HUMAN/ pop_file, nagent, imm_file
 
             ! Does the file exist?
             inquire (file=namelist_filename, iostat=iostats)
@@ -83,8 +82,6 @@ MODULE mo_namelist
                  write (stderr, '("Error: namelist file does not exist")')
                  return
              end if
-
-            growth_ratio = 1.0 ! Default: no population growth (nagent_max = nagent)
 
             ! Open and read namelist
             open (action='read', file=namelist_filename, iostat=iostats, newunit=file_unit)
@@ -104,15 +101,6 @@ MODULE mo_namelist
                 print *, '--> Immunity forcing ', imm_file
                 in_imm = .true.
             end if
-
-            ! growth_ratio < 1.0 (shrinkage) isn't supported by the additive
-            ! extra-capacity mechanism in agents_init -- clamp instead of
-            ! silently ignoring it.
-            if (growth_ratio < 1.0) then
-                print *, 'Warning: growth_ratio < 1.0 is not supported; clamping to 1.0'
-                growth_ratio = 1.0
-            end if
-            nagent_max = ceiling(real(nagent) * growth_ratio)
 
             close (file_unit)
 
@@ -193,12 +181,13 @@ MODULE mo_namelist
             ! Local use only
             character(len=1000) :: line
             integer:: file_unit, iostats
+            real :: growth_ratio ! nagent_max = ceiling(nagent*growth_ratio); 1.0 = no growth
 
             ! Define namelist
             ! - We should have here all model parameters that are being changed to their params.txt value
             !
             namelist /CONST/ mu_B, theta_e, theta_p, mu, birth_rate, rho, sigma, gamma, alpha, beta, & ! cholera disease params
-                             mortality_file, birthrate_file,                               & ! age/time-varying demographic rate files (blank = scalar mu/birth_rate)
+                             mortality_file, birthrate_file, growth_ratio,                  & ! age/time-varying demographic rate files (blank = scalar mu/birth_rate) and population growth
                              m_long, m_short, D_grav, D_pop, H_0,                        & ! mobility params gravity model
                              B_0, fS_0, fI_0, fA_0, fR_0,                                & ! initial conditions
                              K_h, b_rate, P_v0, k_NB, P_h0, P_max,                       & ! Vector-human transmission params
@@ -221,6 +210,8 @@ MODULE mo_namelist
                  write (stderr, '("Error: namelist file does not exist")')
                  return
              end if
+
+            growth_ratio = 1.0 ! Default: no population growth (nagent_max = nagent)
 
             ! Open and read namelist
             open (action='read', file=namelist_filename, iostat=iostats, newunit=file_unit)
@@ -262,6 +253,15 @@ MODULE mo_namelist
                 print *, '--> Time-varying birth rate ', birthrate_file
                 call read_birthrate_file(birthrate_file, birth_years, birth_vals)
             end if
+
+            ! growth_ratio < 1.0 (shrinkage) isn't supported by the additive
+            ! extra-capacity mechanism in agents_init -- clamp instead of
+            ! silently ignoring it.
+            if (growth_ratio < 1.0) then
+                print *, 'Warning: growth_ratio < 1.0 is not supported; clamping to 1.0'
+                growth_ratio = 1.0
+            end if
+            nagent_max = ceiling(real(nagent) * growth_ratio)
         end subroutine namelist_const
 
 
