@@ -636,6 +636,12 @@ MODULE mo_netcdf
             status = nf90_def_var(ncid = ncid_grp(2), name = "Age", xtype = nf90_double, &
                      dimids = (/ DimId(4), DimId(3) /), varid = arr_VarID(var_out))
             status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "units", values = "[counts]")
+            ! Sparse write (see above) leaves most days at netCDF's own
+            ! default fill value -- declare it explicitly so readers
+            ! (xarray, cdo, ncview) auto-mask it instead of every downstream
+            ! script needing to hardcode the raw sentinel. Same value
+            ! already used implicitly; this changes no data, only metadata.
+            status = nf90_def_var_fill(ncid_grp(2), arr_VarID(var_out), 0, nf90_fill_double)
             var_out = var_out + 1
             !
         end if
