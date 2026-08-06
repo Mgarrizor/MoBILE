@@ -410,7 +410,19 @@ itime = 1
        !
        call read_slice_imm(itime,imm) ! itime = 1
        !
-     end if 
+     end if
+     !
+     ! When spin_up==1, demographics must stay frozen (in_spinup=.true.) for
+     ! this initial diagnostics pass too, not just the spin_up_loop below --
+     ! agents_pre_diagnostics/agents_diagnostics already draw and claim real
+     ! births here (same code path as every other day), and until this was
+     ! set, that one extra unfrozen pass ran before in_spinup was set below,
+     ! injecting one day's worth of age-0 agents that then sat frozen
+     ! through all of spin-up and surfaced later as a one-year-wide spike in
+     ! the age structure (e.g. age 10 in year 2025 for an 11-year run
+     ! starting 2015). No effect when spin_up==0 -- there is no freeze phase
+     ! in that case, so this really is day 1 of the real simulation.
+     if (spin_up==1) in_spinup = .true.
      !
      call agents_pre_diagnostics(disID,itime)
      !
@@ -568,10 +580,12 @@ time_loop: do itime=2,nsteps
   ! Write 3D fields (x,y,t) here
   if (mod(itime-1, 365) == 0) then
       call agents_update_age_counts()
+      call agents_report_birth_capacity()
   end if
   call netcdf_3D_output(itime,Var3D)
   !
 end do time_loop
+call agents_report_birth_capacity() ! Final partial year, if nsteps isn't a multiple of 365
 !********************************************************
 !
 ! Write 2D fields (x,y) here and close NetCDF file

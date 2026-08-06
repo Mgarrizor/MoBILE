@@ -678,6 +678,25 @@ USE, INTRINSIC :: ISO_C_BINDING
             end do
         end subroutine agents_update_age_counts
 
+        subroutine agents_report_birth_capacity()
+        !===
+            ! Diagnostic: prints how many of the past year's drawn birth
+            ! tickets (yearly_births_requested, accumulated daily in
+            ! agents_pre_diagnostics) actually found a dead/reserve slot to
+            ! claim (yearly_births_claimed) vs. went unclaimed because
+            ! growth_ratio's reserve capacity ran out -- then resets both
+            ! counters for the next year (called yearly, see mobile.f90).
+            implicit none
+            if (yearly_births_requested > 0) then
+                print '("Year birth capacity: ",i0," requested, ",i0," claimed, ",i0," unclaimed (",f5.1,"%)")', &
+                    yearly_births_requested, yearly_births_claimed, &
+                    yearly_births_requested - yearly_births_claimed, &
+                    100. * real(yearly_births_requested - yearly_births_claimed) / real(yearly_births_requested)
+            end if
+            yearly_births_requested = 0
+            yearly_births_claimed = 0
+        end subroutine agents_report_birth_capacity
+
         subroutine agents_diagnostics(idis,iagent)
         !===
             ! Calculate bulk statistics to feed into the disease source integration
@@ -827,6 +846,8 @@ USE, INTRINSIC :: ISO_C_BINDING
                             nbirths_left(ixy,t) = min(remaining, dead_t)
                             remaining = remaining - nbirths_left(ixy,t)
                         end do
+                        yearly_births_requested = yearly_births_requested + n_tot
+                        yearly_births_claimed = yearly_births_claimed + (n_tot - remaining)
                     end if
                 end do
             end if
@@ -1787,7 +1808,14 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             ! Local use only
             integer :: j
-            roll = 0 
+            ! Fallback for r > cum_distr(sides) (e.g. cum_distr doesn't reach 1.0
+            ! due to upstream rounding). A value falling outside cum_distr's
+            ! covered range represents the TOP of the distribution (whatever
+            ! probability mass wasn't explicitly accounted for), so it belongs
+            ! on the last face -- a valid, 1-indexed array position -- not 0,
+            ! which every caller here uses directly as an array index (e.g.
+            ! mask_pop(loc)) and would be out of bounds.
+            roll = sides
             !
             do j = 1, sides
                 if (r <= cum_distr(j)) then
@@ -1795,7 +1823,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                     roll = j
                     !
                     exit
-                end if 
+                end if
             end do
             !
         end function find_face
@@ -1812,7 +1840,14 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             ! Local use only
             integer :: j
-            roll = 0 
+            ! Fallback for r > cum_distr(sides) (e.g. cum_distr doesn't reach 1.0,
+            ! as when it's missing an open-ended top bin). A value falling
+            ! outside cum_distr's covered range represents the TOP of the
+            ! distribution (whatever probability mass wasn't explicitly
+            ! accounted for), so it belongs in the last face, not the first --
+            ! matching the same top-bin clamp used elsewhere for this array
+            ! (e.g. agents_update_age_counts's min(floor(age), size(age_weights)-1)).
+            roll = sides - 1
             !
             do j = 0, sides-1
                 if (r <= cum_distr(j+1)) then
@@ -1820,7 +1855,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                     roll = j
                     !
                     exit
-                end if 
+                end if
             end do
             !
         end function find_face0
