@@ -1177,7 +1177,7 @@ MODULE mo_netcdf
                   status = nf90_inq_varid(ncid=ncRainID, name=time_names(indx), varid=TimeVarID)
                   !
                   allocate(time_coord(ntime))
-                  status = nf90_get_var(ncid=ncRainID, varid=LonVarID, values=time_coord)
+                  status = nf90_get_var(ncid=ncRainID, varid=TimeVarID, values=time_coord)
                   !
                   print *, 'NetCDF Status: found rainfall forcing file of len --> ', ntime
                   allocate(grid_clim(nlon,nlat,ntime))
@@ -1256,11 +1256,16 @@ MODULE mo_netcdf
                   status = nf90_inq_varid(ncid=ncTempID, name=time_names(indx), varid=TimeVarID)
                   !
                   if (size(time_coord) .ne. ntime) then
-                    print *, 'Rainfall and temperature fields have different lenght --> Stop.' 
+                    print *, 'Rainfall and temperature fields have different lenght --> Stop.'
                     STOP
                   end if
-                  !
-                  status = nf90_get_var(ncid=ncTempID, varid=LonVarID, values=time_coord)
+                  ! time_coord/time_att are canonically sourced from the
+                  ! rainfall file only (see below) -- t2m's own time values
+                  ! are NOT re-read here, since a mismatched convention
+                  ! (e.g. rain in "days since 1980", t2m in ERA5/CDS-style
+                  ! "seconds since 1970") would silently overwrite correct
+                  ! values with ones that no longer match the output's
+                  ! time:units attribute. Length is still checked above.
                   !
                   print *, 'NetCDF Status: found temperature forcing file of len --> ', ntime
                   allocate(grid_clim(nlon,nlat,ntime))
@@ -1333,12 +1338,15 @@ MODULE mo_netcdf
                   status = nf90_inq_varid(ncid=ncImmID, name=time_names(indx), varid=TimeVarID)
                   !
                   if (ntime .ne. nsteps) then
-                    print *, 'Simulation lenght and immunity fields have different lenght --> Stop.' 
+                    print *, 'Simulation lenght and immunity fields have different lenght --> Stop.'
                     print *, ntime, '/=', nsteps
                     STOP
                   end if
-                  !
-                  status = nf90_get_var(ncid=ncImmID, varid=LonVarID, values=time_coord)
+                  ! time_coord/time_att stay canonically sourced from the
+                  ! rainfall file only (see netcdf_read_grid's rain/t2m
+                  ! blocks) -- not re-read here for the same reason: a
+                  ! mismatched time-units convention would silently corrupt
+                  ! the output's time coordinate. Length is checked above.
                   !
                   print *, 'NetCDF Status: found immunity forcing file of len --> ', ntime
                   ! 
