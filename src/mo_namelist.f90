@@ -62,10 +62,10 @@ MODULE mo_namelist
 
         end subroutine namelist_inout
 
-        subroutine namelist_human(pop_file,nagent,imm_file,mortality_file,birthrate_file)
+        subroutine namelist_human(pop_file,nagent,imm_file,mortality_file,birthrate_file,mortality_time_file)
             implicit none
 
-            character(len=100), intent(out):: pop_file, imm_file, mortality_file, birthrate_file
+            character(len=200), intent(out):: pop_file, imm_file, mortality_file, birthrate_file, mortality_time_file
             integer, intent(out) :: nagent
 
             ! Local use only
@@ -73,7 +73,7 @@ MODULE mo_namelist
             integer:: file_unit, iostats
 
             ! Define namelist
-            namelist /HUMAN/ pop_file, nagent, imm_file, mortality_file, birthrate_file
+            namelist /HUMAN/ pop_file, nagent, imm_file, mortality_file, birthrate_file, mortality_time_file
 
             ! Does the file exist?
             inquire (file=namelist_filename, iostat=iostats)
@@ -112,7 +112,7 @@ MODULE mo_namelist
         subroutine namelist_clima(rain_file,t2m_file,area_file)
             implicit none
 
-            character(len=100), intent(out):: rain_file, t2m_file, area_file
+            character(len=200), intent(out):: rain_file, t2m_file, area_file
             
             ! Local use only
             character(len=1000) :: line
@@ -255,6 +255,18 @@ MODULE mo_namelist
             else
                 print *, '--> Time-varying birth rate ', birthrate_file
                 call read_birthrate_file(birthrate_file, birth_years, birth_vals)
+            end if
+
+            ! mu_age_today(:) is what the per-agent death checks actually read
+            ! (mo_agents.f90). Defaults to mu_age(:) above and stays that way
+            ! for the whole run unless mortality_time_file overrides it daily
+            ! (agents_pre_diagnostics, gated by in_mortality_time below).
+            mu_age_today(:) = mu_age(:)
+            if (len(trim(mortality_time_file)) /= 0) then
+                print *, '--> Age-and-time-varying mortality ', mortality_time_file
+                call read_mortality_time_file(mortality_time_file, mu_years, mu_age_years)
+                in_mortality_time = .true.
+                mu_age_today(:) = mu_age_years(:,1) ! Day-0 value
             end if
 
             ! growth_ratio < 1.0 (shrinkage) isn't supported by the additive

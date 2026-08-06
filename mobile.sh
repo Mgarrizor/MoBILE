@@ -32,6 +32,7 @@ usage() { echo "Usage:              \n
                 -i: Immunity forcing file \n
                 -M: Age-specific mortality-rate file (Optional; blank = scalar mu) \n
                 -B: Time-varying birth-rate file (Optional; blank = scalar birth_rate) \n
+                -T: Age-AND-year mortality-rate file (Optional; blank = use -M/scalar mu; overrides -M if both given) \n
 
                  "; }
 # Resources
@@ -42,8 +43,9 @@ usage() { echo "Usage:              \n
 # even when a caller's run script predates these flags.
 mortality_file=""
 birthrate_file=""
+mortality_time_file=""
 
-while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:x:i:l:M:B:" flag; do
+while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:x:i:l:M:B:T:" flag; do
  case $flag in
    h) # Handle the -h flag
    # Display script help information
@@ -115,6 +117,13 @@ while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:x:i:l:M:B:" flag; do
      birthrate_file=""
    else
      birthrate_file="$OPTARG"
+   fi
+   ;;
+   T) # Handle the -T flag (age-AND-year mortality-rate file; 'NONE' = blank = use -M/scalar mu)
+   if [ "$OPTARG" = "NONE" ]; then
+     mortality_time_file=""
+   else
+     mortality_time_file="$OPTARG"
    fi
    ;;
    \?) # Handle invalid options
@@ -272,6 +281,7 @@ nagent=${nagent},
 imm_file='${imm_file}',
 mortality_file='${mortality_file}',
 birthrate_file='${birthrate_file}',
+mortality_time_file='${mortality_time_file}',
 /
 &CONST
 ${lines}

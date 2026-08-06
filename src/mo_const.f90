@@ -184,8 +184,21 @@ MODULE mo_const
     ! Per-agent daily death probability by integer age (0-79); materialized
     ! from mortality_file if given, else broadcast from the scalar mu (see
     ! namelist_const). Agent-based death checks only -- the non-agent bulk
-    ! SIAR path keeps using the scalar mu.
+    ! SIAR path keeps using the scalar mu. Static for the whole run.
     real :: mu_age(0:79)
+    ! What the per-agent death checks (mo_agents.f90) actually read. Defaults
+    ! to a copy of mu_age(:) and stays that way for the whole run unless
+    ! mortality_time_file was supplied, in which case agents_pre_diagnostics
+    ! overwrites it daily by interpolating mu_age_years(:,:) at the current
+    ! time (see in_mortality_time, mo_control.f90).
+    real :: mu_age_today(0:79)
+    ! mu(a,t): age-AND-year mortality grid, linearly interpolated in time
+    ! per age row (see interp1). mu_years(:) is years elapsed since
+    ! simulation start (0,1,2,...), same rebasing as birth_years(:).
+    ! Materialized from mortality_time_file if given, else a length-1 series
+    ! equal to mu_age(:) (never touched again -- mu_age_today(:) alone is
+    ! enough to reproduce that case).
+    real, allocatable :: mu_years(:), mu_age_years(:,:) ! mu_age_years(0:79,:)
     ! b(t): yearly birth-rate series, linearly interpolated daily (see
     ! interp1). birth_years(:) is years elapsed since simulation start
     ! (0,1,2,...), not calendar years -- rebased on read. Materialized from
@@ -509,6 +522,66 @@ MODULE mo_const
             print *, "Warning: mortality_file did not have exactly 80 age rows (0-79); found", n_read
         end if
     end subroutine read_mortality_file
+
+
+    subroutine read_mortality_time_file(path, mu_years, mu_age_years)
+    !===
+        ! Reads a (age, year1, year2, ...) CSV with a header row into
+        ! mu_age_years(0:79, n_years), indexed by the file's own age column
+        ! (not line order). mu_years(:) is rebased to years-since-first-column
+        ! (0,1,2,...), same convention as read_birthrate_file.
+        implicit none
+        character(len=*), intent(in) :: path
+        real, allocatable, intent(out) :: mu_years(:)
+        real, allocatable, intent(out) :: mu_age_years(:,:)
+
+        ! Local use only
+        character(len=4000) :: header, remainder
+        real :: dummy_years(200), row_vals(200)
+        integer :: age_val, io_status, n_years, n_read, comma_pos
+
+        OPEN(UNIT=23, FILE=trim(path), STATUS='OLD', ACTION='READ')
+        READ(UNIT=23, FMT='(A)') header
+
+        ! Parse header "age,2015,2016,...": every token after the first comma
+        ! is a year column label.
+        comma_pos = index(header, ',')
+        remainder = header(comma_pos+1:)
+        n_years = 0
+        do while (len_trim(remainder) > 0)
+            comma_pos = index(remainder, ',')
+            n_years = n_years + 1
+            if (comma_pos == 0) then
+                read(remainder, *) dummy_years(n_years)
+                exit
+            else
+                read(remainder(1:comma_pos-1), *) dummy_years(n_years)
+                remainder = remainder(comma_pos+1:)
+            end if
+        end do
+
+        allocate(mu_years(n_years))
+        mu_years(:) = dummy_years(1:n_years) - dummy_years(1)
+
+        allocate(mu_age_years(0:79, n_years))
+
+        n_read = 0
+        do
+            READ(UNIT=23, FMT=*, IOSTAT=io_status) age_val, row_vals(1:n_years)
+            if (io_status /= 0) EXIT
+            if (age_val >= 0 .and. age_val <= 79) then
+                ! Same per-YEAR -> per-DAY conversion as read_mortality_file/
+                ! read_birthrate_file (the AGEING notebook convention).
+                mu_age_years(age_val,:) = row_vals(1:n_years) * da
+                n_read = n_read + 1
+            end if
+        end do
+        CLOSE(UNIT=23)
+
+        if (n_read /= 80) then
+            print *, "Warning: mortality_time_file did not have exactly 80 age rows (0-79); found", n_read
+        end if
+    end subroutine read_mortality_time_file
 
 
     subroutine read_birthrate_file(path, birth_years, birth_vals)

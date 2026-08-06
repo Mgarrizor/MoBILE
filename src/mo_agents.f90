@@ -794,6 +794,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             integer :: n_tot       ! Today's total ticket draw for one cell
             integer :: remaining   ! Tickets not yet handed to a thread
             integer :: dead_t      ! Thread t's current dead-slot capacity in this cell
+            integer :: a_bin        ! Age-row index while updating mu_age_today(:)
             real :: b_t             ! Today's birth rate, interpolated from birth_years/birth_vals
             real :: active_pop_dens(nxy) ! pop_dens(:) scaled by today's active-agent fraction (malaria only)
             !
@@ -807,6 +808,16 @@ USE, INTRINSIC :: ISO_C_BINDING
             ! stays fixed at day-0 values while spin-up equilibrates immunity.
             if (.not. in_spinup) then
                 b_t = interp1(real(itime-1)*da, birth_years, birth_vals)
+                ! mu_age_today(:) stays a static copy of mu_age(:) (set once in
+                ! namelist_const) unless mortality_time_file was supplied --
+                ! then it's re-interpolated from mu_age_years(:,:) every day,
+                ! one age row at a time, so the per-agent death checks
+                ! (mo_agents.f90) stay a plain O(1) array lookup.
+                if (in_mortality_time) then
+                    do a_bin = 0, 79
+                        mu_age_today(a_bin) = interp1(real(itime-1)*da, mu_years, mu_age_years(a_bin,:))
+                    end do
+                end if
                 do ixy = 1, nxy
                     if (mask_pop(ixy)) then
                         n_tot = ignbin(npeop(ixy), b_t)
@@ -1200,7 +1211,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                         ! Base mortality
                         !
                         if (.not. in_spinup) then
-                        if (generate_random() <= mu_age(min(floor(people(iagent)%agent_ID%age),79))) then ! Death
+                        if (generate_random() <= mu_age_today(min(floor(people(iagent)%agent_ID%age),79))) then ! Death
                             !
                             people(iagent)%health_status%active_status%status=.false.
                             ! Update this thread's column, not npeop(:) -- npeop(:) is
@@ -1245,7 +1256,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                         ! Base mortality
                         !
                         if (.not. in_spinup) then
-                        if (generate_random() <= mu_age(min(floor(people(iagent)%agent_ID%age),79))) then ! Death
+                        if (generate_random() <= mu_age_today(min(floor(people(iagent)%agent_ID%age),79))) then ! Death
                             !
                             people(iagent)%health_status%active_status%status=.false.
                             ! Update this thread's column, not npeop(:) -- npeop(:) is
@@ -1316,7 +1327,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                         ! Base mortality
                         !
                         if (.not. in_spinup) then
-                        if (generate_random() <= mu_age(min(floor(people(iagent)%agent_ID%age),79))) then ! Death
+                        if (generate_random() <= mu_age_today(min(floor(people(iagent)%agent_ID%age),79))) then ! Death
                             !
                             people(iagent)%health_status%active_status%status=.false.
                             ! Update this thread's column, not npeop(:) -- npeop(:) is
@@ -1340,7 +1351,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                         ! Base mortality
                         !
                         if (.not. in_spinup) then
-                        if (generate_random() <= mu_age(min(floor(people(iagent)%agent_ID%age),79))) then
+                        if (generate_random() <= mu_age_today(min(floor(people(iagent)%agent_ID%age),79))) then
                             !
                             people(iagent)%health_status%active_status%status=.false.
                             ! Update this thread's column, not npeop(:) -- npeop(:) is
@@ -1700,7 +1711,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                     !===
                         !
                         if (.not. in_spinup) then
-                        if (generate_random() <= mu_age(min(floor(people(iagent)%agent_ID%age),79))) then
+                        if (generate_random() <= mu_age_today(min(floor(people(iagent)%agent_ID%age),79))) then
                             !
                             people(iagent)%health_status%active_status%status=.false.
                             people(iagent)%health_status%malaria_status%EIR_att=0.

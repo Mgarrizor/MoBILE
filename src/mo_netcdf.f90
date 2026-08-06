@@ -1027,7 +1027,7 @@ MODULE mo_netcdf
       !      nf90_close           ! close netcdf dataset
       !----------------------------------------------------------------
         implicit none
-        character(len=100), intent(in):: pop_file
+        character(len=200), intent(in):: pop_file
        ! character(len=100) :: long_lat
         integer, intent(out) :: nlon, nlat, nxy
         real, allocatable, intent(out) :: pop_dens(:)

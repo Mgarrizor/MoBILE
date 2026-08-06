@@ -72,14 +72,20 @@ MODULE mo_control
     !----------------------------------------------------------
     integer :: disID                 ! Disease ID (0: Cholera, 1: Malaria)
     character(len=100) :: run_name   ! Name of output files
-    character(len=100) :: pop_file   ! Name of population file
-    character(len=100) :: rain_file  ! Name of rain/precipitation file
-    character(len=100) :: t2m_file   ! Name of temperature file
-    character(len=100) :: area_file  ! Name of cell area file
-    character(len=100) :: imm_file   ! Name of immunity forcing file
-    character(len=100) :: mortality_file = '' ! Name of age-specific mortality-rate file; blank = scalar mu
-    character(len=100) :: birthrate_file = '' ! Name of yearly birth-rate file; blank = scalar birth_rate
-    character(len=100) :: namelist_filename
+    ! len=200 (not 100): these hold full file paths, which can exceed 100
+    ! characters once a caller uses an absolute path a few directories deep
+    ! (a Fortran namelist read silently truncates on overflow rather than
+    ! erroring, so this must be sized generously up front).
+    character(len=200) :: pop_file   ! Name of population file
+    character(len=200) :: rain_file  ! Name of rain/precipitation file
+    character(len=200) :: t2m_file   ! Name of temperature file
+    character(len=200) :: area_file  ! Name of cell area file
+    character(len=200) :: imm_file   ! Name of immunity forcing file
+    character(len=200) :: mortality_file = '' ! Name of age-specific mortality-rate file; blank = scalar mu
+    character(len=200) :: birthrate_file = '' ! Name of yearly birth-rate file; blank = scalar birth_rate
+    character(len=200) :: mortality_time_file = '' ! Name of age-AND-year mortality-rate file; blank = use mortality_file/mu (age-only, whole-run)
+    logical :: in_mortality_time = .false. ! True only if mortality_time_file was supplied -- gates the daily mu_age_today(:) update (see agents_pre_diagnostics)
+    character(len=200) :: namelist_filename
     !----------------------------------------------------------
 
     ! https://fortran-lang.org/en/learn/quickstart/arrays_strings/#array-of-strings
