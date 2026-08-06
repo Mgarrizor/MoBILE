@@ -35,10 +35,14 @@ MODULE mo_const
     integer :: ImmVarID, ncImmID   ! IDs for immunity forcing file
 
 
-    real    :: eps = 1e-15  ! Numerical tolerance 
-    real    :: FillValue    ! Population density FillValue
-    real    :: FillValue_rain ! Rainfall Fill Value
-    real    :: FillValue_temp ! Temperature Fill Value
+    real    :: eps = 1e-15  ! Numerical tolerance
+    ! double precision (not real): these get passed to nf90_def_var_fill for
+    ! nf90_double output variables (pop/rain/t2m), which reads 8 bytes at the
+    ! given address -- a 4-byte real here would leave the library reading 4
+    ! bytes of adjacent memory as the other half of the value, corrupting it.
+    double precision :: FillValue    ! Population density FillValue
+    double precision :: FillValue_rain ! Rainfall Fill Value
+    double precision :: FillValue_temp ! Temperature Fill Value
     real, parameter :: pi = 4*atan(1.) ! Pi 
     real, parameter :: Re = 6371.009   ! Mean radius of the Earth [km]
 
