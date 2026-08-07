@@ -233,7 +233,12 @@ USE, INTRINSIC :: ISO_C_BINDING
                             ! Initialize main agent attributes
                             people(indx)%agent_ID%age=find_face0(generate_random(),age_weights(:),size(age_weights(:))) &
                                                       + generate_random()
-                            age_counts(floor(people(indx)%agent_ID%age)) = age_counts(floor(people(indx)%agent_ID%age)) + 1
+                            ! Clamp: adding the fractional generate_random() to a
+                            ! find_face0 result of size(age_weights)-1 can round to
+                            ! exactly size(age_weights) in single precision (e.g.
+                            ! 79 + 0.99999994 -> 80.0), one past the last valid bin.
+                            age_counts(min(floor(people(indx)%agent_ID%age), size(age_weights)-1)) = &
+                                age_counts(min(floor(people(indx)%agent_ID%age), size(age_weights)-1)) + 1
                             people(indx)%agent_ID%name=indx     !
                             people(indx)%agent_ID%sex=0         ! F = 0, M = 1 [Not in use]
                             people(indx)%agent_ID%wealth=0      ! L = 0, M = 1, H = 2 [Not in use]
@@ -367,7 +372,12 @@ USE, INTRINSIC :: ISO_C_BINDING
                    people(indx)%agent_ID%age=find_face0(generate_random(),age_weights(:),size(age_weights(:))) &
                                              + generate_random() ! Selection of year following age structure, and 
                                                                  ! selection of day from uniform distribution
-                   age_counts(floor(people(indx)%agent_ID%age)) = age_counts(floor(people(indx)%agent_ID%age)) + 1
+                   ! Clamp: adding the fractional generate_random() to a
+                   ! find_face0 result of size(age_weights)-1 can round to
+                   ! exactly size(age_weights) in single precision (e.g.
+                   ! 79 + 0.99999994 -> 80.0), one past the last valid bin.
+                   age_counts(min(floor(people(indx)%agent_ID%age), size(age_weights)-1)) = &
+                       age_counts(min(floor(people(indx)%agent_ID%age), size(age_weights)-1)) + 1
                    people(indx)%agent_ID%name=indx     !
                    people(indx)%agent_ID%sex=0         ! F = 0, M = 1
                    people(indx)%agent_ID%wealth=0      ! L = 0, M = 1, H = 2
