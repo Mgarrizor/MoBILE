@@ -43,11 +43,11 @@ MODULE mo_control
     logical :: out_S       =.false.  ! Susceptible
     logical :: out_E       =.false.   ! Exposed
     logical :: out_I       =.true.   ! Infected
-    logical :: out_Ia      =.false.  ! Age-disaggregated symptomatic (Ia)
+    logical :: out_Ia      =.true.   ! Age-disaggregated symptomatic (Ia)
     logical :: out_I_new   =.true.   ! New infections (I_new)
-    logical :: out_Ia_new  =.false.   ! Age-disaggregated new infections (Ia_new)
+    logical :: out_Ia_new  =.true.   ! Age-disaggregated new infections (Ia_new)
     logical :: out_A       =.false.   ! Asymptomatic
-    logical :: out_Aa      =.false.  ! Age-disaggregated asymptomatic (Aa)
+    logical :: out_Aa      =.true.   ! Age-disaggregated asymptomatic (Aa)
     logical :: out_R       =.false.  ! Recovered
 
     !--- Cholera ----
