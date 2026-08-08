@@ -214,6 +214,44 @@ MODULE mo_const
     ! (0,1,2,...), not calendar years -- rebased on read. Materialized from
     ! birthrate_file if given, else a length-1 series equal to birth_rate.
     real, allocatable :: birth_years(:), birth_vals(:)
+
+    !--- Shape-invariant demographics ------------------------------------
+    ! Target age DENSITY s(a), built once by demog_build_shape from
+    ! age_weights(:) (the CUMULATIVE distribution read from cumm_age.txt).
+    ! Sums to 1. Double precision: the file carries only 4 decimals, so
+    ! consecutive tail differences are O(1e-4) and every rate below is a
+    ! ratio of two of them.
+    integer, parameter :: n_shadow_bins = 80*365 ! 29200 DAILY age bins
+    ! Horizon (years) for both the b_calib secant solve and the init self-test.
+    ! Long enough that the shape has largely equilibrated, short enough that
+    ! the handful of replica runs at init stay ~seconds.
+    integer, parameter :: demog_calib_years = 15
+    double precision :: s_target(0:79)
+    ! Spin-up rates: shape-invariant at g_annual = 1, hence time-INVARIANT.
+    ! Precomputed once because the convergence loop replays itime=1..365 an
+    ! unknown number of times and any itime-dependent rate would drift.
+    real :: b_spin
+    real :: mu_spin(0:79)
+    ! Today's rates actually handed to the birth draw / death checks.
+    real :: b_t_today = 0.
+    ! Today's FACTUAL rates. In counterfactual mode these drive the shadow
+    ! population instead of the agents.
+    real :: b_fac_today = 0.
+    real :: mu_fac_today(0:79)
+    ! Deterministic shadow of what the FACTUAL population would do, in DAILY
+    ! age bins so aging is an exact one-bin shift (no numerical diffusion).
+    ! Bin k covers annual age k/365; the last bin is the open-ended 79+
+    ! reservoir, mirroring min(floor(age),79) in the death checks.
+    ! DOUBLE PRECISION is mandatory: g_daily-1 is ~7e-5 while single-precision
+    ! summation of 29200 terms errs by ~1e-5..1e-3, i.e. the same order as
+    ! the signal we are trying to read off it.
+    double precision, allocatable :: n_shadow(:) ! (0:n_shadow_bins-1)
+    integer :: shadow_last_itime = -1 ! guards against double-stepping the shadow
+    real :: g_ann_today = 1.          ! today's target annual growth factor
+    ! Multiplier on b_daily that makes the ABM's own daily scheme actually
+    ! realize the requested g_annual (see demog_calib_factor). 1.0 = off.
+    real :: b_calib = 1.
+
     real :: D_pop, H_0, D_grav, m       ! Pop. density and mobility
     real :: B_0, fS_0, fI_0, fA_0, fR_0 ! Initial conditions
 
@@ -670,6 +708,283 @@ MODULE mo_const
             y = ys(n) ! Unreachable given the bounds checks above
         end if
     end function interp1
+
+
+    subroutine demog_build_shape(cumm, s)
+    !===
+        ! Turns the CUMULATIVE age distribution read from cumm_age.txt into
+        ! the target age DENSITY s(a), a=0..79, summing to 1.
+        ! cumm(k) = P(age < k), 1-based, so d(0)=cumm(1), d(a)=cumm(a+1)-cumm(a).
+        implicit none
+        real, intent(in) :: cumm(:)
+        double precision, intent(out) :: s(0:79)
+
+        ! Local use only
+        double precision, parameter :: S_FLOOR = 1.0d-6
+        integer :: a, nfix
+
+        ! mu_age/mu_age_today/mu_spin are all hard-sized (0:79); a file with a
+        ! different row count would silently mis-map ages onto rates.
+        if (size(cumm) /= 80) then
+            print *, 'demog_build_shape: cumm_age.txt must have exactly 80 rows; found', size(cumm)
+            STOP
+        end if
+
+        s(0) = dble(cumm(1))
+        do a = 1, 79
+            s(a) = dble(cumm(a+1)) - dble(cumm(a))
+        end do
+
+        if (any(s < 0.d0)) then
+            print *, 'demog_build_shape: cumm_age.txt is not monotonically increasing --> STOP'
+            STOP
+        end if
+
+        ! The file is written to 4 decimals, so two consecutive tail values can
+        ! round to the same number, giving s(a)=0 and an infinite s(a+1)/s(a).
+        nfix = count(s < S_FLOOR)
+        if (nfix > 0) then
+            print *, 'Warning: demog_build_shape floored', nfix, 'age bin(s) at', S_FLOOR
+            where (s < S_FLOOR) s = S_FLOOR
+        end if
+
+        ! DISCARD the 1-cumm(80) residual (the open-ended 80+ group) and
+        ! renormalize. Do NOT instead fold it into bin 79, even though that is
+        ! what find_face0's fallback realizes at init: it makes s(79)/s(78)
+        ! about 7, so surv(79) clamps to 1 and the 79+ reservoir never drains
+        ! -- there is then no stationary state at all. Verified on the Kenya
+        ! file: discard -> 0.7% shape error; fold-in -> divergent.
+        s(:) = s(:) / sum(s)
+    end subroutine demog_build_shape
+
+
+    subroutine demog_shape_rates(g_annual, b_daily, mu_daily)
+    !===
+        ! The shape-invariant generator. Given a target annual growth factor,
+        ! returns the per-day birth probability and per-age daily death
+        ! probabilities that hold the age structure at s_target(:) while the
+        ! total grows by g_annual per year.
+        !
+        !   surv(a) = g_annual * s(a+1)/s(a)      (annual survival)
+        !   mu(a)   = -ln(surv(a)) * da           (per-day, reader convention)
+        !   b       = g_annual * s(0) * da
+        implicit none
+        real, intent(in) :: g_annual
+        real, intent(out) :: b_daily
+        real, intent(out) :: mu_daily(0:79)
+
+        ! Local use only
+        integer :: a
+        double precision :: sv, s_ext80
+
+        ! Virtual bin above the top so a=79 gets a finite hazard. Geometric
+        ! continuation of the last resolved ratio; a "100% mortality at the
+        ! reservoir" alternative was tested and collapses the bin under daily
+        ! compounding.
+        s_ext80 = s_target(79)*s_target(79)/s_target(78)
+
+        do a = 0, 79
+            if (a < 79) then
+                sv = dble(g_annual) * s_target(a+1) / s_target(a)
+            else
+                sv = dble(g_annual) * s_ext80 / s_target(79)
+            end if
+            ! LOAD-BEARING, not defensive: the WorldPop-derived density
+            ! INCREASES over ages 1-10 (a spline artifact of graduating the
+            ! 5-year bands), and an increasing density is unattainable under
+            ! aging+death+birth for any g. 16 of 80 ages clamp here; the cost
+            ! is ~0.7% shape error. Removing this makes surv > 1, i.e. negative
+            ! mortality.
+            sv = min(sv, 1.d0)
+            sv = max(sv, 1.d-6) ! keep -log finite
+            mu_daily(a) = real(-log(sv) * dble(da))
+            mu_daily(a) = min(mu_daily(a), 0.5) ! it is a daily PROBABILITY
+        end do
+
+        b_daily = real(dble(g_annual) * s_target(0) * dble(da) * dble(b_calib))
+        ! ignbin (mo_ranlib.f90) hard-STOPs outside (0,1).
+        b_daily = min(max(b_daily, 1.0e-12), 0.999999)
+    end subroutine demog_shape_rates
+
+
+    subroutine demog_replica(g_annual, n_years, g_eff, tvd)
+    !===
+        ! Deterministic replica of the ABM's OWN daily scheme (daily death
+        ! probability per annual age bin, births drawn from the current live
+        ! total, annual bin shift). Used both to calibrate b_calib and to
+        ! self-test the generator at init. Reports the realized annual growth
+        ! factor and the total-variation distance of the realized shape from
+        ! s_target(:).
+        implicit none
+        real, intent(in) :: g_annual
+        integer, intent(in) :: n_years
+        double precision, intent(out) :: g_eff, tvd
+
+        ! Local use only
+        ! DAILY age bins, like n_shadow: the ABM ages agents continuously
+        ! (age = age + da every day), so a coarser annual-bin replica with a
+        ! once-a-year shift would leave bin 0 empty at the moment of
+        ! measurement and report a spurious TVD of about s(0).
+        double precision, allocatable :: n(:)
+        double precision :: tot0, tot, before, births, top, agg(0:79)
+        real :: b_daily, mu_daily(0:79)
+        integer :: a, k, id
+
+        call demog_shape_rates(g_annual, b_daily, mu_daily)
+
+        allocate(n(0:n_shadow_bins-1))
+        do a = 0, 79
+            do id = 0, 364
+                n(a*365 + id) = s_target(a) / 365.d0
+            end do
+        end do
+        tot0 = sum(n)
+
+        do id = 1, n_years*365
+            before = sum(n)
+            do k = 0, n_shadow_bins-1
+                n(k) = n(k) * (1.d0 - dble(mu_daily(k/365)))
+            end do
+            top = n(n_shadow_bins-1)
+            do k = n_shadow_bins-1, 1, -1
+                n(k) = n(k-1)
+            end do
+            n(n_shadow_bins-1) = n(n_shadow_bins-1) + top
+            births = dble(b_daily) * before
+            n(0) = births
+        end do
+
+        tot = sum(n)
+        g_eff = exp(log(tot/tot0)/dble(n_years))
+        ! Aggregate the daily bins back to annual ones before comparing.
+        do a = 0, 79
+            agg(a) = sum(n(a*365:a*365+364))
+        end do
+        tvd = 0.5d0 * sum(abs(agg(:)/tot - s_target(:)))
+        deallocate(n)
+    end subroutine demog_replica
+
+
+    function demog_calib_factor(g_annual) result(f)
+    !===
+        ! Secant solve for the b_daily multiplier that makes the ABM's daily
+        ! scheme realize g_annual. Needed because that scheme loses ~0.28%/yr
+        ! at g=1: the target shape is only stationary to ~0.998/yr once surv
+        ! is clamped, and births are drawn from TODAY's live count, so the
+        ! intra-year decline shrinks the birth flux. Sensitivity dg/df ~ s(0),
+        ! so this converges in a handful of iterations.
+        implicit none
+        real, intent(in) :: g_annual
+        real :: f
+
+        ! Local use only
+        double precision :: g_eff, tvd
+        integer :: it
+        real :: f_save
+
+        ! Calibrate over the SAME horizon demog_print_diagnostics reports on:
+        ! the realized growth is horizon-dependent while the shape is still
+        ! equilibrating away from the (clamp-perturbed) target, so calibrating
+        ! short and reporting long leaves a visible residual.
+        f_save = b_calib
+        f = 1.
+        do it = 1, 6
+            b_calib = f
+            call demog_replica(g_annual, demog_calib_years, g_eff, tvd)
+            if (abs(g_eff - dble(g_annual)) < 1.d-6) exit
+            f = f + real((dble(g_annual) - g_eff) / s_target(0))
+        end do
+        b_calib = f_save ! caller assigns the result; don't leave it half-applied
+    end function demog_calib_factor
+
+
+    subroutine demog_shadow_init()
+    !===
+        ! Allocates the shadow population and seeds it with s_target(:) spread
+        ! uniformly across the 365 daily bins within each year of age.
+        implicit none
+        integer :: a, id
+
+        if (.not. allocated(n_shadow)) allocate(n_shadow(0:n_shadow_bins-1))
+        do a = 0, 79
+            do id = 0, 364
+                n_shadow(a*365 + id) = s_target(a) / 365.d0
+            end do
+        end do
+        shadow_last_itime = -1
+    end subroutine demog_shadow_init
+
+
+    subroutine demog_shadow_step(b_fac, mu_fac, g_daily)
+    !===
+        ! Advances the shadow one day under the FACTUAL rates, using the same
+        ! three operators the ABM applies to its agents (die, age, be born),
+        ! and returns that day's growth factor. Aging is an exact one-bin
+        ! shift, so there is no numerical diffusion.
+        implicit none
+        real, intent(in) :: b_fac
+        real, intent(in) :: mu_fac(0:79)
+        double precision, intent(out) :: g_daily
+
+        ! Local use only
+        integer :: k
+        double precision :: before, births, top
+
+        before = sum(n_shadow)
+        do k = 0, n_shadow_bins-1
+            n_shadow(k) = n_shadow(k) * (1.d0 - dble(mu_fac(k/365)))
+        end do
+        ! Age by exactly one bin. The last bin is the open-ended 79+ reservoir:
+        ! it ABSORBS its inflow rather than falling off the end, matching
+        ! min(floor(age),79) in the agent death checks.
+        top = n_shadow(n_shadow_bins-1)
+        do k = n_shadow_bins-1, 1, -1
+            n_shadow(k) = n_shadow(k-1)
+        end do
+        n_shadow(n_shadow_bins-1) = n_shadow(n_shadow_bins-1) + top
+        births = dble(b_fac) * before
+        n_shadow(0) = births ! overwrites the stale copy the shift left behind
+        g_daily = sum(n_shadow) / before
+    end subroutine demog_shadow_step
+
+
+    subroutine demog_print_diagnostics()
+    !===
+        ! Init-time self-test of the shape-invariant generator. Cheap (<1 ms),
+        ! so it stays on permanently -- it is the fastest way to notice that a
+        ! new cumm_age.txt has broken the generator.
+        implicit none
+        real :: b_daily, mu_daily(0:79)
+        double precision :: g_eff, tvd
+        integer :: a, nclamp
+        double precision :: sv, s_ext80
+
+        call demog_shape_rates(1.0, b_daily, mu_daily)
+
+        s_ext80 = s_target(79)*s_target(79)/s_target(78)
+        nclamp = 0
+        do a = 0, 79
+            if (a < 79) then
+                sv = s_target(a+1) / s_target(a)
+            else
+                sv = s_ext80 / s_target(79)
+            end if
+            if (sv >= 1.d0) nclamp = nclamp + 1
+        end do
+
+        write(*,*) '=========================='
+        write(*,*) 'Shape-invariant demographics'
+        write(*,'(A,F10.6,A,ES12.4,A,ES12.4)') '  sum(s) =', sum(s_target), &
+            '   min(s) =', minval(s_target), '   max(s) =', maxval(s_target)
+        write(*,'(A,I3,A)') '  surv clamped at 1.0 for ', nclamp, ' of 80 ages (expected: file density rises 1-10)'
+        write(*,'(A,ES12.4,A,ES12.4,A,ES12.4)') '  b_daily =', b_daily, &
+            '   mu_daily(0) =', mu_daily(0), '   mu_daily(79) =', mu_daily(79)
+        write(*,'(A,F10.6)') '  b_calib =', b_calib
+        call demog_replica(1.0, demog_calib_years, g_eff, tvd)
+        write(*,'(A,I3,A,F10.6,A,F8.4,A)') '  ', demog_calib_years, &
+            '-yr replica at g=1: g_eff =', g_eff, '   shape TVD =', 100.d0*tvd, ' %'
+        write(*,*) '=========================='
+    end subroutine demog_print_diagnostics
 
 
 end MODULE mo_const

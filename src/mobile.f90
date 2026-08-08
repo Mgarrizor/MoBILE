@@ -340,6 +340,10 @@ itime = 1
   ! output file.
   call agents_read_age(age_weights,age_counts)
   !
+  ! Resolve the demographic regime and precompute its rates. Must come after
+  ! agents_read_age: it builds the target age density from age_weights(:).
+  call demog_init()
+  !
   ! Allocate arrays of disease "disID" (SEIAR)
   call grid_dis(disID,nxy,S,E,I,A,A_old,R,EIR,imm,hbr)
   !

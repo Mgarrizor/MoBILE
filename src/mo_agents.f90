@@ -820,6 +820,127 @@ USE, INTRINSIC :: ISO_C_BINDING
         !===
         end subroutine agents_diagnostics
 
+        subroutine demog_init()
+        !===
+            ! Resolves which demographic regime this run uses and precomputes
+            ! everything that doesn't change day to day. Must be called AFTER
+            ! agents_read_age (age_weights(:) doesn't exist before that), which
+            ! is why this can't live in namelist_const.
+            implicit none
+            logical :: have_files
+
+            have_files = (len(trim(mortality_file)) /= 0) .or. &
+                         (len(trim(birthrate_file)) /= 0) .or. &
+                         (len(trim(mortality_time_file)) /= 0)
+
+            if (demog_counterfactual .and. (.not. have_files)) then
+                print *, 'demog_init: counterfactual mode needs the FACTUAL rate files ' // &
+                         '(-M/-B/-T) -- the shadow population has nothing to integrate --> STOP'
+                STOP
+            end if
+
+            if (.not. have_files) then
+                demog_mode = DEMOG_STANDARD
+            else if (demog_counterfactual) then
+                demog_mode = DEMOG_COUNTER
+            else
+                demog_mode = DEMOG_FACTUAL
+            end if
+
+            ! STANDARD keeps the scalar mu/birth_rate everywhere, so none of the
+            ! shape-invariant machinery below is needed (and cumm_age.txt need
+            ! not even be self-consistent with mu).
+            if (demog_mode == DEMOG_STANDARD) then
+                print *, '--> Demographics: STANDARD (scalar mu/birth_rate)'
+                return
+            end if
+
+            call demog_build_shape(age_weights, s_target)
+            b_calib = demog_calib_factor(1.0)
+            ! Spin-up rates are stationary (g=1) and therefore time-invariant --
+            ! precomputed once so the convergence loop's repeated itime=1..365
+            ! replays can never make them drift.
+            call demog_shape_rates(1.0, b_spin, mu_spin)
+
+            if (demog_mode == DEMOG_COUNTER) then
+                print *, '--> Demographics: COUNTERFACTUAL (age structure held at cumm_age.txt)'
+                call demog_shadow_init()
+            else
+                print *, '--> Demographics: FACTUAL (supplied rate files drive the real run)'
+            end if
+
+            call demog_print_diagnostics()
+        end subroutine demog_init
+
+
+        subroutine demog_rates_today(itime)
+        !===
+            ! Sets today's birth probability (b_t_today) and per-age daily death
+            ! probabilities (mu_age_today) for whichever of the 3 modes x 2
+            ! phases applies:
+            !
+            !                spin-up                    real simulation
+            !   STANDARD     scalar mu/birth_rate       same
+            !   FACTUAL      shape-invariant, g=1       supplied files, directly
+            !   COUNTER      shape-invariant, g=1       shape-invariant, g from shadow
+            !
+            ! MUST stay outside the agent parallel region: it writes the shared
+            ! mu_age_today(:). agents_pre_diagnostics calls it before the
+            ! !$OMP PARALLEL DO in mo_timestep.f90.
+            implicit none
+            integer, intent(in) :: itime
+
+            ! Local use only
+            integer :: a
+            real :: t_years
+            double precision :: g_daily
+
+            select case (demog_mode)
+
+            case (DEMOG_STANDARD)
+                ! mu_age_today(:) was set to mu_age(:) (= mu broadcast) once in
+                ! namelist_const and never changes, so only b_t needs setting.
+                b_t_today = birth_rate
+
+            case default ! DEMOG_FACTUAL, DEMOG_COUNTER
+                if (in_spinup) then
+                    ! Time-INVARIANT by construction. The convergence loop
+                    ! replays itime=1..365 an unknown number of times, so any
+                    ! itime-dependent rate would drift across replays -- never
+                    ! call interp1 with itime on this branch.
+                    b_t_today       = b_spin
+                    mu_age_today(:) = mu_spin(:)
+                else
+                    t_years = real(itime-1)*da
+                    b_fac_today = interp1(t_years, birth_years, birth_vals)
+                    if (in_mortality_time) then
+                        do a = 0, 79
+                            mu_fac_today(a) = interp1(t_years, mu_years, mu_age_years(a,:))
+                        end do
+                    else
+                        mu_fac_today(:) = mu_age(:)
+                    end if
+
+                    if (demog_mode == DEMOG_FACTUAL) then
+                        b_t_today       = b_fac_today
+                        mu_age_today(:) = mu_fac_today(:)
+                    else
+                        ! Advance the shadow exactly once per distinct simulated
+                        ! day: mobile.f90 makes an extra pre-pass at itime=1
+                        ! before the time loop, and with spin_up==0 that pre-pass
+                        ! IS day 1 of the real run.
+                        if (itime /= shadow_last_itime) then
+                            call demog_shadow_step(b_fac_today, mu_fac_today, g_daily)
+                            shadow_last_itime = itime
+                            g_ann_today = real(exp(365.d0*log(g_daily)))
+                        end if
+                        call demog_shape_rates(g_ann_today, b_t_today, mu_age_today)
+                    end if
+                end if
+            end select
+        end subroutine demog_rates_today
+
+
         subroutine agents_pre_diagnostics(idis,itime)
         !===
             ! Calculate bulk statistics to feed into the disease source integration
