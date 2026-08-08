@@ -56,7 +56,7 @@ MODULE mo_control
     !--- Malaria ----
     logical :: out_EIR  =.true.  ! Entomological Inoculation Rate
     logical :: out_imm  =.true.  ! Endemicity level / Immunity
-    logical :: out_imm_a=.false.  ! Age-disaggregated Immunity
+    logical :: out_imm_a=.true.   ! Age-disaggregated Immunity
     logical :: out_hbr  =.false.  ! Human Biting Rate
     logical :: in_imm   =.false. ! Input immunity forcing flag: always false and automatically set to true is the corresponding
                                  ! forcing file is found.

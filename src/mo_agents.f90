@@ -171,10 +171,10 @@ USE, INTRINSIC :: ISO_C_BINDING
             ! Allocate array of the human to agent ratio
             allocate(HA(nxy))
             HA(:) = 0.
-            ! Allocate births-remaining-today array. Zeroed here since
-            ! agents_pre_diagnostics skips setting it during spin-up (see
-            ! in_spinup, mo_control.f90) -- claim sites must never read
-            ! uninitialized memory on spin-up's first day.
+            ! Allocate births-remaining-today array. Zeroed here so the claim
+            ! sites can never read uninitialized memory: agents_pre_diagnostics
+            ! rewrites it every day, but the day-1 pre-pass in mobile.f90 runs
+            ! agents_diagnostics before any of those writes have happened.
             allocate(nbirths_left(nxy,nthreads))
             nbirths_left(:,:) = 0
             !
@@ -734,12 +734,10 @@ USE, INTRINSIC :: ISO_C_BINDING
             SELECT case(idis)
             case (0) ! Cholera -------------------------------
             !
-            ! Increase age by da = 1/365 -- held fixed during spin-up (see
-            ! in_spinup, mo_control.f90) so the day-0 age structure isn't
-            ! shifted by however many years spin-up takes to converge.
-            if (.not. in_spinup) then
-                people(iagent)%agent_ID%age =  people(iagent)%agent_ID%age + da
-            end if
+            ! Increase age by da = 1/365. Runs during spin-up too: the age
+            ! structure is now held at cumm_age.txt's shape by the rates
+            ! themselves (see demog_rates_today), not by freezing anyone.
+            people(iagent)%agent_ID%age =  people(iagent)%agent_ID%age + da
             !
             istat    =  people(iagent)%health_status%cholera_status%status
             iactive  =  people(iagent)%health_status%active_status%status
@@ -756,12 +754,10 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             case (1) ! Malaria -------------------------------
             !
-            ! Increase age by da = 1/365 -- held fixed during spin-up (see
-            ! in_spinup, mo_control.f90) so the day-0 age structure isn't
-            ! shifted by however many years spin-up takes to converge.
-            if (.not. in_spinup) then
-                people(iagent)%agent_ID%age =  people(iagent)%agent_ID%age + da
-            end if
+            ! Increase age by da = 1/365. Runs during spin-up too: the age
+            ! structure is now held at cumm_age.txt's shape by the rates
+            ! themselves (see demog_rates_today), not by freezing anyone.
+            people(iagent)%agent_ID%age =  people(iagent)%agent_ID%age + da
             !
             istat   =  people(iagent)%health_status%malaria_status%status
             iactive =  people(iagent)%health_status%active_status%status
@@ -953,8 +949,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             integer :: n_tot       ! Today's total ticket draw for one cell
             integer :: remaining   ! Tickets not yet handed to a thread
             integer :: dead_t      ! Thread t's current dead-slot capacity in this cell
-            integer :: a_bin        ! Age-row index while updating mu_age_today(:)
-            real :: b_t             ! Today's birth rate, interpolated from birth_years/birth_vals
+            real :: b_t             ! Today's birth rate (see demog_rates_today)
             real :: active_pop_dens(nxy) ! pop_dens(:) scaled by today's active-agent fraction (malaria only)
             !
             ! Draw today's total births per cell, then hand tickets to threads
@@ -962,39 +957,41 @@ USE, INTRINSIC :: ISO_C_BINDING
             ! (nslots_thread-npeop_thread, see mo_const.f90) -- a ticket only
             ! goes unclaimed when the whole cell is out of dead slots. Dead
             ! slots claim from their own thread's column (lock-free) in
-            ! agents_malaria/agents_cholera. Skipped entirely during spin-up
-            ! (see in_spinup, mo_control.f90) so the population/age structure
-            ! stays fixed at day-0 values while spin-up equilibrates immunity.
-            if (.not. in_spinup) then
-                b_t = interp1(real(itime-1)*da, birth_years, birth_vals)
-                ! mu_age_today(:) stays a static copy of mu_age(:) (set once in
-                ! namelist_const) unless mortality_time_file was supplied --
-                ! then it's re-interpolated from mu_age_years(:,:) every day,
-                ! one age row at a time, so the per-agent death checks
-                ! (mo_agents.f90) stay a plain O(1) array lookup.
-                if (in_mortality_time) then
-                    do a_bin = 0, 79
-                        mu_age_today(a_bin) = interp1(real(itime-1)*da, mu_years, mu_age_years(a_bin,:))
+            ! agents_malaria/agents_cholera.
+            !
+            ! This runs on EVERY day, spin-up included. It used to be skipped
+            ! while in_spinup, which held the age structure at its day-0 values
+            ! but also stopped all population turnover -- so spin-up
+            ! equilibrated immunity in a population that never aged and never
+            ! received a naive newborn, which for malaria is a large distortion.
+            ! The structure is now held by the RATES instead (shape-invariant
+            ! generator at g=1); which rates today gets is a function of
+            ! (mode, spin-up) -- see demog_rates_today.
+            call demog_rates_today(itime)
+            b_t = b_t_today
+            ! ignbin (mo_ranlib.f90) hard-STOPs for pp<=0 or pp>=1, so a
+            ! legitimate zero birth rate (e.g. a 0.0 row in birthrate_file,
+            ! or birth_rate=0 in params.txt) would abort the run.
+            b_t = min(max(b_t, 1.0e-12), 0.999999)
+            ! No npeop>0 guard here on purpose: ignbin(0,b_t) already returns 0,
+            ! so an emptied cell's tickets are zeroed correctly anyway, and
+            ! skipping the call would consume one fewer random number and shift
+            ! the whole downstream RNG stream -- which would forfeit the
+            ! bit-identical spin_up=0 regression that proves this change only
+            ! affects the spin-up phase.
+            do ixy = 1, nxy
+                if (mask_pop(ixy)) then
+                    n_tot = ignbin(npeop(ixy), b_t)
+                    remaining = n_tot
+                    do t = 1, size(nbirths_left,dim=2)
+                        dead_t = nslots_thread(ixy,t) - npeop_thread(ixy,t)
+                        nbirths_left(ixy,t) = min(remaining, dead_t)
+                        remaining = remaining - nbirths_left(ixy,t)
                     end do
+                    yearly_births_requested = yearly_births_requested + n_tot
+                    yearly_births_claimed = yearly_births_claimed + (n_tot - remaining)
                 end if
-                ! ignbin (mo_ranlib.f90) hard-STOPs for pp<=0 or pp>=1, so a
-                ! legitimate zero birth rate (e.g. a 0.0 row in birthrate_file,
-                ! or birth_rate=0 in params.txt) would abort the run.
-                b_t = min(max(b_t, 1.0e-12), 0.999999)
-                do ixy = 1, nxy
-                    if (mask_pop(ixy)) then
-                        n_tot = ignbin(npeop(ixy), b_t)
-                        remaining = n_tot
-                        do t = 1, size(nbirths_left,dim=2)
-                            dead_t = nslots_thread(ixy,t) - npeop_thread(ixy,t)
-                            nbirths_left(ixy,t) = min(remaining, dead_t)
-                            remaining = remaining - nbirths_left(ixy,t)
-                        end do
-                        yearly_births_requested = yearly_births_requested + n_tot
-                        yearly_births_claimed = yearly_births_claimed + (n_tot - remaining)
-                    end if
-                end do
-            end if
+            end do
             !
             SELECT case(idis)
             case (0) ! Cholera -------------------------------
@@ -1383,7 +1380,6 @@ USE, INTRINSIC :: ISO_C_BINDING
                         end if
                         ! Base mortality
                         !
-                        if (.not. in_spinup) then
                         if (generate_random() <= mu_age_today(min(floor(people(iagent)%agent_ID%age),79))) then ! Death
                             !
                             people(iagent)%health_status%active_status%status=.false.
@@ -1392,7 +1388,6 @@ USE, INTRINSIC :: ISO_C_BINDING
                             npeop_thread(i,ithread) = npeop_thread(i,ithread) - 1
                             !
                         end if
-                        end if ! .not. in_spinup
                     !==    
                     !
                     elseif (stat == 2) then ! If infected (I) *****************************
@@ -1433,7 +1428,6 @@ USE, INTRINSIC :: ISO_C_BINDING
                         end if 
                         ! Base mortality
                         !
-                        if (.not. in_spinup) then
                         if (generate_random() <= mu_age_today(min(floor(people(iagent)%agent_ID%age),79))) then ! Death
                             !
                             people(iagent)%health_status%active_status%status=.false.
@@ -1442,7 +1436,6 @@ USE, INTRINSIC :: ISO_C_BINDING
                             npeop_thread(i,ithread) = npeop_thread(i,ithread) - 1
                             !
                         end if
-                        end if ! .not. in_spinup
                         ! end Health  
                     !===                  
                     ! 
@@ -1504,7 +1497,6 @@ USE, INTRINSIC :: ISO_C_BINDING
                         !
                         ! Base mortality
                         !
-                        if (.not. in_spinup) then
                         if (generate_random() <= mu_age_today(min(floor(people(iagent)%agent_ID%age),79))) then ! Death
                             !
                             people(iagent)%health_status%active_status%status=.false.
@@ -1513,7 +1505,6 @@ USE, INTRINSIC :: ISO_C_BINDING
                             npeop_thread(i,ithread) = npeop_thread(i,ithread) - 1
                             !
                         end if
-                        end if ! .not. in_spinup
                     !===  
                     ! 
                     elseif (stat == 4) then ! If recovered (R) *****************************
@@ -1528,7 +1519,6 @@ USE, INTRINSIC :: ISO_C_BINDING
                         !
                         ! Base mortality
                         !
-                        if (.not. in_spinup) then
                         if (generate_random() <= mu_age_today(min(floor(people(iagent)%agent_ID%age),79))) then
                             !
                             people(iagent)%health_status%active_status%status=.false.
@@ -1537,7 +1527,6 @@ USE, INTRINSIC :: ISO_C_BINDING
                             npeop_thread(i,ithread) = npeop_thread(i,ithread) - 1
                             !
                         end if
-                        end if ! .not. in_spinup
                         !
                     end if 
                 else ! If agent is dead
@@ -1888,7 +1877,6 @@ USE, INTRINSIC :: ISO_C_BINDING
                     ! Base mortality
                     !===
                         !
-                        if (.not. in_spinup) then
                         if (generate_random() <= mu_age_today(min(floor(people(iagent)%agent_ID%age),79))) then
                             !
                             people(iagent)%health_status%active_status%status=.false.
@@ -1900,7 +1888,6 @@ USE, INTRINSIC :: ISO_C_BINDING
                             npeop_thread(j,ithread) = npeop_thread(j,ithread) - 1
                             !
                         end if
-                        end if ! .not. in_spinup
                         !
                     !===
                 else ! If agent is dead

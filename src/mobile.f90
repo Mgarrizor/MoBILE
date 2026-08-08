@@ -139,7 +139,8 @@ implicit none
   !******************************************************************
   ! Loop counters
   integer :: itime     ! Time    (nsteps)
-  integer :: ispinup   ! Number of needed spin-up years 
+  integer :: ispinup   ! Number of needed spin-up years
+  integer, parameter :: max_spinup_years = 60 ! Cap on the convergence loop (see below) 
   integer :: oagent
 
   ! Random number and PDf sampler libraries
@@ -416,16 +417,15 @@ itime = 1
        !
      end if
      !
-     ! When spin_up==1, demographics must stay frozen (in_spinup=.true.) for
-     ! this initial diagnostics pass too, not just the spin_up_loop below --
-     ! agents_pre_diagnostics/agents_diagnostics already draw and claim real
-     ! births here (same code path as every other day), and until this was
-     ! set, that one extra unfrozen pass ran before in_spinup was set below,
-     ! injecting one day's worth of age-0 agents that then sat frozen
-     ! through all of spin-up and surfaced later as a one-year-wide spike in
-     ! the age structure (e.g. age 10 in year 2025 for an 11-year run
-     ! starting 2015). No effect when spin_up==0 -- there is no freeze phase
-     ! in that case, so this really is day 1 of the real simulation.
+     ! When spin_up==1 this initial diagnostics pass belongs to the spin-up
+     ! phase, not the real run, so in_spinup must already be set: it selects
+     ! which rate regime demog_rates_today hands out (stationary g=1 rates
+     ! during spin-up vs the real b(t)/mu(a,t) afterwards), and it keeps the
+     ! counterfactual shadow from being stepped a day early. This pass runs
+     ! the same agents_pre_diagnostics/agents_diagnostics code path as every
+     ! other day, so without it the run would spend one day on the wrong
+     ! rates. No effect when spin_up==0 -- there is no spin-up phase then, so
+     ! this really is day 1 of the real simulation.
      if (spin_up==1) in_spinup = .true.
      !
      call agents_pre_diagnostics(disID,itime)
@@ -489,7 +489,7 @@ print *, wperm_default
 !=
 if (spin_up==1) then
   !
-  in_spinup = .true. ! Freezes aging/births/deaths (mo_agents.f90) until spin-up ends below
+  in_spinup = .true. ! Selects the spin-up rate regime (see demog_rates_today)
   SU_conv=.false.
   SU_tol=0.015
 
@@ -506,7 +506,11 @@ if (spin_up==1) then
   ! instead of replaying the raw first year; time_step is untouched.
   call build_spinup_climatology()
 
-  do while (.not. SU_conv)
+  ! Hard cap on the convergence loop. Demographics now run during spin-up, so
+  ! the year-to-year noise floor in mean immunity is higher (births and deaths
+  ! in cells holding only a handful of agents); if that noise exceeds SU_tol
+  ! this loop would otherwise never terminate.
+  do while ((.not. SU_conv) .and. (ispinup < max_spinup_years))
     !
     SU_old(:) = SU_new(:)
     SU_new(:) = 0.
@@ -538,7 +542,27 @@ if (spin_up==1) then
     !
   end do
   !
-  in_spinup = .false. ! Real simulation starts fresh: aging/births/deaths resume below
+  if (.not. SU_conv) then
+      print *, 'Warning: spin-up hit max_spinup_years =', max_spinup_years, &
+               '; mean immunity did not converge to SU_tol =', SU_tol
+  end if
+  !
+  in_spinup = .false. ! Real simulation starts fresh: the real b(t)/mu(a,t) apply below
+  !
+  ! Demographics ran throughout spin-up, so the live population is no longer
+  ! exactly npeop_init. Re-derive npeop and re-snapshot npeop_init, otherwise
+  ! active_pop_dens (= pop_dens*npeop/npeop_init in agents_pre_diagnostics)
+  ! would carry spin-up's net population change into the real run as a
+  ! spurious transmission scaling. By definition the real run starts at an
+  ! active fraction of 1.
+  npeop(:) = sum(npeop_thread(:,:), dim=2)
+  print '("Spin-up population: ",i0," -> ",i0," agents (",f6.2,"%)")', &
+        sum(npeop_init(:)), sum(npeop(:)), &
+        100.*real(sum(npeop(:)))/real(sum(npeop_init(:)))
+  npeop_init(:) = npeop(:)
+  ! Flush the spin-up birth counters so they don't contaminate the first
+  ! yearly report of the real run.
+  call agents_report_birth_capacity()
   !
   ! Swap t2m/rainfall back to the real driver record for the main loop.
   call restore_spinup_forcing()

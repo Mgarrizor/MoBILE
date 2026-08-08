@@ -956,27 +956,61 @@ MODULE mo_const
         implicit none
         real :: b_daily, mu_daily(0:79)
         double precision :: g_eff, tvd
-        integer :: a, nclamp
-        double precision :: sv, s_ext80
+        integer :: a, nclamp, nclamp_real
+        double precision :: sv, s_ext80, sv_max
+        character(len=400) :: clamp_list
+        character(len=8) :: agestr
 
         call demog_shape_rates(1.0, b_daily, mu_daily)
 
         s_ext80 = s_target(79)*s_target(79)/s_target(78)
         nclamp = 0
+        nclamp_real = 0
+        sv_max = 0.d0
+        clamp_list = ''
         do a = 0, 79
             if (a < 79) then
                 sv = s_target(a+1) / s_target(a)
             else
                 sv = s_ext80 / s_target(79)
             end if
-            if (sv >= 1.d0) nclamp = nclamp + 1
+            if (sv >= 1.d0) then
+                nclamp = nclamp + 1
+                sv_max = max(sv_max, sv)
+                ! Only list clamps big enough to be a real structural artifact.
+                ! cumm_age.txt carries 4 decimals, so a flat stretch of the tail
+                ! rounds into a spurious ~1e-4 "rise"; those clamp at surv~1.0000
+                ! and are numerically irrelevant. A genuine age-band
+                ! interpolation artifact needs surv well above 1 (e.g. 1.067).
+                if (sv > 1.001d0) then
+                    nclamp_real = nclamp_real + 1
+                    write(agestr,'(I0)') a
+                    if (len_trim(clamp_list) == 0) then
+                        clamp_list = trim(agestr)
+                    else if (len_trim(clamp_list) < 380) then
+                        clamp_list = trim(clamp_list)//','//trim(agestr)
+                    end if
+                end if
+            end if
         end do
 
         write(*,*) '=========================='
         write(*,*) 'Shape-invariant demographics'
         write(*,'(A,F10.6,A,ES12.4,A,ES12.4)') '  sum(s) =', sum(s_target), &
             '   min(s) =', minval(s_target), '   max(s) =', maxval(s_target)
-        write(*,'(A,I3,A)') '  surv clamped at 1.0 for ', nclamp, ' of 80 ages (expected: file density rises 1-10)'
+        ! A clamped age is one where cumm_age.txt's density RISES with age, which
+        ! would need surv>1 (people appearing from nowhere) to reproduce. Listing
+        ! them makes an interpolation artifact in a new age file easy to spot:
+        ! a real population's density decreases monotonically, so ideally this
+        ! list is empty. Each clamped age costs a little shape fidelity (TVD
+        ! below) and forces b_calib away from 1.
+        write(*,'(A,I3,A,I3,A,F7.4,A)') '  surv clamped at 1.0 for ', nclamp, &
+            ' of 80 ages;', nclamp_real, ' materially (worst needed surv =', sv_max, ')'
+        if (nclamp_real > 0) then
+            write(*,'(A,A)') '    ages: ', trim(clamp_list)
+            write(*,*) '   (density rises with age there -- a cumm_age.txt interpolation'
+            write(*,*) '    artifact; the model cannot reproduce it without negative mortality)'
+        end if
         write(*,'(A,ES12.4,A,ES12.4,A,ES12.4)') '  b_daily =', b_daily, &
             '   mu_daily(0) =', mu_daily(0), '   mu_daily(79) =', mu_daily(79)
         write(*,'(A,F10.6)') '  b_calib =', b_calib
