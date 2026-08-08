@@ -33,6 +33,7 @@ usage() { echo "Usage:              \n
                 -M: Age-specific mortality-rate file (Optional; blank = scalar mu) \n
                 -B: Time-varying birth-rate file (Optional; blank = scalar birth_rate) \n
                 -T: Age-AND-year mortality-rate file (Optional; blank = use -M/scalar mu; overrides -M if both given) \n
+                -C: Counterfactual mode [1: hold the age structure fixed; anything else: factual] (Optional; needs -M/-B/-T) \n
 
                  "; }
 # Resources
@@ -44,8 +45,9 @@ usage() { echo "Usage:              \n
 mortality_file=""
 birthrate_file=""
 mortality_time_file=""
+demog_counterfactual=".false."
 
-while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:x:i:l:M:B:T:" flag; do
+while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:x:i:l:M:B:T:C:" flag; do
  case $flag in
    h) # Handle the -h flag
    # Display script help information
@@ -124,6 +126,13 @@ while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:x:i:l:M:B:T:" flag; do
      mortality_time_file=""
    else
      mortality_time_file="$OPTARG"
+   fi
+   ;;
+   C) # Handle the -C flag (counterfactual mode; 1 = on, anything else = factual)
+   if [ "$OPTARG" = "1" ]; then
+     demog_counterfactual=".true."
+   else
+     demog_counterfactual=".false."
    fi
    ;;
    \?) # Handle invalid options
@@ -282,6 +291,7 @@ imm_file='${imm_file}',
 mortality_file='${mortality_file}',
 birthrate_file='${birthrate_file}',
 mortality_time_file='${mortality_time_file}',
+demog_counterfactual=${demog_counterfactual},
 /
 &CONST
 ${lines}

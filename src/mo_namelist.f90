@@ -62,18 +62,21 @@ MODULE mo_namelist
 
         end subroutine namelist_inout
 
-        subroutine namelist_human(pop_file,nagent,imm_file,mortality_file,birthrate_file,mortality_time_file)
+        subroutine namelist_human(pop_file,nagent,imm_file,mortality_file,birthrate_file,mortality_time_file, &
+                                  demog_counterfactual)
             implicit none
 
             character(len=200), intent(out):: pop_file, imm_file, mortality_file, birthrate_file, mortality_time_file
             integer, intent(out) :: nagent
+            logical, intent(out) :: demog_counterfactual
 
             ! Local use only
             character(len=1000) :: line
             integer:: file_unit, iostats
 
             ! Define namelist
-            namelist /HUMAN/ pop_file, nagent, imm_file, mortality_file, birthrate_file, mortality_time_file
+            namelist /HUMAN/ pop_file, nagent, imm_file, mortality_file, birthrate_file, mortality_time_file, &
+                             demog_counterfactual
 
             ! Does the file exist?
             inquire (file=namelist_filename, iostat=iostats)
@@ -82,6 +85,12 @@ MODULE mo_namelist
                  write (stderr, '("Error: namelist file does not exist")')
                  return
              end if
+
+            ! intent(out) dummies are undefined on entry and a namelist read
+            ! leaves un-supplied variables untouched, so this default has to be
+            ! set explicitly here (same reason growth_ratio_ceiling is defaulted
+            ! before the &CONST read).
+            demog_counterfactual = .false.
 
             ! Open and read namelist
             open (action='read', file=namelist_filename, iostat=iostats, newunit=file_unit)

@@ -231,7 +231,8 @@ itime = 1
     ! Namelists
     !=
       !--Human input
-      call namelist_human(pop_file,nagent,imm_file,mortality_file,birthrate_file,mortality_time_file)
+      call namelist_human(pop_file,nagent,imm_file,mortality_file,birthrate_file,mortality_time_file, &
+                          demog_counterfactual)
       !
       !--Climate input
       call namelist_clima(rain_file,t2m_file,area_file)
