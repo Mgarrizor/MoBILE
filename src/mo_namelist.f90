@@ -183,13 +183,13 @@ MODULE mo_namelist
             ! Local use only
             character(len=1000) :: line
             integer:: file_unit, iostats
-            real :: growth_ratio ! nagent_max = ceiling(nagent*growth_ratio); 1.0 = no growth
+            real :: growth_ratio_ceiling ! nagent_max = ceiling(nagent*growth_ratio_ceiling); 1.0 = no growth
 
             ! Define namelist
             ! - We should have here all model parameters that are being changed to their params.txt value
             !
             namelist /CONST/ mu_B, theta_e, theta_p, mu, birth_rate, rho, sigma, gamma, alpha, beta, & ! cholera disease params
-                             growth_ratio,                                               & ! population growth (nagent_max = ceiling(nagent*growth_ratio))
+                             growth_ratio_ceiling,                                       & ! agent-slot capacity ceiling (nagent_max = ceiling(nagent*growth_ratio_ceiling))
                              m_long, m_short, D_grav, D_pop, H_0,                        & ! mobility params gravity model
                              B_0, fS_0, fI_0, fA_0, fR_0,                                & ! initial conditions
                              K_h, b_rate, P_v0, k_NB, P_h0, P_max,                       & ! Vector-human transmission params
@@ -213,7 +213,7 @@ MODULE mo_namelist
                  return
              end if
 
-            growth_ratio = 1.0 ! Default: no population growth (nagent_max = nagent)
+            growth_ratio_ceiling = 1.0 ! Default: no spare capacity (nagent_max = nagent)
 
             ! Open and read namelist
             open (action='read', file=namelist_filename, iostat=iostats, newunit=file_unit)
@@ -269,14 +269,14 @@ MODULE mo_namelist
                 mu_age_today(:) = mu_age_years(:,1) ! Day-0 value
             end if
 
-            ! growth_ratio < 1.0 (shrinkage) isn't supported by the additive
-            ! extra-capacity mechanism in agents_init -- clamp instead of
-            ! silently ignoring it.
-            if (growth_ratio < 1.0) then
-                print *, 'Warning: growth_ratio < 1.0 is not supported; clamping to 1.0'
-                growth_ratio = 1.0
+            ! growth_ratio_ceiling < 1.0 (shrinkage) isn't supported by the
+            ! additive extra-capacity mechanism in agents_init -- clamp
+            ! instead of silently ignoring it.
+            if (growth_ratio_ceiling < 1.0) then
+                print *, 'Warning: growth_ratio_ceiling < 1.0 is not supported; clamping to 1.0'
+                growth_ratio_ceiling = 1.0
             end if
-            nagent_max = ceiling(real(nagent) * growth_ratio)
+            nagent_max = ceiling(real(nagent) * growth_ratio_ceiling)
         end subroutine namelist_const
 
 
