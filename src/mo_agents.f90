@@ -496,6 +496,15 @@ USE, INTRINSIC :: ISO_C_BINDING
                         people(indx)%health_status%cholera_status%infc_dur = 0
                         people(indx)%health_status%malaria_status%status = 1
                         people(indx)%health_status%active_status%status = .false. ! Inactive reserve slot
+                        ! Must be zeroed even though the slot is inactive:
+                        ! agents_diagnostics accumulates EIR_att/hbr_att OUTSIDE its
+                        ! iactive check, so an uninitialized reserve slot would feed
+                        ! junk into the EIR/hbr fields on every day of the run.
+                        people(indx)%health_status%malaria_status%EIR_att = 0.
+                        people(indx)%health_status%malaria_status%hbr_att = 0.
+                        people(indx)%health_status%malaria_status%imm = 0.
+                        people(indx)%health_status%malaria_status%mat_im = .false.
+                        people(indx)%health_status%malaria_status%infc_dur = 0
                         people(indx)%location_status%homeloc = loc
                         people(indx)%location_status%currloc = loc
                         !
@@ -847,6 +856,10 @@ USE, INTRINSIC :: ISO_C_BINDING
                         mu_age_today(a_bin) = interp1(real(itime-1)*da, mu_years, mu_age_years(a_bin,:))
                     end do
                 end if
+                ! ignbin (mo_ranlib.f90) hard-STOPs for pp<=0 or pp>=1, so a
+                ! legitimate zero birth rate (e.g. a 0.0 row in birthrate_file,
+                ! or birth_rate=0 in params.txt) would abort the run.
+                b_t = min(max(b_t, 1.0e-12), 0.999999)
                 do ixy = 1, nxy
                     if (mask_pop(ixy)) then
                         n_tot = ignbin(npeop(ixy), b_t)
@@ -1061,22 +1074,30 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             ! Fraction [per person]  = HA*N/(rho*A_cell) = N/npeop - with mobility this will have to
             !                                                        be modified
-            S(:) = S(:)/npeop(:)
-            E(:) = E(:)/npeop(:)
-            I(:) = I(:)/npeop(:)
-            I_new(:) = I_new(:)/npeop(:)
-            A(:) = A(:)/npeop(:)
-            R(:) = R(:)/npeop(:)
+            ! Guarded like the EIR/hbr/imm normalizations below: a cell can hold
+            ! zero active agents (an unpopulated cell, or one that empties once
+            ! demographics run), and an unguarded divide puts NaN in the output.
+            where (npeop(:) > 0)
+                S(:) = S(:)/npeop(:)
+                E(:) = E(:)/npeop(:)
+                I(:) = I(:)/npeop(:)
+                I_new(:) = I_new(:)/npeop(:)
+                A(:) = A(:)/npeop(:)
+                R(:) = R(:)/npeop(:)
+            end where
 
             ! Age-structured
             if (diag_age) then
                 do j = 1, size(age_blocks(:))
                     !
-                    Ia_new(:,j) = Ia_new(:,j)/N_a(:,j)
-                    Ia(:,j) = Ia(:,j)/N_a(:,j)
-                    Aa(:,j) = Aa(:,j)/N_a(:,j)
-                    !
-                    imm_a(:,j) = imm_a(:,j)/N_a(:,j)  ! Normalize by number of people in that age group
+                    ! Same guard: an age block can legitimately be empty in a cell.
+                    where (N_a(:,j) > 0.)
+                        Ia_new(:,j) = Ia_new(:,j)/N_a(:,j)
+                        Ia(:,j) = Ia(:,j)/N_a(:,j)
+                        Aa(:,j) = Aa(:,j)/N_a(:,j)
+                        !
+                        imm_a(:,j) = imm_a(:,j)/N_a(:,j)  ! Normalize by number of people in that age group
+                    end where
                     !
                 end do
             end if
@@ -1268,6 +1289,11 @@ USE, INTRINSIC :: ISO_C_BINDING
                         else if (generate_random() <= alpha) then
                             !
                             people(iagent)%health_status%active_status%status=.false.
+                            ! Same per-thread decrement the base-mortality path below
+                            ! does -- without it npeop over-counts (the slot is dead but
+                            ! still tallied, and gets counted again if later reborn) and
+                            ! its dead-slot capacity is understated.
+                            npeop_thread(i,ithread) = npeop_thread(i,ithread) - 1
                             !
                         ! Excretion event
                         else
