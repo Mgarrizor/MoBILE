@@ -294,6 +294,14 @@ MODULE mo_netcdf
             !
         end if
         !
+        if (out_N_a) then
+            !
+            do k = 1, size(age_blocks(:))
+                call write_check_3D(itime,N_a(:,k),var_out,'NetCDF Status N_a',ncid_sbgrp(5))
+            end do
+            !
+        end if
+        !
         if ((out_N)) then
             !
             call write_check_3D_int(itime,npeop,var_out,'NetCDF Status Agent field',ncid_grp(2))
@@ -419,6 +427,16 @@ MODULE mo_netcdf
         integer :: var_out=1, dim
 
 
+        ! Every age-disaggregated field is accumulated under `if (diag_age)`
+        ! (mo_agents.f90), so requesting one without it writes a file of zeros
+        ! rather than failing -- catch that here instead.
+        if ((out_Ia .or. out_Aa .or. out_Ia_new .or. out_imm_a .or. out_N_a) &
+            .and. (.not. diag_age)) then
+            print *, 'NetCDF Status: age-disaggregated output requested but diag_age is .false.'
+            print *, '               (out_Ia/out_Aa/out_Ia_new/out_imm_a/out_N_a need it) -- Exit'
+            STOP
+        end if
+        !
         ! Horrible, clean it up!
         ! Lon+Lat+Time(=3) + Rest
         dim = 3 + merge(1, 0, out_pop)+merge(1, 0, out_S)  &
@@ -449,6 +467,10 @@ MODULE mo_netcdf
                   +merge(1, 0, out_imm)   +merge(1,0, out_N)        +merge(1,0, out_HA)
         !
         if (out_imm_a) then
+            dim = dim + size(age_blocks(:))
+        end if
+        !
+        if (out_N_a) then
             dim = dim + size(age_blocks(:))
         end if
         !
@@ -623,6 +645,14 @@ MODULE mo_netcdf
             status = nf90_def_grp(parent_ncid = ncid_out, name = 'imm', new_ncid = ncid_sbgrp(6))
             if(status /= nf90_noerr) then
               print *, 'NetCDF Status: error creating subgroup <<imm>> ; status =', status
+              STOP
+            end if
+        end if
+        !
+        if ((out_N_a)) then
+            status = nf90_def_grp(parent_ncid = ncid_out, name = 'Na', new_ncid = ncid_sbgrp(5))
+            if(status /= nf90_noerr) then
+              print *, 'NetCDF Status: error creating subgroup <<Na>> ; status =', status
               STOP
             end if
         end if
@@ -949,10 +979,23 @@ MODULE mo_netcdf
             end do
         end if
         !
+        ! Counts, not a per-person rate: unlike Ia/Aa/Ia_new/imm_a this is the
+        ! denominator those are divided by, so it is written undivided.
+        if ((out_N_a)) then
+            do k = 1, size(age_blocks(:))
+                arr_VarID(var_out)=var_out
+                status = nf90_def_var(ncid = ncid_sbgrp(5), name = N_a_age_names(k), xtype = nf90_float, &
+                          dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = arr_VarID(var_out))
+                status = nf90_put_att(ncid = ncid_sbgrp(5), varid = arr_VarID(var_out), name = "units", values = "[agents]")
+                status = nf90_put_att(ncid = ncid_sbgrp(5), varid = arr_VarID(var_out), name = "long_name", values = "Age-disaggregated agent count")
+                var_out = var_out + 1
+            end do
+        end if
+        !
         if (out_N) then
           !
           arr_VarID(var_out)=var_out
-          status = nf90_def_var(ncid = ncid_grp(2), name = "Nagent", xtype = nf90_double, &
+          status = nf90_def_var(ncid = ncid_grp(2), name = "Nagent", xtype = nf90_float, &
                     dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = arr_VarID(var_out))
           status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "units", values = "adimensional")
           status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "long_name", values = "Number of agents")

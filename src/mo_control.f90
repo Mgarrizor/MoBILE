@@ -57,6 +57,10 @@ MODULE mo_control
     logical :: out_EIR  =.true.  ! Entomological Inoculation Rate
     logical :: out_imm  =.true.  ! Endemicity level / Immunity
     logical :: out_imm_a=.true.   ! Age-disaggregated Immunity
+    ! People per age block per cell. Ia/Aa/Ia_new/imm_a are all divided by
+    ! N_a, so without it age-resolved output cannot be turned back into
+    ! counts except by assuming every cell shares the national age structure.
+    logical :: out_N_a  =.true.  ! Age-disaggregated population (N_a)
     logical :: out_hbr  =.false.  ! Human Biting Rate
     logical :: in_imm   =.false. ! Input immunity forcing flag: always false and automatically set to true is the corresponding
                                  ! forcing file is found.

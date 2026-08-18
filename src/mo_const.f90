@@ -100,6 +100,7 @@ MODULE mo_const
     integer, parameter :: STR_LEN = 100
     ! Declare as allocatable
     character(len=STR_LEN), allocatable :: I_age_names(:), A_age_names(:), imm_age_names(:), I_new_age_names(:)
+    character(len=STR_LEN), allocatable :: N_a_age_names(:)
     !character(len=10), dimension(3)      :: prefixes = ["I_  ", "A_  ", "imm_"]
   
     !********* Spin Up ***************************
@@ -338,18 +339,20 @@ MODULE mo_const
     subroutine init_age_labels()
         ! Local use indexes to initialize age names
         integer :: i_age, p_age, n_age
-        character(len=10), dimension(4) :: prefixes = ["I_   ", "A_   ", "imm_ ", "Inew_"]
+        character(len=10), dimension(5) :: prefixes = ["I_   ", "A_   ", "imm_ ", "Inew_", "Na_  "]
 
         n_age = size(age_blocks)
         allocate(I_age_names(n_age), A_age_names(n_age), imm_age_names(n_age), I_new_age_names(n_age))
+        allocate(N_a_age_names(n_age))
 
         do i_age = 1, n_age
-            do p_age = 1, 4
+            do p_age = 1, 5
                 select case(p_age)
                     case(1); call build_label(I_age_names(i_age),     prefixes(p_age), i_age, n_age, age_blocks)
                     case(2); call build_label(A_age_names(i_age),     prefixes(p_age), i_age, n_age, age_blocks)
                     case(3); call build_label(imm_age_names(i_age),   prefixes(p_age), i_age, n_age, age_blocks)
                     case(4); call build_label(I_new_age_names(i_age), prefixes(p_age), i_age, n_age, age_blocks)
+                    case(5); call build_label(N_a_age_names(i_age),   prefixes(p_age), i_age, n_age, age_blocks)
                 end select
             end do
         end do
