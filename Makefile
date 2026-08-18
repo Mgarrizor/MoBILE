@@ -20,13 +20,33 @@ INC_LIBS  := $(shell nf-config --flibs) $(shell nc-config --libs) # Libraries ne
 PROF_LIB  := -L/opt/homebrew/opt/gperftools/lib -lprofiler -ltcmalloc  # Profiling library (Google performance tools)
 #-----------------------------------------
 # (https://stackoverflow.com/questions/3676322/what-flags-to-set-for-gfortran-compiler-to-catch-faulty-code)
-DEBUG     := -Og -fbacktrace -Wall -fcheck=all \
-             -ffixed-line-length-none \
-             -ffpe-summary=underflow,overflow -ffree-line-length-512 \
-             -fopenmp 
-FAST      := #-O3 -ffast-math -ffree-line-length-512 \
-             -march=native -fopenmp #    # Optimization flag (https://gcc.gnu.org/onlinedocs/gcc/Optimize-Options.html)
-             #-ftree-parallelize-loops=$(NPROC)
+# Build mode: make MODE=debug|normal|fast   (default normal)
+#   debug  -Og + full runtime checks (-fcheck=all bounds-checks every array
+#          reference). Measured 3.878 min CPU on the 1096-day Kenya run.
+#   normal -O2 -ffp-contract=off, no runtime checks. WITH -ffp-contract=off
+#          this is NUMERICALLY IDENTICAL TO debug: cdo diffn over the same
+#          run reports max abs difference 0 on all 42 variables (the only
+#          flagged records are NaN-vs-NaN in Vinf, which never compare
+#          equal). Same run: 3.113 min CPU, ~20% cheaper than debug.
+#          Without -ffp-contract=off, -O2 emits FMAs and the resulting 1-ULP
+#          shifts flip agents across `generate_random() <= p` tests: measured
+#          42682 of 47130 fields differing. That variant is 5% faster still,
+#          but it is not reproducible -- do not use it for science.
+#   fast   -O3 -ffast-math -march=native. UNTESTED here: neither its speed nor
+#          whether it reproduces normal has been measured. -march=native also
+#          ties the binary to this CPU. Verify both before using it.
+MODE      ?= normal
+COMMON    := -ffixed-line-length-none -ffree-line-length-512 -fopenmp
+ifeq ($(MODE),debug)
+  OPT     := -Og -fbacktrace -Wall -fcheck=all \
+             -ffpe-summary=underflow,overflow $(COMMON)
+else ifeq ($(MODE),fast)
+  OPT     := -O3 -ffast-math -march=native $(COMMON)
+else ifeq ($(MODE),normal)
+  OPT     := -O2 -ffp-contract=off -fbacktrace $(COMMON)
+else
+  $(error MODE must be debug, normal or fast -- got '$(MODE)')
+endif
 EXE       := mobile.out # Name of executable file
 #=========
 # Coupling flag
@@ -98,7 +118,7 @@ all: $(EXE)
 
 $(EXE): ./build/mobile.o
 	@echo '2.- Link step'
-	@$(FC) $(OBJS) -o $(EXE) $(INC_LIBS) $(PROF_LIB) $(DEBUG) $(FAST) 
+	@$(FC) $(OBJS) -o $(EXE) $(INC_LIBS) $(PROF_LIB) $(OPT) 
 
 # Runs second ----------------------------------
 # - Generate main object file only if module object files or
@@ -107,7 +127,7 @@ $(EXE): ./build/mobile.o
 
 ./build/mobile.o: $(MOD2) $(MAIN)
 	@echo '1.- Compile main' $(MAIN)
-	@$(FC) -c $(MAIN) -I $(BUILD_DIR) -o $@ $(INC_FLAGS) $(DEBUG) $(FAST) $(COUPLING_FLAG) $(MOBILITY_FLAG)
+	@$(FC) -c $(MAIN) -I $(BUILD_DIR) -o $@ $(INC_FLAGS) $(OPT) $(COUPLING_FLAG) $(MOBILITY_FLAG)
 
 # Runs first -----------------------------------
 -include $(DEPENDS)
@@ -122,7 +142,7 @@ $(EXE): ./build/mobile.o
 $(MOD2): ./build/%.o : ./src/%.f90 
 	@echo '0.- Compile module' $<
 	@mkdir -p $(BUILD_DIR)
-	@$(FC) -cpp -c $< -J $(BUILD_DIR) -o $@ $(INC_FLAGS) $(DEBUG) $(FAST) $(COUPLING_FLAG) $(MOBILITY_FLAG)
+	@$(FC) -cpp -c $< -J $(BUILD_DIR) -o $@ $(INC_FLAGS) $(OPT) $(COUPLING_FLAG) $(MOBILITY_FLAG)
 # To generate dependency files add the flag -MD to the above command 
 # ... -cpp -MD -c ...
 
