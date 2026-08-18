@@ -42,12 +42,12 @@ MODULE mo_control
 
     logical :: out_S       =.false.  ! Susceptible
     logical :: out_E       =.false.   ! Exposed
-    logical :: out_I       =.true.   ! Infected
-    logical :: out_Ia      =.true.   ! Age-disaggregated symptomatic (Ia)
+    logical :: out_I       =.false.   ! Infected
+    logical :: out_Ia      =.false.   ! Age-disaggregated symptomatic (Ia)
     logical :: out_I_new   =.true.   ! New infections (I_new)
     logical :: out_Ia_new  =.true.   ! Age-disaggregated new infections (Ia_new)
     logical :: out_A       =.false.   ! Asymptomatic
-    logical :: out_Aa      =.true.   ! Age-disaggregated asymptomatic (Aa)
+    logical :: out_Aa      =.false.   ! Age-disaggregated asymptomatic (Aa)
     logical :: out_R       =.false.  ! Recovered
 
     !--- Cholera ----
@@ -89,17 +89,17 @@ MODULE mo_control
     character(len=200) :: birthrate_file = '' ! Name of yearly birth-rate file; blank = scalar birth_rate
     character(len=200) :: mortality_time_file = '' ! Name of age-AND-year mortality-rate file; blank = use mortality_file/mu (age-only, whole-run)
     logical :: in_mortality_time = .false. ! True only if mortality_time_file was supplied -- gates the daily mu_age_today(:) update (see agents_pre_diagnostics)
-    ! Counterfactual mode: the real simulation holds the age structure fixed at
-    ! cumm_age.txt's shape while matching the growth the FACTUAL rates imply,
-    ! instead of applying those rates to the agents directly. Set from &HUMAN
-    ! (it belongs with the demographic-file settings, not &CONST's physical
-    ! parameters). Requires at least one demographic rate file to be supplied.
-    logical :: demog_counterfactual = .false.
-    ! Resolved once in demog_init (mo_agents.f90) from demog_counterfactual
-    ! plus which demographic files were actually given.
+    
+    logical :: demog_counterfactual = .false. ! Counterfactual mode: the real simulation holds the age structure fixed at
+                                              ! cumm_age.txt's shape while matching the growth the FACTUAL rates imply,
+                                              ! instead of applying those rates to the agents directly. Set from &HUMAN
+                                              ! (it belongs with the demographic-file settings, not &CONST's physical
+                                              ! parameters). Requires at least one demographic rate file to be supplied.
+                                              ! Resolved once in demog_init (mo_agents.f90) from demog_counterfactual
+                                              ! plus which demographic files were actually given.
     integer, parameter :: DEMOG_STANDARD = 0 ! scalar mu/birth_rate
     integer, parameter :: DEMOG_FACTUAL  = 1 ! supplied files drive the real run
-    integer, parameter :: DEMOG_COUNTER  = 2 ! shadow-derived g(t) drives the real run
+    integer, parameter :: DEMOG_COUNTER  = 2 ! "shadow"-derived g(t) drives the real run
     integer :: demog_mode = DEMOG_STANDARD
     character(len=200) :: namelist_filename
     !----------------------------------------------------------
