@@ -78,12 +78,12 @@ MODULE mo_const
     ! agents_pre_diagnostics; claimed lock-free by each thread from its own
     ! column.
     integer, allocatable :: nbirths_left(:,:)
-    ! Diagnostic: birth tickets drawn this year vs. how many found a dead/
+    ! Diagnostic: birth tickets drawn over the run vs. how many found a dead/
     ! reserve slot to claim (mo_agents.f90's agents_pre_diagnostics/
-    ! agents_report_birth_capacity) -- reveals whether growth_ratio's
+    ! agents_report_birth_capacity) -- reveals whether growth_ratio_ceiling's
     ! reserve capacity is being exhausted before a run ends.
-    integer :: yearly_births_requested = 0
-    integer :: yearly_births_claimed = 0
+    integer :: run_births_requested = 0
+    integer :: run_births_claimed = 0
     real, allocatable :: pop_dens(:)    ! 1D long array for human population density 
     real, allocatable :: Ipop_dens(:)   ! Inverse of 1D long array for human population density 
     real, allocatable :: D(:)           ! Dilution factor

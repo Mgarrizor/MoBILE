@@ -699,21 +699,22 @@ USE, INTRINSIC :: ISO_C_BINDING
 
         subroutine agents_report_birth_capacity()
         !===
-            ! Diagnostic: prints how many of the past year's drawn birth
-            ! tickets (yearly_births_requested, accumulated daily in
-            ! agents_pre_diagnostics) actually found a dead/reserve slot to
-            ! claim (yearly_births_claimed) vs. went unclaimed because
-            ! growth_ratio's reserve capacity ran out -- then resets both
-            ! counters for the next year (called yearly, see mobile.f90).
+            ! Diagnostic: how many drawn birth tickets found a dead/reserve
+            ! slot to claim, vs. went unclaimed because growth_ratio_ceiling's
+            ! reserve capacity ran out -- then resets the counters. Called
+            ! twice (mobile.f90): at spin-up exit, to flush spin-up's tally,
+            ! and after the time loop, so the figure covers the whole run.
+            ! Not called yearly: doing so broke the in-place progress line
+            ! (mobile.f90 draws it with char(13)/advance='no').
             implicit none
-            if (yearly_births_requested > 0) then
-                print '("Year birth capacity: ",i0," requested, ",i0," claimed, ",i0," unclaimed (",f5.1,"%)")', &
-                    yearly_births_requested, yearly_births_claimed, &
-                    yearly_births_requested - yearly_births_claimed, &
-                    100. * real(yearly_births_requested - yearly_births_claimed) / real(yearly_births_requested)
+            if (run_births_requested > 0) then
+                print '("Birth capacity: ",i0," requested, ",i0," claimed, ",i0," unclaimed (",f5.1,"%)")', &
+                    run_births_requested, run_births_claimed, &
+                    run_births_requested - run_births_claimed, &
+                    100. * real(run_births_requested - run_births_claimed) / real(run_births_requested)
             end if
-            yearly_births_requested = 0
-            yearly_births_claimed = 0
+            run_births_requested = 0
+            run_births_claimed = 0
         end subroutine agents_report_birth_capacity
 
         subroutine agents_diagnostics(idis,iagent)
@@ -988,8 +989,8 @@ USE, INTRINSIC :: ISO_C_BINDING
                         nbirths_left(ixy,t) = min(remaining, dead_t)
                         remaining = remaining - nbirths_left(ixy,t)
                     end do
-                    yearly_births_requested = yearly_births_requested + n_tot
-                    yearly_births_claimed = yearly_births_claimed + (n_tot - remaining)
+                    run_births_requested = run_births_requested + n_tot
+                    run_births_claimed = run_births_claimed + (n_tot - remaining)
                 end if
             end do
             !

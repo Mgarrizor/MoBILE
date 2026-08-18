@@ -609,12 +609,12 @@ time_loop: do itime=2,nsteps
   ! Write 3D fields (x,y,t) here
   if (mod(itime-1, 365) == 0) then
       call agents_update_age_counts()
-      call agents_report_birth_capacity()
   end if
   call netcdf_3D_output(itime,Var3D)
   !
 end do time_loop
-call agents_report_birth_capacity() ! Final partial year, if nsteps isn't a multiple of 365
+write(*,*) ' ' ! close the in-place progress line before printing below it
+call agents_report_birth_capacity() ! whole-run total
 !********************************************************
 !
 ! Write 2D fields (x,y) here and close NetCDF file
