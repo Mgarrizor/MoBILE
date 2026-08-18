@@ -1686,24 +1686,25 @@ USE, INTRINSIC :: ISO_C_BINDING
                         !
                         ! ********** Interventions **************
                         !
-                        ! f(a,t) = 1   
+                        ! f = interv_factor (&CONST, default 1 = none), applied to
+                        ! both directions of the cycle.
                         !
                         !****************************************
                         !
                         ! All-sporogonic-stages biting rate
                         !
-                        lambda_all = m_all(j)*1. ! f(a,t) = 1
+                        lambda_all = m_all(j)*interv_factor
                         !
                         ! Human to Vector transmission
                         !
-                        lambda_0 = m_0(j)*1. ! f(a,t) = 1 
+                        lambda_0 = m_0(j)*interv_factor
                         !P_0 = P_max*(1 - exp(-lambda_0*P_h0))                              ! Homogeneous Poisson model
                         !P_0 = P_max*(1 - (k_NB/(k_NB+lambda_0*P_h0))**k_NB)                ! Negative Binomial model
                         P_0 = P_max*(1 - exp(-people(iagent)%agent_ID%w_NB*lambda_0*P_h0))  ! Heterogeneous Poisson model
                         !
                         ! Vector to Human transmission
                         !
-                        lambda_1 = m_1(j)*1. ! f(a,t) = 1 
+                        lambda_1 = m_1(j)*interv_factor
                         !P_1 = 1 - exp(-lambda_1*P_v0)                              ! Homogeneous Poisson model
                         !P_1 = 1 - (k_NB/(k_NB+lambda_1*P_v0))**k_NB                ! Negative Binomial model
                         P_1 = 1 - exp(-people(iagent)%agent_ID%w_NB*lambda_1*P_v0)  ! Heterogeneous Poisson model
