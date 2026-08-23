@@ -285,6 +285,13 @@ MODULE mo_const
     ! both human->vector and vector->human. 1 = no intervention.
     ! Senegal, 400 steps: f=0.5 gave mean EIR x0.47.
     real :: interv_factor = 1.
+    ! Spatially varying intervention:  f(x) = interv_factor * exp(beta*u(x))
+    ! with u the signed distance in DEGREES from the domain centre along an axis
+    ! at bearing `interv_theta` (clockwise from north), and f capped at 1.
+    ! beta = 0 reproduces the uniform scalar exactly.
+    real :: interv_beta  = 0.   ! log-slope of f per degree along the axis
+    real :: interv_theta = 0.   ! axis bearing [deg clockwise from north]
+    real, allocatable :: interv_f(:)  ! (nxy) per-cell intervention factor
     real :: m_short, m_long             ! Fraction of short and long trip travellers
     real :: r_ret                       ! Time scale for long trip return home
     real :: fE_0                        ! Initial conditions
@@ -442,6 +449,8 @@ MODULE mo_const
         iip = 10              ! Intrinsic incubation period [day] Cowman et al 2016 [DOI: https://doi.org/10.1016/j.cell.2016.07.055]
         bite_night = 0.       ! Base daily probability to get bitten overnight. Should be a function of wellfare index (availability of bednets, ...)
         interv_factor = 1.    ! Intervention multiplier on human-vector contact (1 = none)
+        interv_beta   = 0.    ! Spatial log-slope of f per degree (0 = uniform)
+        interv_theta  = 0.    ! Axis bearing for the f gradient [deg from north]
         bite_day   = 0.       ! Base daily probability to get bitten during day (relevant for short daily trips and vectors that are active during day hours)
         P_v0 = 0.3            ! Base vector to human transmission probability  Ermert et al. 2011 [DOI:]
         P_h0 = 0.2            ! Base human to vector transmission probability          "  "

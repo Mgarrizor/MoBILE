@@ -1785,18 +1785,18 @@ USE, INTRINSIC :: ISO_C_BINDING
                         !
                         ! All-sporogonic-stages biting rate
                         !
-                        lambda_all = m_all(j)*interv_factor
+                        lambda_all = m_all(j)*interv_f(j)
                         !
                         ! Human to Vector transmission
                         !
-                        lambda_0 = m_0(j)*interv_factor
+                        lambda_0 = m_0(j)*interv_f(j)
                         !P_0 = P_max*(1 - exp(-lambda_0*P_h0))                              ! Homogeneous Poisson model
                         !P_0 = P_max*(1 - (k_NB/(k_NB+lambda_0*P_h0))**k_NB)                ! Negative Binomial model
                         P_0 = P_max*(1 - exp(-people(iagent)%agent_ID%w_NB*lambda_0*P_h0))  ! Heterogeneous Poisson model
                         !
                         ! Vector to Human transmission
                         !
-                        lambda_1 = m_1(j)*interv_factor
+                        lambda_1 = m_1(j)*interv_f(j)
                         !P_1 = 1 - exp(-lambda_1*P_v0)                              ! Homogeneous Poisson model
                         !P_1 = 1 - (k_NB/(k_NB+lambda_1*P_v0))**k_NB                ! Negative Binomial model
                         P_1 = 1 - exp(-people(iagent)%agent_ID%w_NB*lambda_1*P_v0)  ! Heterogeneous Poisson model

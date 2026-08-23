@@ -184,6 +184,39 @@ MODULE mo_grid
             !
         end function find_block
   !--------------------------------------------------------------------------------------
+  subroutine interv_field_init(nxy,x_coord_1d,y_coord_1d,lon_coord,lat_coord)
+  !===
+      ! f(x) = interv_factor * exp(interv_beta * u(x)),  u measured in degrees from
+      ! the domain centre along the axis at bearing interv_theta (clockwise from
+      ! north), then capped at 1 (f > 1 would mean enhanced transmission).
+      ! Centring u makes interv_factor the geometric mean of the field, so it keeps
+      ! its meaning as the uniform-equivalent level.
+      implicit none
+      integer, intent(in) :: nxy
+      integer, allocatable, intent(in) :: x_coord_1d(:), y_coord_1d(:)
+      real,    allocatable, intent(in) :: lon_coord(:), lat_coord(:)
+      real :: lat0, lon0, u, ct, st, dtor
+      integer :: j
+
+      allocate(interv_f(nxy))
+      dtor = acos(-1.)/180.
+      ct = cos(interv_theta*dtor); st = sin(interv_theta*dtor)
+      lat0 = 0.5*(minval(lat_coord) + maxval(lat_coord))
+      lon0 = 0.5*(minval(lon_coord) + maxval(lon_coord))
+      do j = 1, nxy
+          u = (lat_coord(y_coord_1d(j)) - lat0)*ct + (lon_coord(x_coord_1d(j)) - lon0)*st
+          interv_f(j) = min(interv_factor*exp(interv_beta*u), 1.0)
+      end do
+      if (interv_beta /= 0.) then
+          print '(" Intervention field: f0=",f7.4," beta=",f7.4,"/deg theta=",f6.1," deg")', &
+              interv_factor, interv_beta, interv_theta
+          print '("   f range ",f7.4," - ",f7.4,"   capped cells: ",i0)', &
+              minval(interv_f), maxval(interv_f), count(interv_f >= 1.0)
+      end if
+  end subroutine interv_field_init
+
+  !--------------------------------------------------------------------------------------
+
   subroutine grid_allocate(nxy,nlon,nlat,y_coord_1d,x_coord_1d)
       implicit none
 

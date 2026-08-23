@@ -202,7 +202,7 @@ MODULE mo_namelist
                              m_long, m_short, D_grav, D_pop, H_0,                        & ! mobility params gravity model
                              B_0, fS_0, fI_0, fA_0, fR_0,                                & ! initial conditions
                              K_h, b_rate, P_v0, k_NB, P_h0, P_max,                       & ! Vector-human transmission params
-                             interv_factor,                                              & ! Intervention multiplier on human-vector contact (1 = none)
+                             interv_factor, interv_beta, interv_theta,                   & ! Intervention multiplier + spatial gradient
                              wurbn_ratio,                                                & ! "Urban" fraction
                              wperm_ratio, wperm_default,                                 & ! Permanent fraction
                              wpond_min, wpond_max, wpond_ratio, wpond_shapep2,           & ! Pond scheme

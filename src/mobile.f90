@@ -278,6 +278,7 @@ itime = 1
       print*, gengam(k_NB,k_NB)
       !=
         call grid_allocate(nxy,nlon,nlat,y_coord_1d,x_coord_1d)
+        call interv_field_init(nxy,x_coord_1d,y_coord_1d,lon_coord,lat_coord)
       !=
       !
     ! 0.1.2 No input
@@ -296,6 +297,7 @@ itime = 1
         call grid_allocate(nxy,nlon,nlat,y_coord_1d,x_coord_1d)
         call grid_no_input(nxy,dx,dy,ncity,seed,H_0,D_pop,pop_dens,D,x_coord_1d,y_coord_1d,radial &
                             ,nlon,nlat,lat_coord,lon_coord,L)
+        call interv_field_init(nxy,x_coord_1d,y_coord_1d,lon_coord,lat_coord)
         allocate(mask_pop(nxy))
         mask_pop(:)=.true.
       !=
