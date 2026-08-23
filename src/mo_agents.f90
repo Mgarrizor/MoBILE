@@ -122,13 +122,9 @@ USE, INTRINSIC :: ISO_C_BINDING
 #endif
 
             !
-            ! Note: this used to call random_seed() here with no arguments, which draws
-            ! a fresh seed from the system clock -- meaning every simulation drew a
-            ! different series of random numbers, even for two runs of the same
-            ! namelist. The random number generator is now seeded once, deterministically,
-            ! from the namelist `seed`, at program start (see agents_seed_threads,
-            ! called from mobile.f90) -- do not reseed here or the run stops being
-            ! reproducible.
+            ! Do not reseed here. Every thread's RNG is seeded once from the
+            ! namelist `seed` at program start (agents_seed_threads); reseeding
+            ! anywhere else discards that sequence and breaks reproducibility.
 
             ! Calculate number of agents per grid cell for a given total, nagent, and
             ! the input human population density, pop_dens
@@ -808,8 +804,8 @@ USE, INTRINSIC :: ISO_C_BINDING
             case (0) ! Cholera -------------------------------
             !
             ! Increase age by da = 1/365. Runs during spin-up too: the age
-            ! structure is now held at cumm_age.txt's shape by the rates
-            ! themselves (see demog_rates_today), not by freezing anyone.
+            ! structure is held at cumm_age.txt's shape by the rates
+            ! (see demog_rates_today), not by freezing turnover.
             people(iagent)%agent_ID%age =  people(iagent)%agent_ID%age + da
             !
             istat    =  people(iagent)%health_status%cholera_status%status
@@ -828,8 +824,8 @@ USE, INTRINSIC :: ISO_C_BINDING
             case (1) ! Malaria -------------------------------
             !
             ! Increase age by da = 1/365. Runs during spin-up too: the age
-            ! structure is now held at cumm_age.txt's shape by the rates
-            ! themselves (see demog_rates_today), not by freezing anyone.
+            ! structure is held at cumm_age.txt's shape by the rates
+            ! (see demog_rates_today), not by freezing turnover.
             people(iagent)%agent_ID%age =  people(iagent)%agent_ID%age + da
             !
             istat   =  people(iagent)%health_status%malaria_status%status
@@ -1040,16 +1036,12 @@ USE, INTRINSIC :: ISO_C_BINDING
             ! demog_rates_today.
             call demog_rates_today(itime)
             b_t = b_t_today
-            ! ignbin (mo_ranlib.f90) hard-STOPs for pp<=0 or pp>=1, so a
-            ! legitimate zero birth rate (e.g. a 0.0 row in birthrate_file,
-            ! or birth_rate=0 in params.txt) would abort the run.
+            ! ignbin (mo_ranlib.f90) hard-STOPs for pp<=0 or pp>=1, so clamp:
+            ! a zero birth rate is legitimate (a 0.0 row in birthrate_file).
             b_t = min(max(b_t, 1.0e-12), 0.999999)
-            ! No npeop>0 guard here on purpose: ignbin(0,b_t) already returns 0,
-            ! so an emptied cell's tickets are zeroed correctly anyway, and
-            ! skipping the call would consume one fewer random number and shift
-            ! the whole downstream RNG stream -- which would forfeit the
-            ! bit-identical spin_up=0 regression that proves this change only
-            ! affects the spin-up phase.
+            ! Called for every cell, including empty ones: ignbin(0,b_t) returns
+            ! 0 anyway, and skipping it would consume one fewer random number and
+            ! shift the downstream RNG stream.
             do ixy = 1, nxy
                 if (mask_pop(ixy)) then
                     n_tot = ignbin(npeop(ixy), b_t)

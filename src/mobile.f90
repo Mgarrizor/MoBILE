@@ -167,22 +167,14 @@ implicit none
 call namelist_inout(run_name,disID,nsteps,seed,spin_up)
 !
 ! ---------------------------------------------------------------------
-! Reproducibility: make a run repeatable bit-for-bit when it is re-run
-! with the same `seed`, the same number of OpenMP threads, and the same
-! schedule. Two things used to stop this from being possible, both fixed
-! here:
-!   1) RNGLIB (used below, and for the agent-weight sampler gengam) was
-!      always seeded from the fixed word 'randomizer', so the namelist
-!      `seed` never actually reached it -- every run drew the same
-!      RNGLIB numbers regardless of what `seed` was set to. Also, the
-!      namelist used to be read further below, i.e. after this seeding
-!      already happened, so `seed` could not have been used here even if
-!      we had wanted to.
-!   2) The intrinsic random number generator (RANDOM_NUMBER, used almost
-!      everywhere else: agent health transitions, mobility choices,
-!      disease-profile draws) was reseeded from the system clock once at
-!      agent start-up and again on every single simulated day -- so two
-!      runs of the exact same namelist never produced the same numbers.
+! Reproducibility: a run repeats bit-for-bit given the same `seed`, the
+! same number of OpenMP threads and the same schedule. Both generators are
+! seeded here, once, from the namelist `seed`:
+!   1) RNGLIB, used below and by the agent-weight sampler gengam.
+!   2) The intrinsic RANDOM_NUMBER, used for agent health transitions,
+!      mobility choices and disease-profile draws.
+! The namelist must therefore be read before this point, and neither
+! generator may be reseeded later.
 ! ---------------------------------------------------------------------
 !
 ! Seed RNGLIB from the namelist `seed` (write() turns the integer into a

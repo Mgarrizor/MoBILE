@@ -124,14 +124,10 @@ subroutine time_step(disID,itime)
       if ((agents)) then
       !=
         !
-        ! Note: this used to call random_seed() here, with no arguments, at the start
-        ! of every single simulated day. That draws a fresh seed from the system clock
-        ! each time, which broke reproducibility twice over: it discarded the
-        ! deterministic sequence the run started with, and it only ever reset the
-        ! calling (master) thread's numbers anyway, doing nothing for the other
-        ! threads below. The random number generator is now seeded once, for every
-        ! thread, at program start (see agents_seed_threads in mo_agents.f90) and
-        ! never touched again -- do not add a reseed call back here.
+        ! Do not add a reseed call here. Seeding is done once per thread at
+        ! program start (agents_seed_threads); a reseed inside the time loop
+        ! would discard the deterministic sequence and, being outside the
+        ! parallel region, would only affect the master thread anyway.
         !
         ! Pre-diagnostics calculations
         call agents_pre_diagnostics(disID,itime)

@@ -21,20 +21,14 @@ PROF_LIB  := -L/opt/homebrew/opt/gperftools/lib -lprofiler -ltcmalloc  # Profili
 #-----------------------------------------
 # (https://stackoverflow.com/questions/3676322/what-flags-to-set-for-gfortran-compiler-to-catch-faulty-code)
 # Build mode: make MODE=debug|normal|fast   (default normal)
-#   debug  -Og + full runtime checks (-fcheck=all bounds-checks every array
-#          reference). Measured 3.878 min CPU on the 1096-day Kenya run.
-#   normal -O2 -ffp-contract=off, no runtime checks. WITH -ffp-contract=off
-#          this is NUMERICALLY IDENTICAL TO debug: cdo diffn over the same
-#          run reports max abs difference 0 on all 42 variables (the only
-#          flagged records are NaN-vs-NaN in Vinf, which never compare
-#          equal). Same run: 3.113 min CPU, ~20% cheaper than debug.
-#          Without -ffp-contract=off, -O2 emits FMAs and the resulting 1-ULP
-#          shifts flip agents across `generate_random() <= p` tests: measured
-#          42682 of 47130 fields differing. That variant is 5% faster still,
-#          but it is not reproducible -- do not use it for science.
-#   fast   -O3 -ffast-math -march=native. UNTESTED here: neither its speed nor
-#          whether it reproduces normal has been measured. -march=native also
-#          ties the binary to this CPU. Verify both before using it.
+#   debug  -Og plus full runtime checks (-fcheck=all bounds-checks every array
+#          reference). ~25% slower than normal.
+#   normal -O2 -ffp-contract=off, no runtime checks. Bit-identical to debug.
+#          -ffp-contract=off is REQUIRED for that: with FMA contraction the
+#          1-ULP shifts flip agents across `generate_random() <= p`, which
+#          changes results. Do not remove it.
+#   fast   -O3 -ffast-math -march=native. Untested, and -march=native ties the
+#          binary to this CPU. Verify speed and reproducibility before use.
 MODE      ?= normal
 COMMON    := -ffixed-line-length-none -ffree-line-length-512 -fopenmp
 ifeq ($(MODE),debug)
