@@ -34,36 +34,76 @@
 #--------------------------------------------------------
 country1='SEN'                                             # Country code
 country2='sen'
-year=2000                                                  # Available years are 2020
+year=2015                                                  # Available years are 2020
 ages=(0 1 5 10 15 20 25 30 35 40 45 50 55 60 65 70 75 80)  # This is hardcoded WorldPop age structure resolution
-DIRECTORY="age_structure"
+DIRECTORY="age_structure_${year}"
+wd=$PWD
 
-constrained=false   # If True then we're fetching 2015-2030
+
+constrained=true  # If True then we're fetching 2015-2030
                    # otherwise we are using 2000-2020 
 
+ds1=false    # 2020          Constrained
+ds2=false   # 2000 - 2020 Unconstrained
+ds3=true   # 2015 - 2030 1km  resolution
+ds4=false   # 2015 - 2030 100m resolution
+
+
+ABM=False
+
+if ( ${ds1} ) ; then
+    DIRECTORY="Constrained_2020/age_structure_${year}"
+elif ( ${ds2} ) ; then
+    DIRECTORY="Unconstrained_2000_2020/age_structure_${year}"
+elif ( ${ds3} ) ; then
+    DIRECTORY="2015_2030_1km/age_structure_${year}"
+else 
+    DIRECTORY="2015_2030_100m/age_structure_${year}"
+fi
 
 if [ ! -d "$DIRECTORY" ]; then
 
+    echo 'Working directory:' ${wd}
     mkdir -p ${DIRECTORY} && cd ${DIRECTORY}
     echo 'Downloading age files'
     echo 'Country:' ${country1} - 'Year:' ${year}
-    for age in ${ages[@]}; do
-        echo 'Age:' $age
 
-        if ( ${constrained} ) ; then
+    if ( ${ds3} ) || ( ${ds4} ) ; then
+        ages=(00 01 05 10 15 20 25 30 35 40 45 50 55 60 65 70 75 80)  # R2025A uses zero-padded age codes
+    fi
+
+    for age in "${ages[@]}"; do
+        echo 'Age:' $age
+        age_nopad=$((10#$age))  # strip leading zeros so all .nc outputs share one naming convention
+                                # the 10# forces base-10 so "00"/"01"/"05" become 0/1/5
+
+        if ( ${ds1} ) ; then
+            # Only 2020 is available
+            echo 'Only 2020 is available. Setting year --> 2020'
+            year=2020
             # Female
             wget -q https://data.worldpop.org/GIS/AgeSex_structures/Global_2000_2020_Constrained_UNadj/2020/${country1}//${country2}_f_${age}_${year}_constrained_UNadj.tif
             gdal_translate -q -of NetCDF ${country2}_f_${age}_${year}_constrained_UNadj.tif ${country2}_f_${age}_${year}.nc
             # Male
             wget -q https://data.worldpop.org/GIS/AgeSex_structures/Global_2000_2020_Constrained_UNadj/2020/${country1}//${country2}_m_${age}_${year}_constrained_UNadj.tif
             gdal_translate -q -of NetCDF ${country2}_m_${age}_${year}_constrained_UNadj.tif ${country2}_m_${age}_${year}.nc
-        else
+        elif ( ${ds2} ) ; then
             # Female
             wget -q https://data.worldpop.org/GIS/AgeSex_structures/Global_2000_2020_1km/unconstrained/${year}/${country1}/${country2}_f_${age}_${year}_1km.tif
             gdal_translate -q -of NetCDF ${country2}_f_${age}_${year}_1km.tif ${country2}_f_${age}_${year}.nc
             # Male
             wget -q https://data.worldpop.org/GIS/AgeSex_structures/Global_2000_2020_1km/unconstrained/${year}/${country1}/${country2}_m_${age}_${year}_1km.tif
             gdal_translate -q -of NetCDF ${country2}_m_${age}_${year}_1km.tif ${country2}_m_${age}_${year}.nc
+        elif ( ${ds3} ) ; then
+            # Female
+            wget -q https://data.worldpop.org/GIS/AgeSex_structures/Global_2015_2030/R2025A/${year}/${country1}/v1/1km_ua/constrained/${country2}_f_${age}_${year}_CN_1km_R2025A_UA_v1.tif
+            gdal_translate -q -of NetCDF ${country2}_f_${age}_${year}_CN_1km_R2025A_UA_v1.tif ${country2}_f_${age_nopad}_${year}.nc
+            # Male
+            wget -q https://data.worldpop.org/GIS/AgeSex_structures/Global_2015_2030/R2025A/${year}/${country1}/v1/1km_ua/constrained/${country2}_m_${age}_${year}_CN_1km_R2025A_UA_v1.tif
+            gdal_translate -q -of NetCDF ${country2}_m_${age}_${year}_CN_1km_R2025A_UA_v1.tif ${country2}_m_${age_nopad}_${year}.nc
+        else
+            echo 'ds4'
+            
         fi    
     done
     
@@ -72,13 +112,14 @@ if [ ! -d "$DIRECTORY" ]; then
 
     mv *.nc NetCDF/ 
     mv *.tif GeoTiff/
-    cd ..
+    cd ${wd}
 fi
 
 if [ ! -f "$DIRECTORY/cumm_age.txt" ]; then
 echo ' Processing age structure'
-
+echo ${DIRECTORY}
 cd ${DIRECTORY}
+
 python3 <<EOF
 import xarray as xr
 import numpy as np
@@ -252,6 +293,85 @@ plt.close()
 
 #================= Save cummulative array =======
 np.savetxt('cumm_age.txt', y_new, fmt='%.4f', delimiter=' ', newline='\n', header='', footer='', comments='# ', encoding=None)
+
+
+# ============= Figure 4 ====================
+
+if ${ABM} == True:
+    print('ABM')
+
+    # Open simulation
+    ds_ABM = xr.open_dataset("../control/control3.nc")["Age"]
+    
+    # Pre-extract data for the inset (avoids xarray touching ax_inset)
+    ds_ABM_norm = ds_ABM / np.sum(ds_ABM)
+    x_vals = ds_ABM_norm.coords[ds_ABM_norm.dims[0]].values
+    y_vals = ds_ABM_norm.values
+    
+    fig, ax = plt.subplots(dpi=500)
+    
+    p0, = plt.plot(ages_model, y_inter, '-o', ms=5.5, color='steelblue', lw=1.5, alpha=0.8)
+    
+    p21, = plt.plot(ages_model, exponential_func(ages_model, A_fit, 0.0371), color='red', ls='dashed')
+    p22, = plt.plot(ages_model, exponential_func(ages_model, A_fit, 0.0411), color='green', ls='-.')
+    p1,  = plt.plot(ages_model, exponential_func(ages_model, A_fit, B_fit), color='k', ls='dotted')
+    
+    plt.vlines(1/0.0371, 0, exponential_func(1/0.0371, A_fit, 0.0371), color='red', alpha=0.2)
+    p31 = plt.scatter(1/0.0371, exponential_func(1/0.0371, A_fit, 0.0371), color='red', marker='s')
+    plt.vlines(1/0.0411, 0, exponential_func(1/0.0411, A_fit, 0.0411), color='green', alpha=0.2)
+    p32 = plt.scatter(1/0.0411, exponential_func(1/0.0411, A_fit, 0.0411), color='green', marker='D')
+    plt.vlines(1/B_fit, 0, exponential_func(1/B_fit, A_fit, B_fit), color='k', alpha=0.2)
+    p4  = plt.scatter(1/B_fit, exponential_func(1/B_fit, A_fit, B_fit), color='k')
+    
+    p5, = (ds_ABM/np.sum(ds_ABM)).plot.step(color="orange", ls="solid", alpha=0.9)
+    
+   # plt.text(0.55, 0.1, r'$\gamma_{fit}$ $\sim$'+f'{B_fit:.4f} / year', transform=plt.gca().transAxes,
+   #          bbox=dict(facecolor='none', edgecolor='black', boxstyle='round,pad=1'), fontsize=13)
+    
+    plt.xlabel("Age [year]", fontsize=13)
+    plt.ylabel("Prob. density", fontsize=13)
+    plt.yscale('log')
+    plt.xticks(fontsize=13)
+    plt.yticks(fontsize=13)
+    plt.grid(alpha=0.4)
+    
+    l = ax.legend([p0, p1, p21, p22, (p31, p32, p4), p5],
+                  ['Interpolated WorldPop', r'Exponential fit  $\sim 0.0416 / year$', r'Dielmo $\sim 0.0371 / year$', r'Ndiop $\sim 0.0411 / year$', 'Means', 'ABM'],
+                  handler_map={tuple: HandlerTuple(ndivide=None)}, fontsize=13)
+    
+    # --- Inset ---
+    from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset
+    
+    ax_inset = inset_axes(ax, width="35%", height="35%", loc='upper right')
+    
+    ax_inset.plot(ages_model, y_inter, '-o', ms=5.5, color='steelblue', lw=1.5, alpha=0.8)
+    ax_inset.plot(ages_model, exponential_func(ages_model, A_fit, 0.0371), color='red', ls='dashed')
+    ax_inset.plot(ages_model, exponential_func(ages_model, A_fit, 0.0411), color='green', ls='-.')
+    ax_inset.plot(ages_model, exponential_func(ages_model, A_fit, B_fit), color='k', ls='dotted')
+    ax_inset.vlines(1/0.0371, 0, exponential_func(1/0.0371, A_fit, 0.0371), color='red', alpha=0.2)
+    ax_inset.scatter(1/0.0371, exponential_func(1/0.0371, A_fit, 0.0371), color='red', marker='s')
+    ax_inset.vlines(1/0.0411, 0, exponential_func(1/0.0411, A_fit, 0.0411), color='green', alpha=0.2)
+    ax_inset.scatter(1/0.0411, exponential_func(1/0.0411, A_fit, 0.0411), color='green', marker='D')
+    ax_inset.vlines(1/B_fit, 0, exponential_func(1/B_fit, A_fit, B_fit), color='k', alpha=0.2)
+    ax_inset.scatter(1/B_fit, exponential_func(1/B_fit, A_fit, B_fit), color='k')
+    ax_inset.step(x_vals, y_vals, color="orange", ls="solid", alpha=0.9)  # plain matplotlib, no xarray
+    
+    ax_inset.set_xlim(22, 28)
+    ax_inset.set_ylim(1.4e-2, 1.6e-2)
+    ax_inset.set_yscale('log')
+    ax_inset.tick_params(labelsize=8, labelbottom=False, labelleft=False)
+    ax_inset.set_xlabel('')
+    ax_inset.set_ylabel('')
+    ax_inset.grid(alpha=0.4)
+    
+    mark_inset(ax, ax_inset, loc1=3, loc2=4, fc="none", ec="gray", lw=0.8, alpha=0.6)
+
+    ax_inset.yaxis.set_major_formatter(plt.NullFormatter())
+    ax_inset.yaxis.set_minor_formatter(plt.NullFormatter())
+    
+    plt.tight_layout()
+    plt.savefig('decay_rate_fit_ABM.pdf', dpi=500, transparent=True)
+
 EOF
 fi
 
