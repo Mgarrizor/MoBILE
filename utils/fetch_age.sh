@@ -213,7 +213,11 @@ plt.close()
 mean_stats = np.mean(stats[:-1], axis=1)
 ages_model = np.arange(int(np.floor(np.min(ages_shift))), int(np.ceil(np.max(ages_shift)))+1)
 
-splines = scipy.interpolate.make_interp_spline(ages_shift,np.cumsum(mean_stats), k = 3)
+# PCHIP rather than a cubic B-spline: the input is a CUMULATIVE distribution and an
+# unconstrained cubic overshoots between knots, producing stretches where the implied
+# density rises with age. MoBILE cannot reproduce a rising density (it would need
+# survival > 1) and clamps them, losing shape fidelity.
+splines = scipy.interpolate.PchipInterpolator(ages_shift, np.cumsum(mean_stats))
 y_new = splines(ages_model).T
 
 plt.subplots(dpi=100, sharey = False)
