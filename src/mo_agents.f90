@@ -1034,14 +1034,10 @@ USE, INTRINSIC :: ISO_C_BINDING
             ! slots claim from their own thread's column (lock-free) in
             ! agents_malaria/agents_cholera.
             !
-            ! This runs on EVERY day, spin-up included. It used to be skipped
-            ! while in_spinup, which held the age structure at its day-0 values
-            ! but also stopped all population turnover -- so spin-up
-            ! equilibrated immunity in a population that never aged and never
-            ! received a naive newborn, which for malaria is a large distortion.
-            ! The structure is now held by the RATES instead (shape-invariant
-            ! generator at g=1); which rates today gets is a function of
-            ! (mode, spin-up) -- see demog_rates_today.
+            ! Runs every day, spin-up included: the age structure is held by the
+            ! RATES (shape-invariant generator at g=1), not by freezing turnover.
+            ! Which rates apply is a function of (mode, spin-up) -- see
+            ! demog_rates_today.
             call demog_rates_today(itime)
             b_t = b_t_today
             ! ignbin (mo_ranlib.f90) hard-STOPs for pp<=0 or pp>=1, so a

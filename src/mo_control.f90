@@ -67,8 +67,8 @@ MODULE mo_control
     logical :: out_hbr  =.false. ! Human Biting Rate
     logical :: in_imm   =.false. ! Input immunity forcing flag: always false and automatically set to true is the corresponding
                                  ! forcing file is found.
-    logical :: in_spinup =.false. ! True only while the spin-up loop (mobile.f90) is running --
-                                  ! NOTE: demographics (aging, births, deaths) are frozen during spin-up.
+    logical :: in_spinup =.false. ! True only during the spin-up loop (mobile.f90). Selects the
+                                  ! shape-invariant g=1 rate regime (demog_rates_today).
     !
     ! Defined in mo_vectri.f90
     !
