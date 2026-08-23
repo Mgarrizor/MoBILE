@@ -263,6 +263,13 @@ MODULE mo_const
     real, allocatable :: imm(:)   ! 1D long array for Endemicity level / Immunity
     ! Per-thread staging (nxy, nthreads) for EIR/hbr/imm -- same pattern as arr_p_priv above
     real, allocatable :: EIR_priv(:,:), hbr_priv(:,:), imm_priv(:,:)
+    ! Cell-mean of the per-agent infection probability P_1 = 1-exp(-w_NB*lambda_1*P_v0).
+    ! EIR is a rate and can grow without bound; P_1 saturates at 1, so it is the
+    ! quantity that shows where transmission is actually limited.
+    real, allocatable :: P1(:), P1_priv(:,:)
+    real(8), allocatable :: esc_log(:) ! Running sum of log(1-P1): escape exponent
+    integer :: nday_sat = 0            ! Days accumulated into esc_log
+    logical :: sat_reported = .false.  ! Saturation diagnostic already printed
     real, allocatable :: imm_2D(:,:) ! (nx,ny) 2D array for immunity forcing at slice itime
     real, allocatable, target :: imm_a(:,:) !(nxy,nage_blocks) Immunity disaggregated by age
     real, allocatable, target :: N_a(:,:) !(nxy,nage_blocks)   Agent number disaggregated by age

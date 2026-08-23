@@ -42,35 +42,38 @@ MODULE mo_control
 
     logical :: out_S       =.false.  ! Susceptible
     logical :: out_E       =.false.   ! Exposed
-    logical :: out_I       =.false.   ! Infected
-    logical :: out_Ia      =.false.   ! Age-disaggregated symptomatic (Ia)
+    logical :: out_I       =.true.    ! Infected
+    logical :: out_Ia      =.true.    ! Age-disaggregated symptomatic (Ia)
     logical :: out_I_new   =.true.   ! New infections (I_new)
     logical :: out_Ia_new  =.true.   ! Age-disaggregated new infections (Ia_new)
-    logical :: out_A       =.false.   ! Asymptomatic
-    logical :: out_Aa      =.false.   ! Age-disaggregated asymptomatic (Aa)
+    logical :: out_A       =.true.    ! Asymptomatic
+    logical :: out_Aa      =.true.    ! Age-disaggregated asymptomatic (Aa)
     logical :: out_R       =.false.  ! Recovered
 
     !--- Cholera ----
     logical :: out_B    =.false.  ! Bacterial density (could be changed to generic source of disease, e.g., B, V,...)
     logical :: out_F    =.false.  ! Force of infection
     !--- Malaria ----
-    logical :: out_EIR  =.true.  ! Entomological Inoculation Rate
-    logical :: out_imm  =.true.  ! Endemicity level / Immunity
+    logical :: out_EIR  =.true.   ! Entomological Inoculation Rate
+    logical :: out_P1   =.true.   ! Probability of >=1 infective bite per day (grid mean)
+    integer :: nday_sat_max = 730 ! Days of the real run used by the transmission saturation diagnostic
+    logical :: out_imm  =.true.   ! Endemicity level / Immunity
     logical :: out_imm_a=.true.   ! Age-disaggregated Immunity
-    ! People per age block per cell. Ia/Aa/Ia_new/imm_a are all divided by
-    ! N_a, so without it age-resolved output cannot be turned back into
-    ! counts except by assuming every cell shares the national age structure.
+    
     logical :: out_N_a  =.true.  ! Age-disaggregated population (N_a)
-    logical :: out_hbr  =.false.  ! Human Biting Rate
+                                 ! --> People per age class per cell. Ia/Aa/Ia_new/imm_a are all divided by
+                                 !     N_a, so without it age-resolved output cannot be turned back into
+                                 !     counts except by assuming every cell shares the national age structure.
+    logical :: out_hbr  =.false. ! Human Biting Rate
     logical :: in_imm   =.false. ! Input immunity forcing flag: always false and automatically set to true is the corresponding
                                  ! forcing file is found.
     logical :: in_spinup =.false. ! True only while the spin-up loop (mobile.f90) is running --
-                                  ! demographics (aging, births, deaths) are frozen during spin-up.
+                                  ! NOTE: demographics (aging, births, deaths) are frozen during spin-up.
     !
     ! Defined in mo_vectri.f90
     !
     !======= Clima
-    logical :: out_rain =.true.  ! Rainfall
+    logical :: out_rain =.true. ! Rainfall
     logical :: out_t2m  =.true. ! Air temperature
 
     !----------------------------------------------------------

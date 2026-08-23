@@ -264,6 +264,12 @@ MODULE mo_netcdf
             !
         end if
         !
+        if ((out_P1)) then
+            !
+            call write_check_3D(itime,P1,var_out,'NetCDF Status P1',ncid_grp(2))
+            !
+        end if
+        !
         if ((out_hbr)) then
             !
             call write_check_3D(itime,hbr,var_out,'NetCDF Status Human Biting Rate',ncid_grp(2))
@@ -463,7 +469,7 @@ MODULE mo_netcdf
         ! Declarations or interfaces related to the coupled (to VECTRI) mode
         dim = dim +merge(1, 0, out_wurbn) +merge(1, 0, out_wperm)   +merge(1, 0, out_wpond) &
                   +merge(1, 0, out_vect)  +merge(1, 0, out_vecinfc) +merge(1, 0, out_larv)&
-                  +merge(1, 0, out_EIR)   +merge(1, 0, out_hbr)     +merge(1, 0, out_E)&
+                  +merge(1, 0, out_EIR)   +merge(1, 0, out_P1)      +merge(1, 0, out_hbr) +merge(1, 0, out_E)&
                   +merge(1, 0, out_imm)   +merge(1,0, out_N)        +merge(1,0, out_HA)
         !
         if (out_imm_a) then
@@ -922,6 +928,19 @@ MODULE mo_netcdf
                     dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = arr_VarID(var_out))
           status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "units", values = "day^-1")
           status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "long_name", values = "Entomological Inoculation Rate")
+          var_out = var_out + 1
+          !
+        end if
+        !
+        ! P_1 saturates at 1 where EIR does not, so this is the field that shows
+        ! where transmission is actually limited rather than merely intense.
+        if (out_P1) then
+          !
+          arr_VarID(var_out)=var_out
+          status = nf90_def_var(ncid = ncid_grp(2), name = "P1", xtype = nf90_float, &
+                    dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = arr_VarID(var_out))
+          status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "units", values = "probability day^-1")
+          status = nf90_put_att(ncid = ncid_grp(2), varid = arr_VarID(var_out), name = "long_name", values = "Probability of receiving at least one infective bite")
           var_out = var_out + 1
           !
         end if

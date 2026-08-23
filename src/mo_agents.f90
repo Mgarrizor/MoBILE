@@ -31,6 +31,7 @@ USE, INTRINSIC :: ISO_C_BINDING
     type malaria
         integer :: status   ! S=1, E= 2, I=3, A=4, R=5 Susceptible-Exposed-Infected-Asymptomatic-Recovered (SEIAR)
         real    :: EIR_att  ! Entomological inoculation rate
+        real    :: P1_att   ! Probability of receiving at least one infective bite today
         real    :: hbr_att  ! Human biting rate
         real    :: imm      ! Immunity level [0,1]
         logical :: mat_im   ! Maternal immunity 
@@ -501,6 +502,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                         ! iactive check, so an uninitialized reserve slot would feed
                         ! junk into the EIR/hbr fields on every day of the run.
                         people(indx)%health_status%malaria_status%EIR_att = 0.
+                        people(indx)%health_status%malaria_status%P1_att = 0.
                         people(indx)%health_status%malaria_status%hbr_att = 0.
                         people(indx)%health_status%malaria_status%imm = 0.
                         people(indx)%health_status%malaria_status%mat_im = .false.
@@ -537,16 +539,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             print '("Initialized:", I8, A8)', nagent, '  agents'
             !
-            print *, 'Standard human to agent ratio ~', P_a
-            print *, 'Human to agent ratio with re-scaled weights'
-            !print *, 'Median :', median(HA(:)))
-            print *, 'Mean: ', sum(HA(:), mask=((pop_dens(:) > 0.) .and. (npeop(:) > 0))) & 
-                                /sum(merge(1, 0, mask_pop(:)), mask=((pop_dens(:) > 0.) .and. (npeop(:) > 0)))
-            print *, 'Mean scale factor:', sum(HA(:), mask=((pop_dens(:) > 0.) .and. (npeop(:) > 0))) & 
-                                /sum(merge(1, 0, mask_pop(:)), mask=((pop_dens(:) > 0.) .and. (npeop(:) > 0))) &
-                                /(sum(A_cell(:), mask=((pop_dens(:) > 0.) .and. (npeop(:) > 0))) & 
-                                /sum(merge(1, 0, mask_pop(:)), mask=((pop_dens(:) > 0.) .and. (npeop(:) > 0))))
-            print *, 'Min.: ', minval(HA(:), mask=(HA > 0.)), ' Max.: ', maxval(HA(:), mask=((pop_dens(:) > 0.) .and. (npeop(:) > 0)))
+            call agents_report_HA()
             !
             !deallocate(A_cell)
         end subroutine agents_init
@@ -717,6 +710,85 @@ USE, INTRINSIC :: ISO_C_BINDING
             run_births_claimed = 0
         end subroutine agents_report_birth_capacity
 
+        subroutine agents_report_HA()
+        !===
+            ! All human-to-agent ratio statistics, printed once from agents_init.
+            ! The population-weighted mean is the one the saturation diagnostic
+            ! depends on: agents are allocated by log(cell population), so the
+            ! unweighted cell mean is dominated by sparse cells where HA -> 1.
+            implicit none
+            logical, allocatable :: msk(:)
+            real(8) :: wsum, hsum
+            integer :: ncell
+
+            allocate(msk(size(HA)))
+            msk(:) = (pop_dens(:) > 0.) .and. (npeop(:) > 0)
+            ncell = count(msk)
+            if (ncell < 1) then
+                deallocate(msk); return
+            end if
+            wsum = sum(real(npeop(:),8)*real(HA(:),8), mask=msk)          ! people
+            hsum = sum(real(npeop(:),8)*real(HA(:),8)**2, mask=msk)
+
+            print *, 'Standard human to agent ratio ~', P_a
+            print *, 'Human to agent ratio with re-scaled weights'
+            print '("  mean (per cell): ",f10.3,"   mean (per person): ",f10.3)', &
+                sum(HA(:), mask=msk)/ncell, hsum/wsum
+            print '("  min: ",f10.3,"   max: ",f10.3)', &
+                minval(HA(:), mask=(HA > 0.)), maxval(HA(:), mask=msk)
+            print '("  mean scale factor: ",es12.4)', &
+                (sum(HA(:), mask=msk)/ncell)/(sum(A_cell(:), mask=msk)/ncell)
+            deallocate(msk)
+        end subroutine agents_report_HA
+
+        subroutine agents_report_saturation()
+        !===
+            ! Is transmission saturated? P_esc = exp(sum_t log(1-P1)) is the
+            ! probability an agent escapes infection over the accumulated days,
+            ! rescaled to 365. Where that leaves P(infection) at ~1 the biting
+            ! rate no longer sets incidence, so an EIR gradient cannot show up
+            ! in the burden. Cells are weighted by people (npeop*HA).
+            implicit none
+            real(8) :: yr, esc, pinf, lam, w, wsum, w99, w90, psum, lsum
+            integer :: i
+
+            if (nday_sat < 1 .or. sat_reported) return
+            sat_reported = .true.
+            yr = 365._8/real(nday_sat,8)
+            write(*,*) ' ' ! mobile.f90 draws an in-place progress line with char(13)
+            wsum = 0._8; w99 = 0._8; w90 = 0._8; psum = 0._8; lsum = 0._8
+            do i = 1, size(esc_log)
+                if (.not. mask_pop(i)) cycle
+                if (npeop(i) <= 0 .or. HA(i) <= 0.) cycle
+                lam  = -esc_log(i)*yr
+                esc  = exp(-lam)
+                pinf = 1._8 - esc
+                w    = real(npeop(i),8)*real(HA(i),8)
+                wsum = wsum + w
+                psum = psum + w*pinf
+                lsum = lsum + w*lam
+                if (pinf > 0.99_8) w99 = w99 + w
+                if (pinf > 0.90_8) w90 = w90 + w
+            end do
+            if (wsum <= 0._8) return
+
+            print *, '===== Transmission saturation ====='
+            print '("  days accumulated: ",i0," (",f5.2," yr), rescaled to 365")', &
+                nday_sat, 1._8/yr
+            print '("  annual exposure Lambda, pop-weighted:  ",f9.3)', lsum/wsum
+            print '("  P(infection/yr), pop-weighted mean:    ",f9.4)', psum/wsum
+            print '("  population with P > 0.99:              ",f8.1,"%")', 100._8*w99/wsum
+            print '("  population with P > 0.90:              ",f8.1,"%")', 100._8*w90/wsum
+            if (w99/wsum > 0.5_8) then
+                print *, ' --> SATURATED: infection is near-certain for most of the population.'
+                print *, '     Incidence cannot resolve the transmission gradient at this HA.'
+            else if (w90/wsum > 0.1_8) then
+                print *, ' --> PARTIALLY SATURATED.'
+            else
+                print *, ' --> not saturated.'
+            end if
+        end subroutine agents_report_saturation
+
         subroutine agents_diagnostics(idis,iagent)
         !===
             ! Calculate bulk statistics to feed into the disease source integration
@@ -803,6 +875,8 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             EIR_priv(iloc,ithread) = EIR_priv(iloc,ithread) + &
             people(iagent)%health_status%malaria_status%EIR_att
+            P1_priv(iloc,ithread) = P1_priv(iloc,ithread) + &
+            people(iagent)%health_status%malaria_status%P1_att
             hbr_priv(iloc,ithread) = hbr_priv(iloc,ithread) + &
             people(iagent)%health_status%malaria_status%hbr_att
             !===================================================
@@ -1048,6 +1122,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             R(:) = 0.
             !
             EIR(:) = 0.
+            P1(:) = 0.
             if (.not. in_imm) then ! If not external forcing then reset immunity
                 !
                 imm(:) = 0.
@@ -1073,6 +1148,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                 status_pointer(m)%arr_p_priv(:,:) = 0.
             end do
             EIR_priv(:,:) = 0.
+            P1_priv(:,:) = 0.
             hbr_priv(:,:) = 0.
             if (.not. in_imm) then
                 imm_priv(:,:) = 0.
@@ -1172,6 +1248,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             I_new(:) = I_new(:) + sum(status_pointer(6)%arr_p_priv(:,:), dim=2)
             !
             EIR(:) = EIR(:) + sum(EIR_priv(:,:), dim=2)
+            P1(:) = P1(:) + sum(P1_priv(:,:), dim=2)
             hbr(:) = hbr(:) + sum(hbr_priv(:,:), dim=2)
             if (.not. in_imm) then
                 imm(:) = imm(:) + sum(imm_priv(:,:), dim=2)
@@ -1224,6 +1301,21 @@ USE, INTRINSIC :: ISO_C_BINDING
             ! Calculate average daily EIR on a per person basis (use human to agent ratio: HA(:))
             !
             where((mask_pop(:)) .and. (npeop(:)>0)) EIR(:) = EIR(:)/npeop(:)/HA(:)!P_a!/HA(:)
+
+            ! Mean over agents of today's infection probability. Divided by npeop
+            ! only: P_1 is a probability, not a rate density, so the /HA applied
+            ! to EIR above would not be meaningful here.
+            where((mask_pop(:)) .and. (npeop(:)>0)) P1(:) = P1(:)/npeop(:)
+
+            ! Escape exponent for agents_report_saturation. Excludes spin-up,
+            ! whose convergence loop replays the same year repeatedly.
+            if ((.not. in_spinup) .and. (nday_sat < nday_sat_max)) then
+                where((mask_pop(:)) .and. (npeop(:)>0)) &
+                    esc_log(:) = esc_log(:) + log(max(1._8-real(P1(:),8), 1.e-12_8))
+                nday_sat = nday_sat + 1
+                ! Window full: report now rather than at the end of a long run.
+                if (nday_sat == nday_sat_max) call agents_report_saturation()
+            end if
 
             ! Calculate average daily hbr
             !
@@ -1715,6 +1807,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                         ! 
                         ! Save agent-specific 'bulk' daily entomological inoculation rate (EIR)
                         people(iagent)%health_status%malaria_status%EIR_att = lambda_1
+                        people(iagent)%health_status%malaria_status%P1_att = P_1
                         !people(iagent)%health_status%malaria_status%EIR_att = P_1 ! Temporary check
 
                         ! Save agent-specific 'bulk' daily biting rate (hbr)
@@ -1883,6 +1976,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                             !
                             people(iagent)%health_status%active_status%status=.false.
                             people(iagent)%health_status%malaria_status%EIR_att=0.
+                            people(iagent)%health_status%malaria_status%P1_att=0.
                             people(iagent)%health_status%malaria_status%hbr_att=0.
                             people(iagent)%health_status%malaria_status%imm=0.
                             ! Update this thread's column, not npeop(:) -- npeop(:) is

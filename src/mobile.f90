@@ -615,6 +615,7 @@ time_loop: do itime=2,nsteps
 end do time_loop
 write(*,*) ' ' ! close the in-place progress line before printing below it
 call agents_report_birth_capacity() ! whole-run total
+call agents_report_saturation()
 !********************************************************
 !
 ! Write 2D fields (x,y) here and close NetCDF file

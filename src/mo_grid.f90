@@ -57,13 +57,18 @@ MODULE mo_grid
         allocate(R(nxy))
         !
         allocate(EIR(nxy))
+        allocate(P1(nxy))
         allocate(imm(nxy))
         allocate(hbr(nxy))
         allocate(EIR_priv(nxy,nthreads))
+        allocate(P1_priv(nxy,nthreads))
+        allocate(esc_log(nxy))
+        esc_log(:) = 0._8
         allocate(imm_priv(nxy,nthreads))
         allocate(hbr_priv(nxy,nthreads))
 
         EIR(:) = 0.
+        P1(:) = 0.
         imm(:) = 0.
         hbr(:) = 0.
 
