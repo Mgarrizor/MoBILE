@@ -264,6 +264,16 @@ if [ $exit != 0 ]; then
   exit 1
 fi
 #-------------------------------
+# A missing $const file leaves $lines empty, which writes a valid but EMPTY &CONST
+# block: every constant silently keeps its compiled-in default and the run
+# completes with exit 0. So we
+#
+# 1) "[ ]": test that the file exists AND is readable "-r"
+# 2) "||": if exit = 1 then do whatever is inside "{  }" (A || B --> runs B only when A exits non-zero)
+# --> { …; } groups the two commands so both belong to the ||; needs the spaces and the trailing ;
+# --> "$const" quoted so paths with spaces stay one argument
+#
+[ -r "$const" ] || { echo "Constants file not readable: $const" >&2; exit 1; }
 
 lines=$(<"$const")  # < reads the entire content of the file into the variable "lines"
 #echo $lines
