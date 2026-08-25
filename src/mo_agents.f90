@@ -2188,19 +2188,23 @@ USE, INTRINSIC :: ISO_C_BINDING
         end function dimmunity
 
         function clearance_half(age,d_c,d_a,k_e) result(tau_a)
-
-        ! Return the waning rate of immunity [1/day], applied as imm*(1-tau_a*dt).
-        ! The half-life in days is the denominator, so d_c and d_a are themselves
-        ! the child and adult half-lives.
+            !! Waning rate of acquired immunity, applied as imm*(1-tau_a*dt).
+            !! The half-life in days is the denominator, so d_c and d_a are
+            !! themselves the child and adult half-lives.
 
         implicit none
 
-        real, intent(in)  :: age     ! Agent age
-        real, intent(in)  :: d_c     ! Immunity half-life for children [days]
-        real, intent(in)  :: d_a     ! Immunity half-life for adults [days]
-        real, intent(in)  :: k_e ! Maturation time scale (~15yrs)
+        real, intent(in)  :: age
+            !! Agent age [years]
+        real, intent(in)  :: d_c
+            !! Immunity half-life for children [days]
+        real, intent(in)  :: d_a
+            !! Immunity half-life for adults [days]
+        real, intent(in)  :: k_e
+            !! Maturation time scale for the child-to-adult transition [years]
 
-        real :: tau_a                ! Waning rate [1/day]
+        real :: tau_a
+            !! Waning rate [1/day]
             !
             tau_a = log(2.)/(d_c + (d_a - d_c) * (1-exp(-age/k_e)))
 
