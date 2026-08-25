@@ -246,7 +246,8 @@ MODULE mo_grid
   !--------------------------------------------------------------------------------------
 
   subroutine grid_no_input(nxy,dx,dy,ncity,seed,H_0,D_pop,pop_dens,D, &
-                                  x_coord_1d,y_coord_1d,radial,nlon,nlat,lat_coord,lon_coord, L) !*********
+                                  x_coord_1d,y_coord_1d,radial,nlon,nlat,lat_coord,lon_coord, L) 
+  
           ! Hardcoded grid configuration for conceptual case.
           ! Index -------------------------------
           ! 0) Map 2D grid into a 1D long array

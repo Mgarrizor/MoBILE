@@ -93,15 +93,19 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             implicit none
             !
-            integer, intent(in) :: idis ! 0 = Cholera: SIAR  ; 1 = Malaria: SEIR [Non-functional]
-            integer, intent(in) :: nxy                          !
+            integer, intent(in) :: idis 
+                !! 0 = Cholera: SIAR  ; 1 = Malaria: SEIAR ; 2 = Dengue [Non-functional]
+            integer, intent(in) :: nxy                          
+                !! Number of lattice points (=nlat*nlon)
             integer, intent(in) :: nagent                       !
             integer, allocatable, intent(inout) :: npeop(:)     !
             integer, allocatable, intent(out) :: nbirths_left(:,:) ! (nxy,nthreads) Births left to hand out today, per (cell,thread) -- see mo_const.f90
-            real, allocatable, intent(in) :: pop_dens(:)      ! Human population density (len=nxy)
+            real, allocatable, intent(in) :: pop_dens(:)      
+                !! Human population density (len=nxy)
             logical, allocatable, intent(in) :: mask_pop(:)   ! (nxy)
 
-            real, allocatable, intent(inout)   :: A_cell(:)     ! Grid cell area
+            real, allocatable, intent(inout)   :: A_cell(:)     
+                !! Grid cell area
 
             real, allocatable, intent(inout) :: scale(:) ! Scale factor to translate number of excretion events into density
 

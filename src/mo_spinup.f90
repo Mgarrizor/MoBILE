@@ -98,10 +98,14 @@ subroutine DI(x_new,x_old,tol_SU,conv)
     if (n /= 0) then
         n = count(mask=(x_new(:) > 0.))
         where (x_new(:) > 0.)
-            dummy(:) = abs(x_new(:)-x_old(:))!/x_new(:)     ! Supressed relative deviation since it blows up (low numbers + stochasticity)
+            dummy(:) = abs(x_new(:)-x_old(:))
+                !/x_new(:)     
+                ! Supressed relative deviation since it blows up (low numbers + stochasticity)
         end where
         !
-        eps_SU = sum(dummy(:))/n!*100 ! Deviation expressed in percentage
+        eps_SU = sum(dummy(:))/n 
+                !*100 
+                ! Deviation expressed in percentage
         !
         WRITE(*,'(1a1,A20,F6.4,A5,F6.4)', advance='no') char(13),'Spin-up convergence ',eps_SU,' <=? ',tol_SU
         print *, sum(x_new(:)), sum(x_old(:))
