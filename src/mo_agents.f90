@@ -1193,16 +1193,20 @@ USE, INTRINSIC :: ISO_C_BINDING
             A(:) = A(:) + sum(status_pointer(3)%arr_p_priv(:,:), dim=2)
             R(:) = R(:) + sum(status_pointer(4)%arr_p_priv(:,:), dim=2)
             !
-            S(:) = S(:)/npeop(:)
-            I(:) = I(:)/npeop(:)
-            A(:) = A(:)/npeop(:)
-            R(:) = R(:)/npeop(:)
-
-            ! Scale excretion events to density
-            exc(:) = exc(:)/npeop(:)
+            ! Guarded as in the malaria branch below: cells can reach npeop=0 now
+            ! that demographics run during spin-up. Empty cells keep the zero they
+            ! were reset to.
+            where (npeop(:) > 0)
+                S(:) = S(:)/npeop(:)
+                I(:) = I(:)/npeop(:)
+                A(:) = A(:)/npeop(:)
+                R(:) = R(:)/npeop(:)
+                ! Scale excretion events to density
+                exc(:) = exc(:)/npeop(:)
+            end where
             !
             if (out_rain) then
-              exc_clim(:) = exc_clim(:)/npeop(:)
+              where (npeop(:) > 0) exc_clim(:) = exc_clim(:)/npeop(:)
             end if
             !
             B_old = B
