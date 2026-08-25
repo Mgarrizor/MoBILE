@@ -177,7 +177,10 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
              allocate(zvect_one_d_density(nlon*nlat))
              allocate(zvecinfc(nlon*nlat))
 
-             zvect_density(:)=SUM(rvect, DIM=1) ! total vector number = vector density   
+             zvect_density(:)=SUM(rvect, DIM=1) ! total vector number = vector density
+             ! Only written for mask_pop cells (safe_diag), so the rest would keep
+             ! uninitialised memory and reach the Vinf output as NaN.
+             zvecinfc(:)=0.
 
              !-- Larva
              allocate(rlarv(0:nlarv,nlon*nlat))
