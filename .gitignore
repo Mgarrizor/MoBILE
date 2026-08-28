@@ -1,3 +1,5 @@
 # Python 
 __pycache__/
 .ipynb_checkpoints/
+# FORD generated output (built and published by .github/workflows/docs.yml)
+FORDDocs/doc/
