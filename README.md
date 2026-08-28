@@ -7,7 +7,7 @@ climate-driven grid, with age-structured diagnostics including
 per-timestep symptomatic and asymptomatic incidence & age-dependent acquisition and
 waning of immunity. Calibration tools - Sobol sensitivity analysis ([SALiB](https://salib.readthedocs.io/en/latest/)), a genetic
 algorithm ([Tompkins et al. 2018](https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0200638)) and an integration to the [Optuna](https://optuna.readthedocs.io/en/stable/) calibration suite are included. Agent
-mobility is defined but not yet functional.
+mobility is defined but not yet functional.  
 Developed at the Abdus Salam International Centre for Theoretical Physics (ICTP),
 Trieste, Italy.
 
@@ -33,17 +33,21 @@ The build requires `nf-config` for the compiler and flags. If that is unavailabl
 
 ## VECTRI-ABM: run example
 
-The `utils/test_run/` folder contains everything a run needs — driving data (`area.nc`, `pop.nc`, `rain.nc`, `t2m.nc`), a parameter file, and `age_structure/cumm_age.txt`, the cumulative age distribution derived from WorldPop age structures as described in the accompanying paper — so the model can be tested without preparing any input of your own.
+The `utils/test_run/` folder contains everything a run needs — driving data (`area.nc`, `pop.nc`, `rain.nc`, `t2m.nc`), a parameter file, and `age_structure/cumm_age.txt`, the cumulative age distribution derived from WorldPop age structures as described in the accompanying paper — so the model can be tested without preparing any input of your own. Go to the MoBILE folder and do
 
     export MOBILE=$PWD
+
+then exit this folder and create a **different** one, outside the GitHub repo
+
     mkdir -p run && cd run
+
+You can now launch the test run as
+
     bash $MOBILE/utils/test_run/run_example.sh
 
-One simulated year over a 140 × 100 grid with 10⁶ agents, preceded by an automatic
-spin-up. It takes roughly a minute on four threads and writes `example/example.nc`
-(~430 MB) plus `example/example.info` recording the commit it was run from.
+This is one simulated year over a 140 × 100 grid with 10⁶ agents, preceded by an automatic spin-up. It takes roughly a minute on four threads and writes `example/example.nc` (~430 MB) plus `example/example.info` recording the commit it was run from.
 
-Output is grouped netCDF: `Human` (prevalence `I`, incident cases `Inew`, entomological
+Output is grouped netCDF hierarchies: `Human` (prevalence `I`, incident cases `Inew`, entomological
 inoculation rate `EIR`, immunity `imm`, agents per cell `Nagent`, humans per agent `HA`),
 plus `Vector`, `Hydro` and `Climate`.
 
@@ -54,12 +58,9 @@ plus `Vector`, `Hydro` and `Climate`.
 > needed and the run completes normally.
 
 > [!WARNING]
-> This is a smoke test rather than a scientific configuration. In particular `nagent`
-> cannot be lowered much: agents are distributed across cells with a `ceiling()`, which
-> overshoots the allocation by roughly half the number of populated cells until the
-> per-cell population cap binds — below about 10⁶ on this grid, initialisation fails.
-> `nagent` must scale with the population of the domain, and results depend on the
-> resulting agent-to-human ratio.
+> This is a test rather than a realistic configuration. In particular `nagent`
+> cannot be lowered much, as results depend on the
+> agent-to-human ratio (HA).
 
 For your own runs, `utils/run_MOBILE.sh` is the general driver; edit the configuration
 block at the top (output name, disease, seed, agents, timesteps, spin-up, and the paths
@@ -79,13 +80,17 @@ namelist. Thread count is set via `OMP_NUM_THREADS`.
 | path | contents |
 |---|---|
 | `src/` | model source |
-| `utils/vectri/` | vendored VECTRI vector-ecology model |
-| `utils/test_run/` | driving data for the bundled example |
-| `utils/SA_Sobol/`, `utils/Optuna_calibration/` | sensitivity analysis and calibration tooling |
+| `utils/vectri/` | VECTRI vector-ecology model source files |
+| `utils/test_run/` | driving data for the run example |
+| `utils/SA_Sobol/`, `utils/Optuna_calibration/` | sensitivity analysis and calibration tools |
 
 ## Citing
 
 See [`CITATION.cff`](CITATION.cff), or use the "Cite this repository" button on GitHub.
+
+A paper describing VECTRI-ABM is in preparation. Until then, please cite the
+software record above; this page will be updated with the article reference on
+publication.
 
 ## License
 

@@ -10,7 +10,7 @@ abstract: >-
   algorithm (Tompkins et al. 2018) and an integration to the Optuna calibration suite are included. Agent
   mobility is defined but not yet functional. The underlying agent-based framework is
   named MoBILE (Mobility-Based Integrated Landscape Epidemiology), which remains the
-  repository name; VECTRI-ABM is the disease model built on it.
+  repository name; VECTRI-ABM is the vector-borne disease model built on it.
 type: software
 authors:
   - family-names: "Garrido Zornoza"
@@ -26,6 +26,23 @@ version: "1.0.0"
 date-released: "2026-09-02"
 license: GPL-3.0-or-later
 repository-code: "https://github.com/Mgarrizor/MoBILE"
+# A paper describing VECTRI-ABM is in preparation. On publication, add a
+# preferred-citation block here so citation tools point at the article, and add the
+# article DOI to the existing Zenodo record as a related identifier -- editing this
+# file does not update records that were already archived.
+#
+# preferred-citation:
+#   type: article
+#   title: "..."
+#   authors:
+#     - family-names: "Garrido Zornoza"
+#       given-names: "Miguel"
+#     - family-names: "Tompkins"
+#       given-names: "Adrian M."
+#   journal: "..."
+#   year: ...
+#   doi: "..."
+
 keywords:
   - malaria
   - agent-based model
