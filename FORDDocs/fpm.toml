@@ -1,0 +1,30 @@
+[extra.ford]
+
+# == Project information ==
+project="MoBILE"
+license="gpl"
+summary="**Summary:** Mobility-Based Integrated Landscape Epidemiology (MoBILE) model"
+
+
+# == Author information ==
+author="Miguel Garrido Zornoza"
+email="mgarrizoraca@gmail.com"
+github="https://github.com/Mgarrizor"
+linkedin="https://www.linkedin.com/in/miguel-garrido-zornoza-ba794718a/"
+
+media_dir="./media"
+author_pic="./media/dude.jpeg"
+
+# == Directories ==
+# Settings specifying where to look (and not to look) for documentation.
+page_dir = "./pages"
+
+
+# == Documentation markers ==
+# The symbol(s) following an exclaimation mark which designate 
+# that the following set of comments, until the end of the block, 
+# are all documentation.
+docmark_alt="*"
+
+# == Graph settings ==
+graph = false 

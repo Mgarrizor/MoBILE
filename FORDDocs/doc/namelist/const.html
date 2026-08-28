@@ -1,0 +1,713 @@
+<!-- -*- mode: jinja2 -*- -->
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+      <meta name="description" content="Summary: Mobility-Based Integrated Landscape Epidemiology (MoBILE) model">
+    <meta name="author" content="Miguel Garrido Zornoza" >
+    <link rel="icon" href="../favicon.png">
+
+    <title>  CONST &ndash; MoBILE
+</title>
+
+    <!-- Bootstrap -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"
+          integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"
+            integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
+    <!-- Font Awesome -->
+    <link href="../css/fontawesome.min.css" rel="stylesheet">
+    <link href="../css/brands.min.css" rel="stylesheet">
+    <link href="../css/regular.min.css" rel="stylesheet">
+    <link href="../css/solid.min.css" rel="stylesheet">
+    <link href="../css/v4-font-face.min.css" rel="stylesheet">
+    <link href="../css/v4-shims.min.css" rel="stylesheet">
+    <!-- MathJax -->
+    <script type="text/x-mathjax-config">
+      MathJax.Hub.Config({
+        TeX: { equationNumbers: { autoNumber: "AMS" } }
+      });
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/mathjax@2.7.9/MathJax.js?config=TeX-AMS-MML_HTMLorMML" async
+            integrity="sha256-DViIOMYdwlM/axqoGDPeUyf0urLoHMN4QACBKyB58Uw=" crossorigin="anonymous"></script>
+    <!-- Other scripts and stylesheets -->
+    <link href="../css/local.css" rel="stylesheet">
+    <link href="../css/pygments.css" rel="stylesheet">
+    <script src="../js/svg-pan-zoom.min.js"></script>
+  </head>
+
+  <body>
+
+    <!-- Fixed navbar -->
+    <div class="container-fluid mb-sm-4 mb-xl-2">
+      <nav class="navbar navbar-expand-lg navbar-dark bg-dark fixed-top">
+        <div class="container">
+          <a class="navbar-brand" href="../index.html">MoBILE </a>
+          <button type="button" class="navbar-toggler" data-bs-toggle="collapse" data-bs-target="#navbar"
+                  aria-expanded="false" aria-controls="navbar" aria-label="Toggle navigation">
+                  <span class="navbar-toggler-icon">
+          </button>
+
+          <div id="navbar" class="navbar-collapse collapse">
+            <ul class="navbar-nav">
+                <li class="nav-item"><a class="nav-link" href="../page/index.html">Documentation</a></li>
+                  <li class="nav-item">
+                    <a class="nav-link" href="../lists/files.html">Source Files</a>
+                  </li>
+                <li class="nav-item">
+                  <a class="nav-link" href="../lists/modules.html">Modules</a>
+                </li>
+                <li class="nav-item">
+                  <a class="nav-link" href="../lists/procedures.html">Procedures</a>
+                </li>
+                <li class="nav-item">
+                  <a class="nav-link" href="../lists/types.html">Derived Types</a>
+                </li>
+                <li class="nav-item">
+                  <a class="nav-link" href="../lists/namelists.html">Namelists</a>
+                </li>
+                <li class="nav-item">
+                  <a class="nav-link" href="../program/mobile.html">Program</a>
+                </li>
+            </ul>
+              <div class="d-flex align-items-end flex-grow-1">
+                <form action="../search.html" role="search" class="ms-auto">
+                  <input type="text" class="form-control" aria-label="Search" placeholder="Search" name="q" id="tipue_search_input" autocomplete="off" required>
+                </form>
+              </div>
+          </div><!--/.nav-collapse -->
+        </div>
+      </nav>
+    </div>
+
+    <div class="container">
+  <div class="row">
+    <h1>CONST</h1>
+      <div class="container p-2 mb-4 bg-light border rounded-3">
+    <div class="row align-items-center justify-content-between" id="info-bar">
+      <div class="col">
+        <ul class="list-inline" style="margin-bottom:0px;display:inline">
+            <li class="list-inline-item" id="meta-license"><i class="fa fa-legal"></i> <a rel="license" href="http://www.gnu.org/licenses/gpl"><img alt="GNU General Public License" style="border-width:0" src="https://www.gnu.org/graphics/gplv3-88x31.png" /></a></li>
+
+
+            <li class="list-inline-item" id="source-file">
+              <i class="fa fa-code"></i>
+              <a href="../src/mo_namelist.f90"> Source File</a>
+            </li>
+        </ul>
+      </div>
+      <div class="col">
+        <nav aria-label="breadcrumb">
+          <ol class="breadcrumb justify-content-end mb-0">
+                <li class="breadcrumb-item"><a href='../sourcefile/mo_namelist.f90.html'>mo_namelist.f90</a></li>
+                <li class="breadcrumb-item"><a href='../module/mo_namelist.html'>mo_namelist</a></li>
+                <li class="breadcrumb-item"><a href='../proc/namelist_const.html'>namelist_const</a></li>
+            <li class="breadcrumb-item active" aria-current="page">CONST</li>
+          </ol>
+        </nav>
+      </div>
+    </div>
+  </div>
+  <script>
+    // Enable Bootstrap tooltips
+    (function () {
+      const tooltipTriggerList = document.querySelectorAll('[data-bs-toggle="tooltip"]')
+      const tooltipList = [...tooltipTriggerList].map(tooltipTriggerEl => new bootstrap.Tooltip(tooltipTriggerEl))
+    })();
+  </script>
+
+  </div>
+
+  <div class="row">
+    <div class="col-md-3 hidden-xs hidden-sm visible-md visible-lg">
+        <div id="sidebar">
+      <h3>Contents</h3>
+  
+      <div class="card mb-4">
+      <a data-bs-toggle="collapse" href="#vars-0"
+         aria-expanded="false" aria-controls="vars-0">
+         <h4 class="card-header bg-primary text-white">Variables</h4>
+      </a>
+      <div id="vars-0" class="collapse">
+        <div class="list-group list-group-flush">
+            <a class="list-group-item" href="../namelist/const.html#variable-mu_b">mu_B</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-theta_e">theta_e</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-theta_p">theta_p</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-mu~2">mu</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-birth_rate">birth_rate</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-rho">rho</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-sigma">sigma</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-gamma~2">gamma</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-alpha~2">alpha</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-beta~2">beta</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-growth_ratio_ceiling">growth_ratio_ceiling</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-m_long">m_long</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-m_short">m_short</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-d_grav">D_grav</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-d_pop~2">D_pop</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-h_0~2">H_0</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-b_0">B_0</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-fs_0">fS_0</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-fi_0">fI_0</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-fa_0">fA_0</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-fr_0">fR_0</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-k_h">K_h</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-b_rate">b_rate</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-p_v0">P_v0</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-k_nb">k_NB</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-p_h0">P_h0</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-p_max">P_max</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-interv_factor">interv_factor</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-interv_beta">interv_beta</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-interv_theta">interv_theta</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-wurbn_ratio">wurbn_ratio</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-wperm_ratio">wperm_ratio</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-wperm_default">wperm_default</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-wpond_min">wpond_min</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-wpond_max">wpond_max</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-wpond_ratio">wpond_ratio</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-wpond_shapep2">wpond_shapep2</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-rlarv_flushtau">rlarv_flushtau</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-rlarv_flushmin">rlarv_flushmin</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-soilinfil_sa">soilinfil_SA</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-wpond_depthref">wpond_depthref</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-wpond_cn">wpond_CN</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-wpond_ref">wpond_ref</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-dgono">dgono</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-dsporo">dsporo</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-e_0">e_0</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-e1~2">e1</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-e2~2">e2</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-a1">A1</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-e_th">e_th</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-mat_rate">mat_rate</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-rho">rho</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-m_a">m_a</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-m_c">m_c</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-k_m">k_m</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-i_star_a">i_star_a</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-i_star_c">i_star_c</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-k_star">k_star</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-d_c">d_c</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-d_a">d_a</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-k_e">k_e</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-alph_min">alph_min</a>
+            <a class="list-group-item" href="../namelist/const.html#variable-k_alph">k_alph</a>
+        </div>
+      </div>
+    </div>
+
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+
+
+  </div>
+
+    </div>
+
+    <div class="col-md-9" id='text'>
+        
+  <br class="visible-xs visible-sm hidden-md">
+  <section>
+    <h2>Variables</h2>
+    <table class="table table-striped" id="namelist-const">
+      <thead><tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Default</th>
+          <th>Description</th>
+      </tr></thead>
+      <tbody>
+              <tr id="variable-mu_b">
+      <td><a href="#variable-mu_b">mu_B</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-theta_e">
+      <td><a href="#variable-theta_e">theta_e</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-theta_p">
+      <td><a href="#variable-theta_p">theta_p</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-mu~2">
+      <td><a href="#variable-mu~2">mu</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-birth_rate">
+      <td><a href="#variable-birth_rate">birth_rate</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-rho">
+      <td><a href="#variable-rho">rho</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-sigma">
+      <td><a href="#variable-sigma">sigma</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-gamma~2">
+      <td><a href="#variable-gamma~2">gamma</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-alpha~2">
+      <td><a href="#variable-alpha~2">alpha</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-beta~2">
+      <td><a href="#variable-beta~2">beta</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-growth_ratio_ceiling">
+      <td><a href="#variable-growth_ratio_ceiling">growth_ratio_ceiling</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-m_long">
+      <td><a href="#variable-m_long">m_long</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-m_short">
+      <td><a href="#variable-m_short">m_short</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-d_grav">
+      <td><a href="#variable-d_grav">D_grav</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-d_pop~2">
+      <td><a href="#variable-d_pop~2">D_pop</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-h_0~2">
+      <td><a href="#variable-h_0~2">H_0</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-b_0">
+      <td><a href="#variable-b_0">B_0</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-fs_0">
+      <td><a href="#variable-fs_0">fS_0</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-fi_0">
+      <td><a href="#variable-fi_0">fI_0</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-fa_0">
+      <td><a href="#variable-fa_0">fA_0</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-fr_0">
+      <td><a href="#variable-fr_0">fR_0</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-k_h">
+      <td><a href="#variable-k_h">K_h</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-b_rate">
+      <td><a href="#variable-b_rate">b_rate</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-p_v0">
+      <td><a href="#variable-p_v0">P_v0</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-k_nb">
+      <td><a href="#variable-k_nb">k_NB</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-p_h0">
+      <td><a href="#variable-p_h0">P_h0</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-p_max">
+      <td><a href="#variable-p_max">P_max</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-interv_factor">
+      <td><a href="#variable-interv_factor">interv_factor</a></td>
+      <td>real</td>
+      <td>1.</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-interv_beta">
+      <td><a href="#variable-interv_beta">interv_beta</a></td>
+      <td>real</td>
+      <td>0.</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-interv_theta">
+      <td><a href="#variable-interv_theta">interv_theta</a></td>
+      <td>real</td>
+      <td>0.</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-wurbn_ratio">
+      <td><a href="#variable-wurbn_ratio">wurbn_ratio</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-wperm_ratio">
+      <td><a href="#variable-wperm_ratio">wperm_ratio</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-wperm_default">
+      <td><a href="#variable-wperm_default">wperm_default</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-wpond_min">
+      <td><a href="#variable-wpond_min">wpond_min</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-wpond_max">
+      <td><a href="#variable-wpond_max">wpond_max</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-wpond_ratio">
+      <td><a href="#variable-wpond_ratio">wpond_ratio</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-wpond_shapep2">
+      <td><a href="#variable-wpond_shapep2">wpond_shapep2</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-rlarv_flushtau">
+      <td><a href="#variable-rlarv_flushtau">rlarv_flushtau</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-rlarv_flushmin">
+      <td><a href="#variable-rlarv_flushmin">rlarv_flushmin</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-soilinfil_sa">
+      <td><a href="#variable-soilinfil_sa">soilinfil_SA</a></td>
+      <td>real</td>
+      <td>(1./3.)*(50+250+750)</td>
+      <td><p><strong><em>*</em></strong><strong> Clima </strong><strong><em>*</em></strong><strong><em>*</em></strong><strong><em>*</em></strong>***
+ Pointers (not allocatable) so that spin-up can redirect them to a
+ climatology and swap back to the real record afterwards -- see
+ mo_spinup.f90. ALLOCATE works on POINTER arrays exactly as before.</p></td>
+    </tr>
+
+              <tr id="variable-wpond_depthref">
+      <td><a href="#variable-wpond_depthref">wpond_depthref</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-wpond_cn">
+      <td><a href="#variable-wpond_cn">wpond_CN</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-wpond_ref">
+      <td><a href="#variable-wpond_ref">wpond_ref</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-dgono">
+      <td><a href="#variable-dgono">dgono</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-dsporo">
+      <td><a href="#variable-dsporo">dsporo</a></td>
+      <td>real</td>
+      <td>111.0</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-e_0">
+      <td><a href="#variable-e_0">e_0</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-e1~2">
+      <td><a href="#variable-e1~2">e1</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-e2~2">
+      <td><a href="#variable-e2~2">e2</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-a1">
+      <td><a href="#variable-a1">A1</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-e_th">
+      <td><a href="#variable-e_th">e_th</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-mat_rate">
+      <td><a href="#variable-mat_rate">mat_rate</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-rho">
+      <td><a href="#variable-rho">rho</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-m_a">
+      <td><a href="#variable-m_a">m_a</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-m_c">
+      <td><a href="#variable-m_c">m_c</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-k_m">
+      <td><a href="#variable-k_m">k_m</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-i_star_a">
+      <td><a href="#variable-i_star_a">i_star_a</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-i_star_c">
+      <td><a href="#variable-i_star_c">i_star_c</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-k_star">
+      <td><a href="#variable-k_star">k_star</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-d_c">
+      <td><a href="#variable-d_c">d_c</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-d_a">
+      <td><a href="#variable-d_a">d_a</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-k_e">
+      <td><a href="#variable-k_e">k_e</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-alph_min">
+      <td><a href="#variable-alph_min">alph_min</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+              <tr id="variable-k_alph">
+      <td><a href="#variable-k_alph">k_alph</a></td>
+      <td>real</td>
+      <td>None</td>
+      <td></td>
+    </tr>
+
+      </tbody>
+    </table>
+  </section>
+
+      <br>
+    </div>
+  </div>
+      <hr>
+    </div> <!-- /container -->
+    <footer>
+      <div class="container">
+        <div class="row justify-content-between">
+          <div class="col">
+            <p>
+              MoBILE
+ was developed by Miguel Garrido Zornoza<br>              &copy; 2026 <a rel="license" href="http://www.gnu.org/licenses/gpl"><img alt="GNU General Public License" style="border-width:0" src="https://www.gnu.org/graphics/gplv3-88x31.png" /></a>
+</p>
+          </div>
+          <div class="col">
+            <p class="text-end">
+              Documentation generated by
+              <a href="https://github.com/Fortran-FOSS-Programmers/ford">FORD</a>
+            </p>
+          </div>
+        </div>
+        <br>
+      </div> <!-- /container -->
+    </footer>
+  </body>
+</html>
