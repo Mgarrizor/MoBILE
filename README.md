@@ -39,7 +39,7 @@ The `utils/test_run/` folder contains everything a run needs — driving data (`
     mkdir -p run && cd run
     bash $MOBILE/utils/test_run/run_example.sh
 
-One simulated year over a 140 x 100 grid with 10^6 agents, preceded by an automatic
+One simulated year over a 140 × 100 grid with 10⁶ agents, preceded by an automatic
 spin-up. It takes roughly a minute on four threads and writes `example/example.nc`
 (~430 MB) plus `example/example.info` recording the commit it was run from.
 
@@ -57,7 +57,7 @@ plus `Vector`, `Hydro` and `Climate`.
 > This is a smoke test rather than a scientific configuration. In particular `nagent`
 > cannot be lowered much: agents are distributed across cells with a `ceiling()`, which
 > overshoots the allocation by roughly half the number of populated cells until the
-> per-cell population cap binds — below about 10^6 on this grid, initialisation fails.
+> per-cell population cap binds — below about 10⁶ on this grid, initialisation fails.
 > `nagent` must scale with the population of the domain, and results depend on the
 > resulting agent-to-human ratio.
 
