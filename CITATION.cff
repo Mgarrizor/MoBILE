@@ -23,7 +23,7 @@ authors:
     affiliation: "The Abdus Salam International Centre for Theoretical Physics (ICTP), Trieste, Italy"
     orcid: "https://orcid.org/0000-0003-0975-6691"
 version: "1.0.0"
-date-released: "2026-09-02"
+date-released: "2026-08-28"
 license: GPL-3.0-or-later
 repository-code: "https://github.com/Mgarrizor/MoBILE"
 # A paper describing VECTRI-ABM is in preparation. On publication, add a
