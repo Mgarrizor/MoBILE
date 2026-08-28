@@ -1,5 +1,8 @@
 # VECTRI-ABM
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22146187.svg)](https://doi.org/10.5281/zenodo.22146187)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+
 VECTRI-ABM: an agent-based model of
 disease transmission coupled to the [VECTRI](https://users.ictp.it/~tompkins/vectri/documentation/)
 vector-ecology model. The framework resolves individual human agents on a
@@ -87,6 +90,10 @@ namelist. Thread count is set via `OMP_NUM_THREADS`.
 ## Citing
 
 See [`CITATION.cff`](CITATION.cff), or use the "Cite this repository" button on GitHub.
+
+Archived on Zenodo. The concept DOI [10.5281/zenodo.22146187](https://doi.org/10.5281/zenodo.22146187)
+always resolves to the latest version; cite the version DOI
+[10.5281/zenodo.22146188](https://doi.org/10.5281/zenodo.22146188) to pin to `v1.0.0`.
 
 A paper describing VECTRI-ABM is in preparation. Until then, please cite the
 software record above; this page will be updated with the article reference on
