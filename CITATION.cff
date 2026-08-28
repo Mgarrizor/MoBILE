@@ -1,0 +1,35 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "VECTRI-ABM"
+abstract: >-
+  An agent-based model of disease transmission coupled to the VECTRI
+  vector-ecology model (Tompkins et al. 2013). The framework resolves individual human agents on a
+  climate-driven grid, with age-structured diagnostics including
+  per-timestep symptomatic and asymptomatic incidence & age-dependent acquisition and
+  waning of immunity. Calibration tools - Sobol sensitivity analysis (SALiB), a genetic
+  algorithm (Tompkins et al. 2018) and an integration to the Optuna calibration suite are included. Agent
+  mobility is defined but not yet functional. The underlying agent-based framework is
+  named MoBILE (Mobility-Based Integrated Landscape Epidemiology), which remains the
+  repository name; VECTRI-ABM is the disease model built on it.
+type: software
+authors:
+  - family-names: "Garrido Zornoza"
+    given-names: "Miguel"
+    affiliation: "The Abdus Salam International Centre for Theoretical Physics (ICTP), Trieste, Italy"
+    email: "mgarrizoraca@gmail.com"
+    orcid: "https://orcid.org/0000-0001-5030-4537"
+  - family-names: "Tompkins"
+    given-names: "Adrian M."
+    affiliation: "The Abdus Salam International Centre for Theoretical Physics (ICTP), Trieste, Italy"
+    orcid: "https://orcid.org/0000-0003-0975-6691"
+version: "1.0.0"
+date-released: "2026-09-02"
+license: GPL-3.0-or-later
+repository-code: "https://github.com/Mgarrizor/MoBILE"
+keywords:
+  - malaria
+  - agent-based model
+  - VECTRI
+  - vector-borne disease
+  - climate-driven epidemiology
+  - Plasmodium falciparum
