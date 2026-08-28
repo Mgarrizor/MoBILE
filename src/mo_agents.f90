@@ -1491,13 +1491,14 @@ USE, INTRINSIC :: ISO_C_BINDING
                                 !
                                 people(iagent)%health_status%malaria_status%status=3
                                 !
-                                ! Update here Inew
+                                ! Inew counts clinical cases: only this symptomatic branch
+                                ! increments it, so asymptomatic infections are excluded.
                                 !
-                                ! Total new infections (j is the agent location, accessed before)
+                                ! Clinical cases, all ages (j is the agent location, accessed before)
                                 status_pointer(6)%arr_p_priv(j,ithread) = &
                                 status_pointer(6)%arr_p_priv(j,ithread) + 1.
                                 !
-                                ! New infections broken down by age
+                                ! Clinical cases broken down by age
                                 Iage_stat_ptr(8,min(floor(people(iagent)%agent_ID%age+1),79))%arr_p_priv(j,ithread) = &
                                 Iage_stat_ptr(8,min(floor(people(iagent)%agent_ID%age+1),79))%arr_p_priv(j,ithread) + 1.
                                 ! Log-normally distributed times - function of imm
@@ -1802,146 +1803,186 @@ USE, INTRINSIC :: ISO_C_BINDING
         ! =============== Immunity functions =============================
 
         function dimmunity(imm,e_0,e1,e2,A1) result(delta_e)
-
-        ! Return the acquired inmmunity after an infectious bite
+            !! Immunity acquired from one infectious bite. The increment shrinks as
+            !! immunity accumulates, as a sum of a fast and a slow exponential.
 
         implicit none
 
-        real, intent(in)  :: e_0     ! Maximum acquisition per infectious bite (when fully susceptible)
-        real, intent(in)  :: imm     ! Current immunity level
-        real, intent(in)  :: e1      ! Fast 
-        real, intent(in)  :: e2      ! Slow
-        real, intent(in)  :: A1      ! Coefficient
-        real              :: delta_e ! Acquired immunity 
+        real, intent(in)  :: e_0
+            !! Maximum acquisition per infectious bite (when fully susceptible)
+        real, intent(in)  :: imm
+            !! Current immunity level
+        real, intent(in)  :: e1
+            !! Decay scale of the fast component
+        real, intent(in)  :: e2
+            !! Decay scale of the slow component
+        real, intent(in)  :: A1
+            !! Weight of the fast component
+        real              :: delta_e
+            !! Immunity increment
 
             delta_e = e_0*(A1*exp(-imm/e1) + (1-A1)*(exp(-imm/e2)))
 
         end function dimmunity
 
         function clearance_half(age,d_c,d_a,k_e) result(tau_a)
-
-        ! Return half-life of waning immunity
+            !! Waning rate of acquired immunity, applied as `imm*(1-tau_a*dt)`.
+            !! The half-life in days is the denominator, so `d_c` and `d_a` are
+            !! themselves the child and adult half-lives.
 
         implicit none
 
-        real, intent(in)  :: age     ! Agent age
-        real, intent(in)  :: d_c     ! Clearance baseline for children
-        real, intent(in)  :: d_a     ! Clearance baseline for adults
-        real, intent(in)  :: k_e ! Maturation time scale (~15yrs)
-        
-        real :: tau_a                ! Half-life
+        real, intent(in)  :: age
+            !! Agent age [years]
+        real, intent(in)  :: d_c
+            !! Immunity half-life for children [days]
+        real, intent(in)  :: d_a
+            !! Immunity half-life for adults [days]
+        real, intent(in)  :: k_e
+            !! e-folding age of the child-to-adult transition [years]
+
+        real :: tau_a
+            !! Waning rate [1/day]
             !
             tau_a = log(2.)/(d_c + (d_a - d_c) * (1-exp(-age/k_e)))
 
         end function clearance_half
         !
         function age_alph_min(age,alph_min,k) result(alph_min_age)
-
-        ! Return minimum symptomatic probability as a function of age
+            !! Minimum symptomatic probability as a function of age, decaying
+            !! exponentially from its newborn value.
 
         implicit none
 
-        real, intent(in)  :: age        ! Agent age
-        real, intent(in)  :: alph_min   ! 
-        real, intent(in)  :: k          ! 
-        
-        real :: alph_min_age                ! 
+        real, intent(in)  :: age
+            !! Agent age [years]
+        real, intent(in)  :: alph_min
+            !! Minimum symptomatic fraction at age zero
+        real, intent(in)  :: k
+            !! e-folding age of the decay [years]
+
+        real :: alph_min_age
+            !! Minimum symptomatic fraction at this age
             !
             alph_min_age  = alph_min*exp(-age/k)
 
         end function age_alph_min
         !
         function age_i_star(age,i_star_a,i_star_c,k_star) result(i_star_age)
-
-        ! Return immunity level for I --> A transition as a function of age
-        ! This is the inflection point in the sigmoidal curve
+            !! Immunity level at which the symptomatic-probability sigmoid inflects,
+            !! as a function of age: the pyrogenic threshold, interpolating from the
+            !! child value to the adult value.
 
         implicit none
 
-        real, intent(in)  :: age        ! Agent age
-        real, intent(in)  :: i_star_a   ! Transition immunity level for adults
-        real, intent(in)  :: i_star_c   ! Transition immunity level for children
-        real, intent(in)  :: k_star     ! e-folding age to flip from children
-                                        ! to adult
-        
-        real :: i_star_age              ! 
+        real, intent(in)  :: age
+            !! Agent age [years]
+        real, intent(in)  :: i_star_a
+            !! Transition immunity level for adults
+        real, intent(in)  :: i_star_c
+            !! Transition immunity level for children
+        real, intent(in)  :: k_star
+            !! e-folding age of the child-to-adult transition [years]
+
+        real :: i_star_age
+            !! Inflection immunity level at this age
             !
             i_star_age  = i_star_a + (i_star_c - i_star_a)*exp(-age/k_star)
 
         end function age_i_star
         !
         function age_m_slope(age,m_a,m_c,k_m) result(m_slope_age)
-
-        ! Return immunity level for I --> A transition as a function of age
-        ! This is the inflection point in the sigmoidal curve
+            !! Slope of the symptomatic-probability sigmoid as a function of age,
+            !! interpolating from the child value to the adult value.
 
         implicit none
 
-        real, intent(in)  :: age        ! Agent age
-        real, intent(in)  :: m_a   ! Slope of sigmoid for adults
-        real, intent(in)  :: m_c   ! Slope of sigmoid for children
-        real, intent(in)  :: k_m   ! e-folding age to flip from children
-                                   ! to adult
-        
-        real :: m_slope_age              ! 
+        real, intent(in)  :: age
+            !! Agent age [years]
+        real, intent(in)  :: m_a
+            !! Slope of the sigmoid for adults
+        real, intent(in)  :: m_c
+            !! Slope of the sigmoid for children
+        real, intent(in)  :: k_m
+            !! e-folding age of the child-to-adult transition [years]
+
+        real :: m_slope_age
+            !! Sigmoid slope at this age
             !
             m_slope_age  = m_a + (m_c - m_a)*exp(-age/k_m)
 
         end function age_m_slope
         !
         function prob_symp_sig(imm,alph_max,alph_min,e_m,sig_m) result(p)
-
-        ! Return the acquired inmmunity after an infectious bite
-        ! Sigmoidal function
+            !! Probability that an infection becomes symptomatic, given the agent's
+            !! immunity. Sigmoidal in immunity, inflecting at `e_m` with slope `sig_m`.
 
         implicit none
 
-        real, intent(in)  :: imm        ! Current immunity level
-        real, intent(in)  :: e_m        ! inflection
-        real, intent(in)  :: sig_m      ! "slope"
-        real, intent(in)  :: alph_max   ! Maximum symptomatic fraction 
-        real, intent(in)  :: alph_min   ! Minimum symptomatic fraction (1- maximum asymptomatic fraction) 
+        real, intent(in)  :: imm
+            !! Current immunity level
+        real, intent(in)  :: e_m
+            !! Immunity level at the inflection point (see [[age_i_star]])
+        real, intent(in)  :: sig_m
+            !! Slope of the sigmoid (see [[age_m_slope]])
+        real, intent(in)  :: alph_max
+            !! Maximum symptomatic fraction
+        real, intent(in)  :: alph_min
+            !! Minimum symptomatic fraction (1 - maximum asymptomatic fraction)
 
-        real              :: p          ! Probability to be symptomatic
+        real              :: p
+            !! Probability of becoming symptomatic
 
             p = alph_max*(1-1./(alph_max/(alph_max-alph_min)+exp(-sig_m*(imm-e_m))))
 
         end function prob_symp_sig
         !
         function prob_symp(imm,alph_min) result(p)
-
-        ! Return the acquired inmmunity after an infectious bite
-        ! Linear function
+            !! Probability that an infection becomes symptomatic, given the agent's
+            !! immunity. Linear alternative to [[prob_symp_sig]].
 
         implicit none
 
-        real, intent(in)  :: imm        ! Current immunity level
-        real, intent(in)  :: alph_min  ! Minimum symptomatic fraction (1- maximum asymptomatic fraction) 
-        real              :: p          ! Probability to be symptomatic
+        real, intent(in)  :: imm
+            !! Current immunity level
+        real, intent(in)  :: alph_min
+            !! Minimum symptomatic fraction (1 - maximum asymptomatic fraction)
+        real              :: p
+            !! Probability of becoming symptomatic
 
             p = -(1-alph_min)*imm + 1
 
         end function prob_symp
         !
         function mean_normtimes(imm,d_mu,mu_1) result(mu_e)
+            !! Mean of the normal distribution underlying the log-normal clearance
+            !! time, as a linear function of immunity. See [[tau_log]].
 
         implicit none
 
-        real, intent(in) :: imm 
-        real, intent(in) :: d_mu, mu_1 
+        real, intent(in) :: imm
+            !! Current immunity level
+        real, intent(in) :: d_mu, mu_1
+            !! Slope and intercept of the linear relation
         real             :: mu_e
+            !! Mean of the log-normal clearance time
 
             mu_e = d_mu*imm + mu_1
 
         end function mean_normtimes
         !
         function sig_normtimes(imm,d_sig,sig_1) result(sig_e)
+            !! Standard deviation of the normal distribution underlying the log-normal
+            !! clearance time, as a linear function of immunity. See [[tau_log]].
 
         implicit none
 
-        real, intent(in) :: imm 
-        real, intent(in) :: d_sig, sig_1 
+        real, intent(in) :: imm
+            !! Current immunity level
+        real, intent(in) :: d_sig, sig_1
+            !! Slope and intercept of the linear relation
         real             :: sig_e
+            !! Standard deviation of the log-normal clearance time
 
             sig_e = d_sig*imm + sig_1
 
