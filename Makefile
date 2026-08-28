@@ -17,7 +17,12 @@ BUILD_DIR := ./build    # Location to build the program
 # Touch these lines if the nf-config shell command does not work for your system
 INC_FLAGS := $(shell nf-config --fflags) # Flags needed to compile a FORTRAN program (NetCDF)
 INC_LIBS  := $(shell nf-config --flibs) $(shell nc-config --libs) # Libraries needed to link a FORTRAN program (NetCDF)
-PROF_LIB  := -L/opt/homebrew/opt/gperftools/lib -lprofiler -ltcmalloc  # Profiling library (Google performance tools)
+# Profiling library (Google performance tools). Opt-in via `make PROFILE=1`: the path is
+# machine-specific, so linking it by default breaks the build wherever gperftools is absent.
+PROF_LIB  :=
+ifdef PROFILE
+PROF_LIB  := -L/opt/homebrew/opt/gperftools/lib -lprofiler -ltcmalloc
+endif
 #-----------------------------------------
 # (https://stackoverflow.com/questions/3676322/what-flags-to-set-for-gfortran-compiler-to-catch-faulty-code)
 DEBUG     := -Og -fbacktrace -Wall -fcheck=all \
