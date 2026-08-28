@@ -5,19 +5,21 @@ disease transmission coupled to the [VECTRI](https://users.ictp.it/~tompkins/vec
 vector-ecology model. The framework resolves individual human agents on a
 climate-driven grid, with age-structured diagnostics including
 per-timestep symptomatic and asymptomatic incidence & age-dependent acquisition and
-waning of immunity. Calibration tools - Sobol sensitivity analysis (SALiB), a genetic
-algorithm (Tompkins et al. 2018) and an integration to the Optuna calibration suite are included. Agent
+waning of immunity. Calibration tools - Sobol sensitivity analysis ([SALiB](https://salib.readthedocs.io/en/latest/)), a genetic
+algorithm ([Tompkins et al. 2018](https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0200638)) and an integration to the [Optuna](https://optuna.readthedocs.io/en/stable/) calibration suite are included. Agent
 mobility is defined but not yet functional.
 Developed at the Abdus Salam International Centre for Theoretical Physics (ICTP),
 Trieste, Italy.
 
+> [!CAUTION]
 > **Mobility is not yet functional.** Agent mobility (gravity and radiation models) is
 > defined in the source but not active; it is planned work pending funding.
 
+> [!NOTE]
 > **On naming.** The underlying agent-based framework is called **MoBILE**
 > (**Mo**bility-**B**ased **I**ntegrated **L**andscape **E**pidemiology), which remains
 > the repository name and appears throughout the source (`mobile.sh`, `mobile.out`,
-> `$MOBILE`). **VECTRI-ABM** is the disease model built on it — the coupling of that
+> `$MOBILE`). **VECTRI-ABM** is the vector-borne disease model built on it — the coupling of that
 > framework to VECTRI — and is the name used in the accompanying paper and for citation.
 
 ## Requirements
@@ -26,21 +28,12 @@ Trieste, Italy.
 - netCDF-Fortran, providing `nf-config` and `nc-config` on your `PATH`
 - Optional, profiling only: [gperftools](https://github.com/gperftools/gperftools)
 
-The build queries `nf-config` for the compiler and flags. If that is unavailable on your
-system, set `FC`, `INC_FLAGS` and `INC_LIBS` directly at the top of the `Makefile`.
+The build requires `nf-config` for the compiler and flags. If that is unavailable on your system, set `FC`, `INC_FLAGS` and `INC_LIBS` directly at the top of the `Makefile`.
 
-## Build
 
-    make
+## VECTRI-ABM: run example
 
-This produces `mobile.out` in the repository root.
-
-## Run the bundled example
-
-`utils/test_run/` contains everything a run needs — driving data (`area.nc`, `pop.nc`,
-`rain.nc`, `t2m.nc`), a parameter file, and `age_structure/cumm_age.txt`, the cumulative
-age distribution derived from WorldPop age structures as described in the accompanying
-paper — so the model can be exercised without preparing any input of your own:
+The `utils/test_run/` folder contains everything a run needs — driving data (`area.nc`, `pop.nc`, `rain.nc`, `t2m.nc`), a parameter file, and `age_structure/cumm_age.txt`, the cumulative age distribution derived from WorldPop age structures as described in the accompanying paper — so the model can be tested without preparing any input of your own.
 
     export MOBILE=$PWD
     mkdir -p run && cd run
@@ -54,23 +47,26 @@ Output is grouped netCDF: `Human` (prevalence `I`, incident cases `Inew`, entomo
 inoculation rate `EIR`, immunity `imm`, agents per cell `Nagent`, humans per agent `HA`),
 plus `Vector`, `Hydro` and `Climate`.
 
-The run prints one harmless message, `bash: fetch_age.sh: No such file or directory`.
-`mobile.sh` calls that script to derive the cumulative age distribution from WorldPop
-rasters; the example ships `age_structure/cumm_age.txt` instead, so the step is not
-needed and the run completes normally.
+> [!NOTE]
+> The run prints one harmless message, `bash: fetch_age.sh: No such file or directory`.
+> `mobile.sh` calls that script to derive the cumulative age distribution from WorldPop
+> rasters; the example ships `age_structure/cumm_age.txt` instead, so the step is not
+> needed and the run completes normally.
 
-This is a smoke test rather than a scientific configuration. In particular `nagent`
-cannot be lowered much: agents are distributed across cells with a `ceiling()`, which
-overshoots the allocation by roughly half the number of populated cells until the
-per-cell population cap binds — below about 10^6 on this grid, initialisation fails.
-`nagent` must scale with the population of the domain, and results depend on the
-resulting agent-to-human ratio.
+> [!WARNING]
+> This is a smoke test rather than a scientific configuration. In particular `nagent`
+> cannot be lowered much: agents are distributed across cells with a `ceiling()`, which
+> overshoots the allocation by roughly half the number of populated cells until the
+> per-cell population cap binds — below about 10^6 on this grid, initialisation fails.
+> `nagent` must scale with the population of the domain, and results depend on the
+> resulting agent-to-human ratio.
 
 For your own runs, `utils/run_MOBILE.sh` is the general driver; edit the configuration
 block at the top (output name, disease, seed, agents, timesteps, spin-up, and the paths
 to your driving data). `params.txt` supplies the model parameters read into the `&CONST`
 namelist. Thread count is set via `OMP_NUM_THREADS`.
 
+> [!CAUTION]
 > **Stochasticity.** VECTRI-ABM is a stochastic agent-based model driven by a seeded random
 > number generator. In this release, runs repeated with an identical seed are **not
 > guaranteed to be bit-identical**: agent updates are distributed across OpenMP threads
