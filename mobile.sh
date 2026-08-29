@@ -1,5 +1,9 @@
 #!/bin/bash
 #
+
+# Author: Miguel Garrido Zornoza (2024)
+# Contact: mgarrizoraca@gmail.com
+
 # Running MOBILE
 # This file links the Makefile and source files of the program to the local folder,
 # compiles the program and executes it. It will create a 'build' folder where one
@@ -188,7 +192,7 @@ if [[ ${mob} == 1 ]]; then
 elif [[ ${mob} == 0 ]]; then
   echo '================= MOBILITY inactive ================'
   if [[ ${disID} == 0 ]]; then
-    echo 'Cholera needs mobility to eb active ; set mob = 1 --> Stopping simulation'
+    echo 'Cholera needs mobility to be active ; set mob = 1 --> Stopping simulation'
     exit 1
   fi
 else

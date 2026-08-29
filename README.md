@@ -64,12 +64,12 @@ plus `Vector`, `Hydro` and `Climate`.
 > [!WARNING]
 > This is a test rather than a realistic configuration. In particular `nagent`
 > cannot be lowered much, as results depend on the
-> agent-to-human ratio (HA).
+> agent-to-human ratio `HA`.
 
 For your own runs, `utils/run_MOBILE.sh` is the general driver; edit the configuration
 block at the top (output name, disease, seed, agents, timesteps, spin-up, and the paths
 to your driving data). `params.txt` supplies the model parameters read into the `&CONST`
-namelist. Thread count is set via `OMP_NUM_THREADS`.
+namelist. Thread count (for the OpenMP parallel work on the agent loop) is set via `OMP_NUM_THREADS`.
 
 > [!CAUTION]
 > **Stochasticity.** VECTRI-ABM is a stochastic agent-based model driven by a seeded random
@@ -77,16 +77,16 @@ namelist. Thread count is set via `OMP_NUM_THREADS`.
 > guaranteed to be bit-identical**: agent updates are distributed across OpenMP threads
 > and some accumulations are order-dependent. Results should be interpreted as
 > realisations of a stochastic process, and ensembles over seeds are recommended for
-> quantitative comparison. Deterministic reproduction is planned work.
+> quantitative comparison. Deterministic reproduction has been accomplished in an upcoming version (note yet available).
 
 ## Repository layout
 
 | path | contents |
 |---|---|
-| `src/` | model source |
+| `src/` | Model source |
 | `utils/vectri/` | VECTRI vector-ecology model source files |
-| `utils/test_run/` | driving data for the run example |
-| `utils/SA_Sobol/`, `utils/Optuna_calibration/` | sensitivity analysis and calibration tools |
+| `utils/test_run/` | Driving data for the run example |
+| `utils/SA_Sobol/`, `utils/Optuna_calibration/` | Densitivity analysis and calibration tools |
 
 ## Citing
 
