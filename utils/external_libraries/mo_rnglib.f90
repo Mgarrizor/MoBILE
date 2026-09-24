@@ -436,18 +436,13 @@ subroutine cgn_memory ( i, g )
   integer ( kind = 4 ) g_save
   integer ( kind = 4 ) i
 
-  ! MoBILE bug fix (not part of the original RNGLIB): g_save records "which of
-  ! the 32 generators is currently in use". RNGLIB was written expecting one
-  ! generator per thread precisely so that parallel programs can each draw
-  ! their own independent stream (see cgn_set, called once per OpenMP thread
-  ! in agents_seed_threads, mo_agents.f90) -- but as originally written, g_save
-  ! is a single value shared by the whole process. Every thread was therefore
-  ! reading and overwriting the SAME "current generator" index, so whichever
-  ! thread happened to set it last decided which single generator every other
-  ! thread used too: a genuine data race, not only a reproducibility problem.
-  ! Declaring g_save THREADPRIVATE gives each thread its own private copy, so
-  ! the one-generator-per-thread design this library was built for actually
-  ! works under OpenMP.
+  ! THREADPRIVATE is a MoBILE change, not part of the original RNGLIB.
+  ! g_save holds which of the 32 generators is currently in use. RNGLIB gives
+  ! each thread its own generator (cgn_set, called per thread in
+  ! agents_seed_threads), but a shared g_save would let threads overwrite each
+  ! other's index -- a data race, not merely a reproducibility problem. A
+  ! private copy per thread is what makes the one-generator-per-thread design
+  ! work under OpenMP.
   save g_save
 !$OMP THREADPRIVATE(g_save)
 

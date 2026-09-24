@@ -177,7 +177,10 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
              allocate(zvect_one_d_density(nlon*nlat))
              allocate(zvecinfc(nlon*nlat))
 
-             zvect_density(:)=SUM(rvect, DIM=1) ! total vector number = vector density   
+             zvect_density(:)=SUM(rvect, DIM=1) ! total vector number = vector density
+             ! Only written for mask_pop cells (safe_diag), so the rest would keep
+             ! uninitialised memory and reach the Vinf output as NaN.
+             zvecinfc(:)=0.
 
              !-- Larva
              allocate(rlarv(0:nlarv,nlon*nlat))
@@ -330,7 +333,14 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
                     ! Sporogonic cycle
                     !---------------------
                     !
-                    zprobhost2vect = real(nbites(ixy))/npeop(ixy)/HA(ixy)
+                    ! A cell can hold no people (npeop=0, or HA=0) yet still support
+                    ! vectors. No hosts means no host-to-vector transmission, not a
+                    ! dead cell: 0/0 here would NaN the vector state permanently.
+                    if ((npeop(ixy) > 0) .and. (HA(ixy) > 0.)) then
+                        zprobhost2vect = real(nbites(ixy))/npeop(ixy)/HA(ixy)
+                    else
+                        zprobhost2vect = 0.
+                    end if
                     ! 
                     call sporo(ixy,ztemp,zprobhost2vect,zgonof,rvect,zsporof,zdel,nnumeric,ninfv,dt,iounit)
                     !

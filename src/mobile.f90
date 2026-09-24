@@ -139,7 +139,8 @@ implicit none
   !******************************************************************
   ! Loop counters
   integer :: itime     ! Time    (nsteps)
-  integer :: ispinup   ! Number of needed spin-up years 
+  integer :: ispinup   ! Number of needed spin-up years
+  integer, parameter :: max_spinup_years = 60 ! Cap on the convergence loop (see below) 
   integer :: oagent
 
   ! Random number and PDf sampler libraries
@@ -166,22 +167,14 @@ implicit none
 call namelist_inout(run_name,disID,nsteps,seed,spin_up)
 !
 ! ---------------------------------------------------------------------
-! Reproducibility: make a run repeatable bit-for-bit when it is re-run
-! with the same `seed`, the same number of OpenMP threads, and the same
-! schedule. Two things used to stop this from being possible, both fixed
-! here:
-!   1) RNGLIB (used below, and for the agent-weight sampler gengam) was
-!      always seeded from the fixed word 'randomizer', so the namelist
-!      `seed` never actually reached it -- every run drew the same
-!      RNGLIB numbers regardless of what `seed` was set to. Also, the
-!      namelist used to be read further below, i.e. after this seeding
-!      already happened, so `seed` could not have been used here even if
-!      we had wanted to.
-!   2) The intrinsic random number generator (RANDOM_NUMBER, used almost
-!      everywhere else: agent health transitions, mobility choices,
-!      disease-profile draws) was reseeded from the system clock once at
-!      agent start-up and again on every single simulated day -- so two
-!      runs of the exact same namelist never produced the same numbers.
+! Reproducibility: a run repeats bit-for-bit given the same `seed`, the
+! same number of OpenMP threads and the same schedule. Both generators are
+! seeded here, once, from the namelist `seed`:
+!   1) RNGLIB, used below and by the agent-weight sampler gengam.
+!   2) The intrinsic RANDOM_NUMBER, used for agent health transitions,
+!      mobility choices and disease-profile draws.
+! The namelist must therefore be read before this point, and neither
+! generator may be reseeded later.
 ! ---------------------------------------------------------------------
 !
 ! Seed RNGLIB from the namelist `seed` (write() turns the integer into a
@@ -230,7 +223,8 @@ itime = 1
     ! Namelists
     !=
       !--Human input
-      call namelist_human(pop_file,nagent,imm_file)
+      call namelist_human(pop_file,nagent,imm_file,mortality_file,birthrate_file,mortality_time_file, &
+                          demog_counterfactual)
       !
       !--Climate input
       call namelist_clima(rain_file,t2m_file,area_file)
@@ -276,6 +270,7 @@ itime = 1
       print*, gengam(k_NB,k_NB)
       !=
         call grid_allocate(nxy,nlon,nlat,y_coord_1d,x_coord_1d)
+        call interv_field_init(nxy,x_coord_1d,y_coord_1d,lon_coord,lat_coord)
       !=
       !
     ! 0.1.2 No input
@@ -294,6 +289,7 @@ itime = 1
         call grid_allocate(nxy,nlon,nlat,y_coord_1d,x_coord_1d)
         call grid_no_input(nxy,dx,dy,ncity,seed,H_0,D_pop,pop_dens,D,x_coord_1d,y_coord_1d,radial &
                             ,nlon,nlat,lat_coord,lon_coord,L)
+        call interv_field_init(nxy,x_coord_1d,y_coord_1d,lon_coord,lat_coord)
         allocate(mask_pop(nxy))
         mask_pop(:)=.true.
       !=
@@ -339,6 +335,10 @@ itime = 1
   ! We need to know the lenght of the age structure before creating the NetCDF
   ! output file.
   call agents_read_age(age_weights,age_counts)
+  !
+  ! Resolve the demographic regime and precompute its rates. Must come after
+  ! agents_read_age: it builds the target age density from age_weights(:).
+  call demog_init()
   !
   ! Allocate arrays of disease "disID" (SEIAR)
   call grid_dis(disID,nxy,S,E,I,A,A_old,R,EIR,imm,hbr)
@@ -410,11 +410,22 @@ itime = 1
        !
        call read_slice_imm(itime,imm) ! itime = 1
        !
-     end if 
+     end if
      !
-     call agents_pre_diagnostics(disID)
+     ! When spin_up==1 this initial diagnostics pass belongs to the spin-up
+     ! phase, not the real run, so in_spinup must already be set: it selects
+     ! which rate regime demog_rates_today hands out (stationary g=1 rates
+     ! during spin-up vs the real b(t)/mu(a,t) afterwards), and it keeps the
+     ! counterfactual shadow from being stepped a day early. This pass runs
+     ! the same agents_pre_diagnostics/agents_diagnostics code path as every
+     ! other day, so without it the run would spend one day on the wrong
+     ! rates. No effect when spin_up==0 -- there is no spin-up phase then, so
+     ! this really is day 1 of the real simulation.
+     if (spin_up==1) in_spinup = .true.
      !
-     agent_loop: do oagent=1,nagent
+     call agents_pre_diagnostics(disID,itime)
+     !
+     agent_loop: do oagent=1,nagent_max
         call agents_diagnostics(disID,oagent)
      end do agent_loop
      !
@@ -473,6 +484,7 @@ print *, wperm_default
 !=
 if (spin_up==1) then
   !
+  in_spinup = .true. ! Selects the spin-up rate regime (see demog_rates_today)
   SU_conv=.false.
   SU_tol=0.015
 
@@ -489,7 +501,11 @@ if (spin_up==1) then
   ! instead of replaying the raw first year; time_step is untouched.
   call build_spinup_climatology()
 
-  do while (.not. SU_conv)
+  ! Hard cap on the convergence loop. Demographics now run during spin-up, so
+  ! the year-to-year noise floor in mean immunity is higher (births and deaths
+  ! in cells holding only a handful of agents); if that noise exceeds SU_tol
+  ! this loop would otherwise never terminate.
+  do while ((.not. SU_conv) .and. (ispinup < max_spinup_years))
     !
     SU_old(:) = SU_new(:)
     SU_new(:) = 0.
@@ -521,6 +537,28 @@ if (spin_up==1) then
     !
   end do
   !
+  if (.not. SU_conv) then
+      print *, 'Warning: spin-up hit max_spinup_years =', max_spinup_years, &
+               '; mean immunity did not converge to SU_tol =', SU_tol
+  end if
+  !
+  in_spinup = .false. ! Real simulation starts fresh: the real b(t)/mu(a,t) apply below
+  !
+  ! Demographics ran throughout spin-up, so the live population is no longer
+  ! exactly npeop_init. Re-derive npeop and re-snapshot npeop_init, otherwise
+  ! active_pop_dens (= pop_dens*npeop/npeop_init in agents_pre_diagnostics)
+  ! would carry spin-up's net population change into the real run as a
+  ! spurious transmission scaling. By definition the real run starts at an
+  ! active fraction of 1.
+  npeop(:) = sum(npeop_thread(:,:), dim=2)
+  print '("Spin-up population: ",i0," -> ",i0," agents (",f6.2,"%)")', &
+        sum(npeop_init(:)), sum(npeop(:)), &
+        100.*real(sum(npeop(:)))/real(sum(npeop_init(:)))
+  npeop_init(:) = npeop(:)
+  ! Flush the spin-up birth counters so they don't contaminate the first
+  ! yearly report of the real run.
+  call agents_report_birth_capacity()
+  !
   ! Swap t2m/rainfall back to the real driver record for the main loop.
   call restore_spinup_forcing()
   !
@@ -548,6 +586,7 @@ end if
 !=
 !
 ! Write initial conditions (after spin-up)
+call agents_update_age_counts() ! itime = 1 is always a year boundary
 call netcdf_3D_output(1,Var3D) ! itime = 1
 ! 
 print '("Integrate: ",i6," days.")', nsteps
@@ -562,9 +601,15 @@ time_loop: do itime=2,nsteps
   WRITE(*,'(1a1,A11,I6,A2,I6,A2,F6.1,A2)', advance='no') char(13),'Integrating',itime,' /',nsteps,' -',(real(itime)/(nsteps)*100.),' %'
   !
   ! Write 3D fields (x,y,t) here
+  if (mod(itime-1, 365) == 0) then
+      call agents_update_age_counts()
+  end if
   call netcdf_3D_output(itime,Var3D)
   !
 end do time_loop
+write(*,*) ' ' ! close the in-place progress line before printing below it
+call agents_report_birth_capacity() ! whole-run total
+call agents_report_saturation()
 !********************************************************
 !
 ! Write 2D fields (x,y) here and close NetCDF file

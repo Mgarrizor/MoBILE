@@ -34,12 +34,24 @@ usage() { echo "Usage:              \n
                 -?: Vector ID [0: gambiae, ...] \n
                 -x: Area of grid cells \n
                 -i: Immunity forcing file \n
+                -M: Age-specific mortality-rate file (Optional; blank = scalar mu) \n
+                -B: Time-varying birth-rate file (Optional; blank = scalar birth_rate) \n
+                -T: Age-AND-year mortality-rate file (Optional; blank = use -M/scalar mu; overrides -M if both given) \n
+                -C: Counterfactual mode [1: hold the age structure fixed; anything else: factual] (Optional; needs -M/-B/-T) \n
 
                  "; }
 # Resources
 # https://stackoverflow.com/questions/16483119/an-example-of-how-to-use-getopts-in-bash
 # https://serverfault.com/questions/266867/bash-getops-allow-but-not-require-arg
-while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:x:i:l:" flag; do
+
+# Optional -- defaulted here so the &HUMAN block below is always well-formed
+# even when a caller's run script predates these flags.
+mortality_file=""
+birthrate_file=""
+mortality_time_file=""
+demog_counterfactual=".false."
+
+while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:x:i:l:M:B:T:C:" flag; do
  case $flag in
    h) # Handle the -h flag
    # Display script help information
@@ -97,6 +109,34 @@ while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:x:i:l:" flag; do
    # This case handles '-i "my_string"'
    else
      imm_file="$OPTARG"
+   fi
+   ;;
+   M) # Handle the -M flag (age-specific mortality-rate file; 'NONE' = blank = scalar mu)
+   if [ "$OPTARG" = "NONE" ]; then
+     mortality_file=""
+   else
+     mortality_file="$OPTARG"
+   fi
+   ;;
+   B) # Handle the -B flag (time-varying birth-rate file; 'NONE' = blank = scalar birth_rate)
+   if [ "$OPTARG" = "NONE" ]; then
+     birthrate_file=""
+   else
+     birthrate_file="$OPTARG"
+   fi
+   ;;
+   T) # Handle the -T flag (age-AND-year mortality-rate file; 'NONE' = blank = use -M/scalar mu)
+   if [ "$OPTARG" = "NONE" ]; then
+     mortality_time_file=""
+   else
+     mortality_time_file="$OPTARG"
+   fi
+   ;;
+   C) # Handle the -C flag (counterfactual mode; 1 = on, anything else = factual)
+   if [ "$OPTARG" = "1" ]; then
+     demog_counterfactual=".true."
+   else
+     demog_counterfactual=".false."
    fi
    ;;
    \?) # Handle invalid options
@@ -228,6 +268,16 @@ if [ $exit != 0 ]; then
   exit 1
 fi
 #-------------------------------
+# A missing $const file leaves $lines empty, which writes a valid but EMPTY &CONST
+# block: every constant silently keeps its compiled-in default and the run
+# completes with exit 0. So we
+#
+# 1) "[ ]": test that the file exists AND is readable "-r"
+# 2) "||": if exit = 1 then do whatever is inside "{  }" (A || B --> runs B only when A exits non-zero)
+# --> { …; } groups the two commands so both belong to the ||; needs the spaces and the trailing ;
+# --> "$const" quoted so paths with spaces stay one argument
+#
+[ -r "$const" ] || { echo "Constants file not readable: $const" >&2; exit 1; }
 
 lines=$(<"$const")  # < reads the entire content of the file into the variable "lines"
 #echo $lines
@@ -252,6 +302,10 @@ area_file='${area_file}'
 pop_file='${pop_file}',
 nagent=${nagent},
 imm_file='${imm_file}',
+mortality_file='${mortality_file}',
+birthrate_file='${birthrate_file}',
+mortality_time_file='${mortality_time_file}',
+demog_counterfactual=${demog_counterfactual},
 /
 &CONST
 ${lines}

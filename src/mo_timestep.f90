@@ -124,17 +124,13 @@ subroutine time_step(disID,itime)
       if ((agents)) then
       !=
         !
-        ! Note: this used to call random_seed() here, with no arguments, at the start
-        ! of every single simulated day. That draws a fresh seed from the system clock
-        ! each time, which broke reproducibility twice over: it discarded the
-        ! deterministic sequence the run started with, and it only ever reset the
-        ! calling (master) thread's numbers anyway, doing nothing for the other
-        ! threads below. The random number generator is now seeded once, for every
-        ! thread, at program start (see agents_seed_threads in mo_agents.f90) and
-        ! never touched again -- do not add a reseed call back here.
+        ! Do not add a reseed call here. Seeding is done once per thread at
+        ! program start (agents_seed_threads); a reseed inside the time loop
+        ! would discard the deterministic sequence and, being outside the
+        ! parallel region, would only affect the master thread anyway.
         !
         ! Pre-diagnostics calculations
-        call agents_pre_diagnostics(disID)
+        call agents_pre_diagnostics(disID,itime)
         !
         ! STATIC (any chunk size) is required, not DYNAMIC/GUIDED: thread-to-agent
         ! assignment must be a fixed function of (nagent, chunk, nthreads) alone,
@@ -144,7 +140,7 @@ subroutine time_step(disID,itime)
         ! out grouped by cell (see agents_init), so a bare per-thread block gave
         ! one thread far more of the expensive die/rebirth agents than the others.
 !$OMP PARALLEL DO SCHEDULE(STATIC, agent_chunk)
-        agent_loop: do iagent=1,nagent
+        agent_loop: do iagent=1,nagent_max
         !
         ! 3.1) Update health status
         !=

@@ -31,6 +31,7 @@ USE, INTRINSIC :: ISO_C_BINDING
     type malaria
         integer :: status   ! S=1, E= 2, I=3, A=4, R=5 Susceptible-Exposed-Infected-Asymptomatic-Recovered (SEIAR)
         real    :: EIR_att  ! Entomological inoculation rate
+        real    :: P1_att   ! Probability of receiving at least one infective bite today
         real    :: hbr_att  ! Human biting rate
         real    :: imm      ! Immunity level [0,1]
         logical :: mat_im   ! Maternal immunity 
@@ -92,15 +93,19 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             implicit none
             !
-            integer, intent(in) :: idis ! 0 = Cholera: SIAR  ; 1 = Malaria: SEIR [Non-functional]
-            integer, intent(in) :: nxy                          !
+            integer, intent(in) :: idis 
+                !! 0 = Cholera: SIAR  ; 1 = Malaria: SEIAR ; 2 = Dengue [Non-functional]
+            integer, intent(in) :: nxy                          
+                !! Number of lattice points (=nlat*nlon)
             integer, intent(in) :: nagent                       !
             integer, allocatable, intent(inout) :: npeop(:)     !
             integer, allocatable, intent(out) :: nbirths_left(:,:) ! (nxy,nthreads) Births left to hand out today, per (cell,thread) -- see mo_const.f90
-            real, allocatable, intent(in) :: pop_dens(:)      ! Human population density (len=nxy)
+            real, allocatable, intent(in) :: pop_dens(:)      
+                !! Human population density (len=nxy)
             logical, allocatable, intent(in) :: mask_pop(:)   ! (nxy)
 
-            real, allocatable, intent(inout)   :: A_cell(:)     ! Grid cell area
+            real, allocatable, intent(inout)   :: A_cell(:)     
+                !! Grid cell area
 
             real, allocatable, intent(inout) :: scale(:) ! Scale factor to translate number of excretion events into density
 
@@ -121,13 +126,9 @@ USE, INTRINSIC :: ISO_C_BINDING
 #endif
 
             !
-            ! Note: this used to call random_seed() here with no arguments, which draws
-            ! a fresh seed from the system clock -- meaning every simulation drew a
-            ! different series of random numbers, even for two runs of the same
-            ! namelist. The random number generator is now seeded once, deterministically,
-            ! from the namelist `seed`, at program start (see agents_seed_threads,
-            ! called from mobile.f90) -- do not reseed here or the run stops being
-            ! reproducible.
+            ! Do not reseed here. Every thread's RNG is seeded once from the
+            ! namelist `seed` at program start (agents_seed_threads); reseeding
+            ! anywhere else discards that sequence and breaks reproducibility.
 
             ! Calculate number of agents per grid cell for a given total, nagent, and
             ! the input human population density, pop_dens
@@ -150,8 +151,9 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             P_a = norm_check/nagent
             !
-            ! Initialize array of types "agent"
-            allocate(people(nagent))
+            ! Initialize array of types "agent" -- sized to nagent_max (>=
+            ! nagent) so growth-capacity reserve slots exist from the start.
+            allocate(people(nagent_max))
             ! Allocate array of the number of agents in each grid cell
             allocate(npeop(nxy))
             npeop(:) = 0
@@ -161,13 +163,21 @@ USE, INTRINSIC :: ISO_C_BINDING
             nthreads = omp_get_max_threads()
             allocate(npeop_thread(nxy,nthreads))
             npeop_thread(:,:) = 0
-            allocate(nslots_thread(nxy,nthreads)) ! Filled once population is created below
+            ! Full (dead+alive) capacity per (cell,thread) -- accumulated
+            ! incrementally below at every creation site (active or
+            ! inactive reserve), unlike npeop_thread which only counts
+            ! active agents.
+            allocate(nslots_thread(nxy,nthreads))
+            nslots_thread(:,:) = 0
             ! Allocate array of the human to agent ratio
             allocate(HA(nxy))
             HA(:) = 0.
-            ! Allocate births-remaining-today array (values are set daily in
-            ! agents_pre_diagnostics, before first use, so no reset needed here)
+            ! Allocate births-remaining-today array. Zeroed here so the claim
+            ! sites can never read uninitialized memory: agents_pre_diagnostics
+            ! rewrites it every day, but the day-1 pre-pass in mobile.f90 runs
+            ! agents_diagnostics before any of those writes have happened.
             allocate(nbirths_left(nxy,nthreads))
+            nbirths_left(:,:) = 0
             !
             ! CDF for initial health status
             if (random) then
@@ -224,7 +234,12 @@ USE, INTRINSIC :: ISO_C_BINDING
                             ! Initialize main agent attributes
                             people(indx)%agent_ID%age=find_face0(generate_random(),age_weights(:),size(age_weights(:))) &
                                                       + generate_random()
-                            age_counts(floor(people(indx)%agent_ID%age)) = age_counts(floor(people(indx)%agent_ID%age)) + 1
+                            ! Clamp: adding the fractional generate_random() to a
+                            ! find_face0 result of size(age_weights)-1 can round to
+                            ! exactly size(age_weights) in single precision (e.g.
+                            ! 79 + 0.99999994 -> 80.0), one past the last valid bin.
+                            age_counts(min(floor(people(indx)%agent_ID%age), size(age_weights)-1)) = &
+                                age_counts(min(floor(people(indx)%agent_ID%age), size(age_weights)-1)) + 1
                             people(indx)%agent_ID%name=indx     !
                             people(indx)%agent_ID%sex=0         ! F = 0, M = 1 [Not in use]
                             people(indx)%agent_ID%wealth=0      ! L = 0, M = 1, H = 2 [Not in use]
@@ -312,6 +327,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                             ! agent_loop schedule in mo_timestep.f90 exactly.
                             ithread_init = mod((indx-1)/agent_chunk, nthreads) + 1
                             npeop_thread(ixy,ithread_init) = npeop_thread(ixy,ithread_init) + 1
+                            nslots_thread(ixy,ithread_init) = nslots_thread(ixy,ithread_init) + 1
                             indx = indx + 1
                             !
                         end do
@@ -357,7 +373,12 @@ USE, INTRINSIC :: ISO_C_BINDING
                    people(indx)%agent_ID%age=find_face0(generate_random(),age_weights(:),size(age_weights(:))) &
                                              + generate_random() ! Selection of year following age structure, and 
                                                                  ! selection of day from uniform distribution
-                   age_counts(floor(people(indx)%agent_ID%age)) = age_counts(floor(people(indx)%agent_ID%age)) + 1
+                   ! Clamp: adding the fractional generate_random() to a
+                   ! find_face0 result of size(age_weights)-1 can round to
+                   ! exactly size(age_weights) in single precision (e.g.
+                   ! 79 + 0.99999994 -> 80.0), one past the last valid bin.
+                   age_counts(min(floor(people(indx)%agent_ID%age), size(age_weights)-1)) = &
+                       age_counts(min(floor(people(indx)%agent_ID%age), size(age_weights)-1)) + 1
                    people(indx)%agent_ID%name=indx     !
                    people(indx)%agent_ID%sex=0         ! F = 0, M = 1
                    people(indx)%agent_ID%wealth=0      ! L = 0, M = 1, H = 2
@@ -449,16 +470,59 @@ USE, INTRINSIC :: ISO_C_BINDING
                    ! schedule in mo_timestep.f90 exactly.
                    ithread_init = mod((indx-1)/agent_chunk, nthreads) + 1
                    npeop_thread(loc,ithread_init) = npeop_thread(loc,ithread_init) + 1
+                   nslots_thread(loc,ithread_init) = nslots_thread(loc,ithread_init) + 1
                    indx = indx + 1
                end if
                !
             end do
             !
-            ! Snapshot each (cell,thread)'s fixed capacity now that every agent
-            ! has been created and is alive -- see nslots_thread, mo_const.f90.
-            nslots_thread(:,:) = npeop_thread(:,:)
+            ! Extra growth-capacity slots (nagent+1..nagent_max): distributed
+            ! proportional to the just-finished real population npeop(:) --
+            ! no cap, unlike the two loops above, since these represent
+            ! future, not-yet-existing people, not today's real population.
+            ! Created inactive; become active later via the same birth-claim
+            ! mechanism (nbirths_left) as any other dead slot.
+            if (nagent_max > nagent) then
+                cdf(:) = cumsum(real(npeop(:)))/real(nagent)
+                do while (indx /= (nagent_max+1))
+                    call random_number(rand)
+                    loc = find_face(rand,cdf(:),nxy)
+                    if (mask_pop(loc)) then
+                        people(indx)%agent_ID%age = 0.
+                        people(indx)%agent_ID%name = indx
+                        people(indx)%agent_ID%sex = 0
+                        people(indx)%agent_ID%wealth = 0
+                        people(indx)%agent_ID%w_NB = gengam(k_NB,k_NB)
+                        people(indx)%health_status%cholera_status%status = 1
+                        people(indx)%health_status%cholera_status%infc_dur = 0
+                        people(indx)%health_status%malaria_status%status = 1
+                        people(indx)%health_status%active_status%status = .false. ! Inactive reserve slot
+                        ! Must be zeroed even though the slot is inactive:
+                        ! agents_diagnostics accumulates EIR_att/hbr_att OUTSIDE its
+                        ! iactive check, so an uninitialized reserve slot would feed
+                        ! junk into the EIR/hbr fields on every day of the run.
+                        people(indx)%health_status%malaria_status%EIR_att = 0.
+                        people(indx)%health_status%malaria_status%P1_att = 0.
+                        people(indx)%health_status%malaria_status%hbr_att = 0.
+                        people(indx)%health_status%malaria_status%imm = 0.
+                        people(indx)%health_status%malaria_status%mat_im = .false.
+                        people(indx)%health_status%malaria_status%infc_dur = 0
+                        people(indx)%location_status%homeloc = loc
+                        people(indx)%location_status%currloc = loc
+                        !
+                        ithread_init = mod((indx-1)/agent_chunk, nthreads) + 1
+                        nslots_thread(loc,ithread_init) = nslots_thread(loc,ithread_init) + 1
+                        indx = indx + 1
+                    end if
+                end do
+            end if
+            !
+            ! npeop_init(:) is active-only (unlike nslots_thread, the full
+            ! nagent_max capacity) -- it's the denominator of active_pop_dens
+            ! in agents_pre_diagnostics and must reflect today's real
+            ! population, not future growth capacity.
             allocate(npeop_init(nxy))
-            npeop_init(:) = sum(nslots_thread(:,:), dim=2)
+            npeop_init(:) = sum(npeop_thread(:,:), dim=2)
             !
             ! Assign human to agent ratio once all agents have been initialised
             !
@@ -475,16 +539,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             print '("Initialized:", I8, A8)', nagent, '  agents'
             !
-            print *, 'Standard human to agent ratio ~', P_a
-            print *, 'Human to agent ratio with re-scaled weights'
-            !print *, 'Median :', median(HA(:)))
-            print *, 'Mean: ', sum(HA(:), mask=((pop_dens(:) > 0.) .and. (npeop(:) > 0))) & 
-                                /sum(merge(1, 0, mask_pop(:)), mask=((pop_dens(:) > 0.) .and. (npeop(:) > 0)))
-            print *, 'Mean scale factor:', sum(HA(:), mask=((pop_dens(:) > 0.) .and. (npeop(:) > 0))) & 
-                                /sum(merge(1, 0, mask_pop(:)), mask=((pop_dens(:) > 0.) .and. (npeop(:) > 0))) &
-                                /(sum(A_cell(:), mask=((pop_dens(:) > 0.) .and. (npeop(:) > 0))) & 
-                                /sum(merge(1, 0, mask_pop(:)), mask=((pop_dens(:) > 0.) .and. (npeop(:) > 0))))
-            print *, 'Min.: ', minval(HA(:), mask=(HA > 0.)), ' Max.: ', maxval(HA(:), mask=((pop_dens(:) > 0.) .and. (npeop(:) > 0)))
+            call agents_report_HA()
             !
             !deallocate(A_cell)
         end subroutine agents_init
@@ -616,6 +671,124 @@ USE, INTRINSIC :: ISO_C_BINDING
 
         end subroutine agents_read_age
 
+        subroutine agents_update_age_counts()
+        !===
+            ! Rebuilds age_counts(:) from the live population (called yearly,
+            ! see mobile.f90) -- same floor(age) binning as the init-time
+            ! count, but scanning 1..nagent_max and filtering to active
+            ! agents, since growth-reserve slots (nagent+1..nagent_max) are
+            ! inactive until claimed via a birth.
+            implicit none
+            integer :: k, abin
+
+            age_counts(:) = 0
+            do k = 1, nagent_max
+                if (people(k)%health_status%active_status%status) then
+                    abin = min(floor(people(k)%agent_ID%age), size(age_weights)-1)
+                    age_counts(abin) = age_counts(abin) + 1
+                end if
+            end do
+        end subroutine agents_update_age_counts
+
+        subroutine agents_report_birth_capacity()
+        !===
+            ! Diagnostic: how many drawn birth tickets found a dead/reserve
+            ! slot to claim, vs. went unclaimed because growth_ratio_ceiling's
+            ! reserve capacity ran out -- then resets the counters. Called
+            ! twice (mobile.f90): at spin-up exit, to flush spin-up's tally,
+            ! and after the time loop, so the figure covers the whole run.
+            ! Not called yearly: doing so broke the in-place progress line
+            ! (mobile.f90 draws it with char(13)/advance='no').
+            implicit none
+            if (run_births_requested > 0) then
+                print '("Birth capacity: ",i0," requested, ",i0," claimed, ",i0," unclaimed (",f5.1,"%)")', &
+                    run_births_requested, run_births_claimed, &
+                    run_births_requested - run_births_claimed, &
+                    100. * real(run_births_requested - run_births_claimed) / real(run_births_requested)
+            end if
+            run_births_requested = 0
+            run_births_claimed = 0
+        end subroutine agents_report_birth_capacity
+
+        subroutine agents_report_HA()
+        !===
+            ! All human-to-agent ratio statistics, printed once from agents_init.
+            ! The population-weighted mean is the one the saturation diagnostic
+            ! depends on: agents are allocated by log(cell population), so the
+            ! unweighted cell mean is dominated by sparse cells where HA -> 1.
+            implicit none
+            logical, allocatable :: msk(:)
+            real(8) :: wsum, hsum
+            integer :: ncell
+
+            allocate(msk(size(HA)))
+            msk(:) = (pop_dens(:) > 0.) .and. (npeop(:) > 0)
+            ncell = count(msk)
+            if (ncell < 1) then
+                deallocate(msk); return
+            end if
+            wsum = sum(real(npeop(:),8)*real(HA(:),8), mask=msk)          ! people
+            hsum = sum(real(npeop(:),8)*real(HA(:),8)**2, mask=msk)
+
+            print *, 'Standard human to agent ratio ~', P_a
+            print *, 'Human to agent ratio with re-scaled weights'
+            print '("  mean (per cell): ",f10.3,"   mean (per person): ",f10.3)', &
+                sum(HA(:), mask=msk)/ncell, hsum/wsum
+            print '("  min: ",f10.3,"   max: ",f10.3)', &
+                minval(HA(:), mask=(HA > 0.)), maxval(HA(:), mask=msk)
+            print '("  mean scale factor: ",es12.4)', &
+                (sum(HA(:), mask=msk)/ncell)/(sum(A_cell(:), mask=msk)/ncell)
+            deallocate(msk)
+        end subroutine agents_report_HA
+
+        subroutine agents_report_saturation()
+        !===
+            ! Is transmission saturated? P_esc = exp(sum_t log(1-P1)) is the
+            ! probability an agent escapes infection over the accumulated days,
+            ! rescaled to 365. Where that leaves P(infection) at ~1 the biting
+            ! rate no longer sets incidence, so an EIR gradient cannot show up
+            ! in the burden. Cells are weighted by people (npeop*HA).
+            implicit none
+            real(8) :: yr, esc, pinf, lam, w, wsum, w99, w90, psum, lsum
+            integer :: i
+
+            if (nday_sat < 1 .or. sat_reported) return
+            sat_reported = .true.
+            yr = 365._8/real(nday_sat,8)
+            write(*,*) ' ' ! mobile.f90 draws an in-place progress line with char(13)
+            wsum = 0._8; w99 = 0._8; w90 = 0._8; psum = 0._8; lsum = 0._8
+            do i = 1, size(esc_log)
+                if (.not. mask_pop(i)) cycle
+                if (npeop(i) <= 0 .or. HA(i) <= 0.) cycle
+                lam  = -esc_log(i)*yr
+                esc  = exp(-lam)
+                pinf = 1._8 - esc
+                w    = real(npeop(i),8)*real(HA(i),8)
+                wsum = wsum + w
+                psum = psum + w*pinf
+                lsum = lsum + w*lam
+                if (pinf > 0.99_8) w99 = w99 + w
+                if (pinf > 0.90_8) w90 = w90 + w
+            end do
+            if (wsum <= 0._8) return
+
+            print *, '===== Transmission saturation ====='
+            print '("  days accumulated: ",i0," (",f5.2," yr), rescaled to 365")', &
+                nday_sat, 1._8/yr
+            print '("  annual exposure Lambda, pop-weighted:  ",f9.3)', lsum/wsum
+            print '("  P(infection/yr), pop-weighted mean:    ",f9.4)', psum/wsum
+            print '("  population with P > 0.99:              ",f8.1,"%")', 100._8*w99/wsum
+            print '("  population with P > 0.90:              ",f8.1,"%")', 100._8*w90/wsum
+            if (w99/wsum > 0.5_8) then
+                print *, ' --> SATURATED: infection is near-certain for most of the population.'
+                print *, '     Incidence cannot resolve the transmission gradient at this HA.'
+            else if (w90/wsum > 0.1_8) then
+                print *, ' --> PARTIALLY SATURATED.'
+            else
+                print *, ' --> not saturated.'
+            end if
+        end subroutine agents_report_saturation
+
         subroutine agents_diagnostics(idis,iagent)
         !===
             ! Calculate bulk statistics to feed into the disease source integration
@@ -634,7 +807,9 @@ USE, INTRINSIC :: ISO_C_BINDING
             SELECT case(idis)
             case (0) ! Cholera -------------------------------
             !
-            ! Increase age by da = 1/365
+            ! Increase age by da = 1/365. Runs during spin-up too: the age
+            ! structure is held at cumm_age.txt's shape by the rates
+            ! (see demog_rates_today), not by freezing turnover.
             people(iagent)%agent_ID%age =  people(iagent)%agent_ID%age + da
             !
             istat    =  people(iagent)%health_status%cholera_status%status
@@ -652,7 +827,9 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             case (1) ! Malaria -------------------------------
             !
-            ! Increase age by da = 1/365
+            ! Increase age by da = 1/365. Runs during spin-up too: the age
+            ! structure is held at cumm_age.txt's shape by the rates
+            ! (see demog_rates_today), not by freezing turnover.
             people(iagent)%agent_ID%age =  people(iagent)%agent_ID%age + da
             !
             istat   =  people(iagent)%health_status%malaria_status%status
@@ -698,6 +875,8 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             EIR_priv(iloc,ithread) = EIR_priv(iloc,ithread) + &
             people(iagent)%health_status%malaria_status%EIR_att
+            P1_priv(iloc,ithread) = P1_priv(iloc,ithread) + &
+            people(iagent)%health_status%malaria_status%P1_att
             hbr_priv(iloc,ithread) = hbr_priv(iloc,ithread) + &
             people(iagent)%health_status%malaria_status%hbr_att
             !===================================================
@@ -712,17 +891,140 @@ USE, INTRINSIC :: ISO_C_BINDING
         !===
         end subroutine agents_diagnostics
 
-        subroutine agents_pre_diagnostics(idis)
+        subroutine demog_init()
+        !===
+            ! Resolves which demographic regime this run uses and precomputes
+            ! everything that doesn't change day to day. Must be called AFTER
+            ! agents_read_age (age_weights(:) doesn't exist before that), which
+            ! is why this can't live in namelist_const.
+            implicit none
+            logical :: have_files
+
+            have_files = (len(trim(mortality_file)) /= 0) .or. &
+                         (len(trim(birthrate_file)) /= 0) .or. &
+                         (len(trim(mortality_time_file)) /= 0)
+
+            if (demog_counterfactual .and. (.not. have_files)) then
+                print *, 'demog_init: counterfactual mode needs the FACTUAL rate files ' // &
+                         '(-M/-B/-T) -- the shadow population has nothing to integrate --> STOP'
+                STOP
+            end if
+
+            if (.not. have_files) then
+                demog_mode = DEMOG_STANDARD
+            else if (demog_counterfactual) then
+                demog_mode = DEMOG_COUNTER
+            else
+                demog_mode = DEMOG_FACTUAL
+            end if
+
+            ! STANDARD keeps the scalar mu/birth_rate everywhere, so none of the
+            ! shape-invariant machinery below is needed (and cumm_age.txt need
+            ! not even be self-consistent with mu).
+            if (demog_mode == DEMOG_STANDARD) then
+                print *, '--> Demographics: STANDARD (scalar mu/birth_rate)'
+                return
+            end if
+
+            call demog_build_shape(age_weights, s_target)
+            b_calib = demog_calib_factor(1.0)
+            ! Spin-up rates are stationary (g=1) and therefore time-invariant --
+            ! precomputed once so the convergence loop's repeated itime=1..365
+            ! replays can never make them drift.
+            call demog_shape_rates(1.0, b_spin, mu_spin)
+
+            if (demog_mode == DEMOG_COUNTER) then
+                print *, '--> Demographics: COUNTERFACTUAL (age structure held at cumm_age.txt)'
+                call demog_shadow_init()
+            else
+                print *, '--> Demographics: FACTUAL (supplied rate files drive the real run)'
+            end if
+
+            call demog_print_diagnostics()
+        end subroutine demog_init
+
+
+        subroutine demog_rates_today(itime)
+        !===
+            ! Sets today's birth probability (b_t_today) and per-age daily death
+            ! probabilities (mu_age_today) for whichever of the 3 modes x 2
+            ! phases applies:
+            !
+            !                spin-up                    real simulation
+            !   STANDARD     scalar mu/birth_rate       same
+            !   FACTUAL      shape-invariant, g=1       supplied files, directly
+            !   COUNTER      shape-invariant, g=1       shape-invariant, g from shadow
+            !
+            ! MUST stay outside the agent parallel region: it writes the shared
+            ! mu_age_today(:). agents_pre_diagnostics calls it before the
+            ! !$OMP PARALLEL DO in mo_timestep.f90.
+            implicit none
+            integer, intent(in) :: itime
+
+            ! Local use only
+            integer :: a
+            real :: t_years
+            double precision :: g_daily
+
+            select case (demog_mode)
+
+            case (DEMOG_STANDARD)
+                ! mu_age_today(:) was set to mu_age(:) (= mu broadcast) once in
+                ! namelist_const and never changes, so only b_t needs setting.
+                b_t_today = birth_rate
+
+            case default ! DEMOG_FACTUAL, DEMOG_COUNTER
+                if (in_spinup) then
+                    ! Time-INVARIANT by construction. The convergence loop
+                    ! replays itime=1..365 an unknown number of times, so any
+                    ! itime-dependent rate would drift across replays -- never
+                    ! call interp1 with itime on this branch.
+                    b_t_today       = b_spin
+                    mu_age_today(:) = mu_spin(:)
+                else
+                    t_years = real(itime-1)*da
+                    b_fac_today = interp1(t_years, birth_years, birth_vals)
+                    if (in_mortality_time) then
+                        do a = 0, 79
+                            mu_fac_today(a) = interp1(t_years, mu_years, mu_age_years(a,:))
+                        end do
+                    else
+                        mu_fac_today(:) = mu_age(:)
+                    end if
+
+                    if (demog_mode == DEMOG_FACTUAL) then
+                        b_t_today       = b_fac_today
+                        mu_age_today(:) = mu_fac_today(:)
+                    else
+                        ! Advance the shadow exactly once per distinct simulated
+                        ! day: mobile.f90 makes an extra pre-pass at itime=1
+                        ! before the time loop, and with spin_up==0 that pre-pass
+                        ! IS day 1 of the real run.
+                        if (itime /= shadow_last_itime) then
+                            call demog_shadow_step(b_fac_today, mu_fac_today, g_daily)
+                            shadow_last_itime = itime
+                            g_ann_today = real(exp(365.d0*log(g_daily)))
+                        end if
+                        call demog_shape_rates(g_ann_today, b_t_today, mu_age_today)
+                    end if
+                end if
+            end select
+        end subroutine demog_rates_today
+
+
+        subroutine agents_pre_diagnostics(idis,itime)
         !===
             ! Calculate bulk statistics to feed into the disease source integration
             !
             integer, intent(in) :: idis ! 0 = Cholera: SIAR  ; 1 = Malaria: SEIAR ; 2 = Dengue [Non-functional]
+            integer, intent(in) :: itime ! Current time step
             !
             ! Local use only
             integer :: ixy, m, t   ! Looping spatial/status/thread indices
             integer :: n_tot       ! Today's total ticket draw for one cell
             integer :: remaining   ! Tickets not yet handed to a thread
             integer :: dead_t      ! Thread t's current dead-slot capacity in this cell
+            real :: b_t             ! Today's birth rate (see demog_rates_today)
             real :: active_pop_dens(nxy) ! pop_dens(:) scaled by today's active-agent fraction (malaria only)
             !
             ! Draw today's total births per cell, then hand tickets to threads
@@ -731,15 +1033,30 @@ USE, INTRINSIC :: ISO_C_BINDING
             ! goes unclaimed when the whole cell is out of dead slots. Dead
             ! slots claim from their own thread's column (lock-free) in
             ! agents_malaria/agents_cholera.
+            !
+            ! Runs every day, spin-up included: the age structure is held by the
+            ! RATES (shape-invariant generator at g=1), not by freezing turnover.
+            ! Which rates apply is a function of (mode, spin-up) -- see
+            ! demog_rates_today.
+            call demog_rates_today(itime)
+            b_t = b_t_today
+            ! ignbin (mo_ranlib.f90) hard-STOPs for pp<=0 or pp>=1, so clamp:
+            ! a zero birth rate is legitimate (a 0.0 row in birthrate_file).
+            b_t = min(max(b_t, 1.0e-12), 0.999999)
+            ! Called for every cell, including empty ones: ignbin(0,b_t) returns
+            ! 0 anyway, and skipping it would consume one fewer random number and
+            ! shift the downstream RNG stream.
             do ixy = 1, nxy
                 if (mask_pop(ixy)) then
-                    n_tot = ignbin(npeop(ixy), birth_rate)
+                    n_tot = ignbin(npeop(ixy), b_t)
                     remaining = n_tot
                     do t = 1, size(nbirths_left,dim=2)
                         dead_t = nslots_thread(ixy,t) - npeop_thread(ixy,t)
                         nbirths_left(ixy,t) = min(remaining, dead_t)
                         remaining = remaining - nbirths_left(ixy,t)
                     end do
+                    run_births_requested = run_births_requested + n_tot
+                    run_births_claimed = run_births_claimed + (n_tot - remaining)
                 end if
             end do
             !
@@ -797,6 +1114,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             R(:) = 0.
             !
             EIR(:) = 0.
+            P1(:) = 0.
             if (.not. in_imm) then ! If not external forcing then reset immunity
                 !
                 imm(:) = 0.
@@ -822,6 +1140,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                 status_pointer(m)%arr_p_priv(:,:) = 0.
             end do
             EIR_priv(:,:) = 0.
+            P1_priv(:,:) = 0.
             hbr_priv(:,:) = 0.
             if (.not. in_imm) then
                 imm_priv(:,:) = 0.
@@ -878,16 +1197,20 @@ USE, INTRINSIC :: ISO_C_BINDING
             A(:) = A(:) + sum(status_pointer(3)%arr_p_priv(:,:), dim=2)
             R(:) = R(:) + sum(status_pointer(4)%arr_p_priv(:,:), dim=2)
             !
-            S(:) = S(:)/npeop(:)
-            I(:) = I(:)/npeop(:)
-            A(:) = A(:)/npeop(:)
-            R(:) = R(:)/npeop(:)
-
-            ! Scale excretion events to density
-            exc(:) = exc(:)/npeop(:)
+            ! Guarded as in the malaria branch below: cells can reach npeop=0 now
+            ! that demographics run during spin-up. Empty cells keep the zero they
+            ! were reset to.
+            where (npeop(:) > 0)
+                S(:) = S(:)/npeop(:)
+                I(:) = I(:)/npeop(:)
+                A(:) = A(:)/npeop(:)
+                R(:) = R(:)/npeop(:)
+                ! Scale excretion events to density
+                exc(:) = exc(:)/npeop(:)
+            end where
             !
             if (out_rain) then
-              exc_clim(:) = exc_clim(:)/npeop(:)
+              where (npeop(:) > 0) exc_clim(:) = exc_clim(:)/npeop(:)
             end if
             !
             B_old = B
@@ -921,6 +1244,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             I_new(:) = I_new(:) + sum(status_pointer(6)%arr_p_priv(:,:), dim=2)
             !
             EIR(:) = EIR(:) + sum(EIR_priv(:,:), dim=2)
+            P1(:) = P1(:) + sum(P1_priv(:,:), dim=2)
             hbr(:) = hbr(:) + sum(hbr_priv(:,:), dim=2)
             if (.not. in_imm) then
                 imm(:) = imm(:) + sum(imm_priv(:,:), dim=2)
@@ -942,22 +1266,30 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             ! Fraction [per person]  = HA*N/(rho*A_cell) = N/npeop - with mobility this will have to
             !                                                        be modified
-            S(:) = S(:)/npeop(:)
-            E(:) = E(:)/npeop(:)
-            I(:) = I(:)/npeop(:)
-            I_new(:) = I_new(:)/npeop(:)
-            A(:) = A(:)/npeop(:)
-            R(:) = R(:)/npeop(:)
+            ! Guarded like the EIR/hbr/imm normalizations below: a cell can hold
+            ! zero active agents (an unpopulated cell, or one that empties once
+            ! demographics run), and an unguarded divide puts NaN in the output.
+            where (npeop(:) > 0)
+                S(:) = S(:)/npeop(:)
+                E(:) = E(:)/npeop(:)
+                I(:) = I(:)/npeop(:)
+                I_new(:) = I_new(:)/npeop(:)
+                A(:) = A(:)/npeop(:)
+                R(:) = R(:)/npeop(:)
+            end where
 
             ! Age-structured
             if (diag_age) then
                 do j = 1, size(age_blocks(:))
                     !
-                    Ia_new(:,j) = Ia_new(:,j)/N_a(:,j)
-                    Ia(:,j) = Ia(:,j)/N_a(:,j)
-                    Aa(:,j) = Aa(:,j)/N_a(:,j)
-                    !
-                    imm_a(:,j) = imm_a(:,j)/N_a(:,j)  ! Normalize by number of people in that age group
+                    ! Same guard: an age block can legitimately be empty in a cell.
+                    where (N_a(:,j) > 0.)
+                        Ia_new(:,j) = Ia_new(:,j)/N_a(:,j)
+                        Ia(:,j) = Ia(:,j)/N_a(:,j)
+                        Aa(:,j) = Aa(:,j)/N_a(:,j)
+                        !
+                        imm_a(:,j) = imm_a(:,j)/N_a(:,j)  ! Normalize by number of people in that age group
+                    end where
                     !
                 end do
             end if
@@ -965,6 +1297,21 @@ USE, INTRINSIC :: ISO_C_BINDING
             ! Calculate average daily EIR on a per person basis (use human to agent ratio: HA(:))
             !
             where((mask_pop(:)) .and. (npeop(:)>0)) EIR(:) = EIR(:)/npeop(:)/HA(:)!P_a!/HA(:)
+
+            ! Mean over agents of today's infection probability. Divided by npeop
+            ! only: P_1 is a probability, not a rate density, so the /HA applied
+            ! to EIR above would not be meaningful here.
+            where((mask_pop(:)) .and. (npeop(:)>0)) P1(:) = P1(:)/npeop(:)
+
+            ! Escape exponent for agents_report_saturation. Excludes spin-up,
+            ! whose convergence loop replays the same year repeatedly.
+            if ((.not. in_spinup) .and. (nday_sat < nday_sat_max)) then
+                where((mask_pop(:)) .and. (npeop(:)>0)) &
+                    esc_log(:) = esc_log(:) + log(max(1._8-real(P1(:),8), 1.e-12_8))
+                nday_sat = nday_sat + 1
+                ! Window full: report now rather than at the end of a long run.
+                if (nday_sat == nday_sat_max) call agents_report_saturation()
+            end if
 
             ! Calculate average daily hbr
             !
@@ -1122,7 +1469,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                         end if
                         ! Base mortality
                         !
-                        if (generate_random() <= mu) then ! Death
+                        if (generate_random() <= mu_age_today(min(floor(people(iagent)%agent_ID%age),79))) then ! Death
                             !
                             people(iagent)%health_status%active_status%status=.false.
                             ! Update this thread's column, not npeop(:) -- npeop(:) is
@@ -1147,6 +1494,11 @@ USE, INTRINSIC :: ISO_C_BINDING
                         else if (generate_random() <= alpha) then
                             !
                             people(iagent)%health_status%active_status%status=.false.
+                            ! Same per-thread decrement the base-mortality path below
+                            ! does -- without it npeop over-counts (the slot is dead but
+                            ! still tallied, and gets counted again if later reborn) and
+                            ! its dead-slot capacity is understated.
+                            npeop_thread(i,ithread) = npeop_thread(i,ithread) - 1
                             !
                         ! Excretion event
                         else
@@ -1165,7 +1517,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                         end if 
                         ! Base mortality
                         !
-                        if (generate_random() <= mu) then ! Death
+                        if (generate_random() <= mu_age_today(min(floor(people(iagent)%agent_ID%age),79))) then ! Death
                             !
                             people(iagent)%health_status%active_status%status=.false.
                             ! Update this thread's column, not npeop(:) -- npeop(:) is
@@ -1234,7 +1586,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                         !
                         ! Base mortality
                         !
-                        if (generate_random() <= mu) then ! Death
+                        if (generate_random() <= mu_age_today(min(floor(people(iagent)%agent_ID%age),79))) then ! Death
                             !
                             people(iagent)%health_status%active_status%status=.false.
                             ! Update this thread's column, not npeop(:) -- npeop(:) is
@@ -1256,7 +1608,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                         !
                         ! Base mortality
                         !
-                        if (generate_random() <= mu) then
+                        if (generate_random() <= mu_age_today(min(floor(people(iagent)%agent_ID%age),79))) then
                             !
                             people(iagent)%health_status%active_status%status=.false.
                             ! Update this thread's column, not npeop(:) -- npeop(:) is
@@ -1422,24 +1774,25 @@ USE, INTRINSIC :: ISO_C_BINDING
                         !
                         ! ********** Interventions **************
                         !
-                        ! f(a,t) = 1   
+                        ! f = interv_factor (&CONST, default 1 = none), applied to
+                        ! both directions of the cycle.
                         !
                         !****************************************
                         !
                         ! All-sporogonic-stages biting rate
                         !
-                        lambda_all = m_all(j)*1. ! f(a,t) = 1
+                        lambda_all = m_all(j)*interv_f(j)
                         !
                         ! Human to Vector transmission
                         !
-                        lambda_0 = m_0(j)*1. ! f(a,t) = 1 
+                        lambda_0 = m_0(j)*interv_f(j)
                         !P_0 = P_max*(1 - exp(-lambda_0*P_h0))                              ! Homogeneous Poisson model
                         !P_0 = P_max*(1 - (k_NB/(k_NB+lambda_0*P_h0))**k_NB)                ! Negative Binomial model
                         P_0 = P_max*(1 - exp(-people(iagent)%agent_ID%w_NB*lambda_0*P_h0))  ! Heterogeneous Poisson model
                         !
                         ! Vector to Human transmission
                         !
-                        lambda_1 = m_1(j)*1. ! f(a,t) = 1 
+                        lambda_1 = m_1(j)*interv_f(j)
                         !P_1 = 1 - exp(-lambda_1*P_v0)                              ! Homogeneous Poisson model
                         !P_1 = 1 - (k_NB/(k_NB+lambda_1*P_v0))**k_NB                ! Negative Binomial model
                         P_1 = 1 - exp(-people(iagent)%agent_ID%w_NB*lambda_1*P_v0)  ! Heterogeneous Poisson model
@@ -1450,6 +1803,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                         ! 
                         ! Save agent-specific 'bulk' daily entomological inoculation rate (EIR)
                         people(iagent)%health_status%malaria_status%EIR_att = lambda_1
+                        people(iagent)%health_status%malaria_status%P1_att = P_1
                         !people(iagent)%health_status%malaria_status%EIR_att = P_1 ! Temporary check
 
                         ! Save agent-specific 'bulk' daily biting rate (hbr)
@@ -1615,10 +1969,11 @@ USE, INTRINSIC :: ISO_C_BINDING
                     ! Base mortality
                     !===
                         !
-                        if (generate_random() <= mu) then 
+                        if (generate_random() <= mu_age_today(min(floor(people(iagent)%agent_ID%age),79))) then
                             !
                             people(iagent)%health_status%active_status%status=.false.
                             people(iagent)%health_status%malaria_status%EIR_att=0.
+                            people(iagent)%health_status%malaria_status%P1_att=0.
                             people(iagent)%health_status%malaria_status%hbr_att=0.
                             people(iagent)%health_status%malaria_status%imm=0.
                             ! Update this thread's column, not npeop(:) -- npeop(:) is
@@ -1690,7 +2045,14 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             ! Local use only
             integer :: j
-            roll = 0 
+            ! Fallback for r > cum_distr(sides) (e.g. cum_distr doesn't reach 1.0
+            ! due to upstream rounding). A value falling outside cum_distr's
+            ! covered range represents the TOP of the distribution (whatever
+            ! probability mass wasn't explicitly accounted for), so it belongs
+            ! on the last face -- a valid, 1-indexed array position -- not 0,
+            ! which every caller here uses directly as an array index (e.g.
+            ! mask_pop(loc)) and would be out of bounds.
+            roll = sides
             !
             do j = 1, sides
                 if (r <= cum_distr(j)) then
@@ -1698,7 +2060,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                     roll = j
                     !
                     exit
-                end if 
+                end if
             end do
             !
         end function find_face
@@ -1715,7 +2077,14 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             ! Local use only
             integer :: j
-            roll = 0 
+            ! Fallback for r > cum_distr(sides) (e.g. cum_distr doesn't reach 1.0,
+            ! as when it's missing an open-ended top bin). A value falling
+            ! outside cum_distr's covered range represents the TOP of the
+            ! distribution (whatever probability mass wasn't explicitly
+            ! accounted for), so it belongs in the last face, not the first --
+            ! matching the same top-bin clamp used elsewhere for this array
+            ! (e.g. agents_update_age_counts's min(floor(age), size(age_weights)-1)).
+            roll = sides - 1
             !
             do j = 0, sides-1
                 if (r <= cum_distr(j+1)) then
@@ -1723,7 +2092,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                     roll = j
                     !
                     exit
-                end if 
+                end if
             end do
             !
         end function find_face0

@@ -64,6 +64,10 @@ fi
             temp_file='Data/CHIRXS/temperature/Senegal/t2m.nc'
 #           -x Area file
             area_file='Data/CHIRXS/area.nc'
+#           -M Age-specific mortality-rate file (Optional; blank/NONE = scalar mu)
+            mortality_file='NONE'
+#           -B Time-varying birth-rate file (Optional; blank/NONE = scalar birth_rate)
+            birthrate_file='NONE'
 #           -c Constants/parameters file (example in params.txt)
             const='params.txt'
 #           -v VECTRI          0: Inactive 1: Coupled
@@ -124,6 +128,8 @@ var_15="-x ${area_file}"
 var_10="-p ${pop_file}"
 var_11="-a ${nagent}"
 var_16="-m ${mob}"
+var_17="-M ${mortality_file}"
+var_18="-B ${birthrate_file}"
 
 # CONST
 var_12="-c ${const}"
@@ -149,6 +155,8 @@ $var_12
 $var_13
 $var_15
 $var_16
+$var_17
+$var_18
 EOM
 
 echo 'Command:' ${command} > ${output_name}.info

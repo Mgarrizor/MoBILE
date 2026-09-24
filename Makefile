@@ -25,13 +25,27 @@ PROF_LIB  := -L/opt/homebrew/opt/gperftools/lib -lprofiler -ltcmalloc
 endif
 #-----------------------------------------
 # (https://stackoverflow.com/questions/3676322/what-flags-to-set-for-gfortran-compiler-to-catch-faulty-code)
-DEBUG     := -Og -fbacktrace -Wall -fcheck=all \
-             -ffixed-line-length-none \
-             -ffpe-summary=underflow,overflow -ffree-line-length-512 \
-             -fopenmp 
-FAST      := #-O3 -ffast-math -ffree-line-length-512 \
-             -march=native -fopenmp #    # Optimization flag (https://gcc.gnu.org/onlinedocs/gcc/Optimize-Options.html)
-             #-ftree-parallelize-loops=$(NPROC)
+# Build mode: make MODE=debug|normal|fast   (default normal)
+#   debug  -Og plus full runtime checks (-fcheck=all bounds-checks every array
+#          reference). ~25% slower than normal.
+#   normal -O2 -ffp-contract=off, no runtime checks. Bit-identical to debug.
+#          -ffp-contract=off is REQUIRED for that: with FMA contraction the
+#          1-ULP shifts flip agents across `generate_random() <= p`, which
+#          changes results. Do not remove it.
+#   fast   -O3 -ffast-math -march=native. Untested, and -march=native ties the
+#          binary to this CPU. Verify speed and reproducibility before use.
+MODE      ?= normal
+COMMON    := -ffixed-line-length-none -ffree-line-length-512 -fopenmp
+ifeq ($(MODE),debug)
+  OPT     := -Og -fbacktrace -Wall -fcheck=all \
+             -ffpe-summary=underflow,overflow $(COMMON)
+else ifeq ($(MODE),fast)
+  OPT     := -O3 -ffast-math -march=native $(COMMON)
+else ifeq ($(MODE),normal)
+  OPT     := -O2 -ffp-contract=off -fbacktrace $(COMMON)
+else
+  $(error MODE must be debug, normal or fast -- got '$(MODE)')
+endif
 EXE       := mobile.out # Name of executable file
 #=========
 # Coupling flag
@@ -103,7 +117,7 @@ all: $(EXE)
 
 $(EXE): ./build/mobile.o
 	@echo '2.- Link step'
-	@$(FC) $(OBJS) -o $(EXE) $(INC_LIBS) $(PROF_LIB) $(DEBUG) $(FAST) 
+	@$(FC) $(OBJS) -o $(EXE) $(INC_LIBS) $(PROF_LIB) $(OPT) 
 
 # Runs second ----------------------------------
 # - Generate main object file only if module object files or
@@ -112,7 +126,7 @@ $(EXE): ./build/mobile.o
 
 ./build/mobile.o: $(MOD2) $(MAIN)
 	@echo '1.- Compile main' $(MAIN)
-	@$(FC) -c $(MAIN) -I $(BUILD_DIR) -o $@ $(INC_FLAGS) $(DEBUG) $(FAST) $(COUPLING_FLAG) $(MOBILITY_FLAG)
+	@$(FC) -c $(MAIN) -I $(BUILD_DIR) -o $@ $(INC_FLAGS) $(OPT) $(COUPLING_FLAG) $(MOBILITY_FLAG)
 
 # Runs first -----------------------------------
 -include $(DEPENDS)
@@ -127,7 +141,7 @@ $(EXE): ./build/mobile.o
 $(MOD2): ./build/%.o : ./src/%.f90 
 	@echo '0.- Compile module' $<
 	@mkdir -p $(BUILD_DIR)
-	@$(FC) -cpp -c $< -J $(BUILD_DIR) -o $@ $(INC_FLAGS) $(DEBUG) $(FAST) $(COUPLING_FLAG) $(MOBILITY_FLAG)
+	@$(FC) -cpp -c $< -J $(BUILD_DIR) -o $@ $(INC_FLAGS) $(OPT) $(COUPLING_FLAG) $(MOBILITY_FLAG)
 # To generate dependency files add the flag -MD to the above command 
 # ... -cpp -MD -c ...
 

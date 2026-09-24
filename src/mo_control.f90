@@ -42,44 +42,73 @@ MODULE mo_control
 
     logical :: out_S       =.false.  ! Susceptible
     logical :: out_E       =.false.   ! Exposed
-    logical :: out_I       =.true.   ! Infected
-    logical :: out_Ia      =.false.  ! Age-disaggregated symptomatic (Ia)
+    logical :: out_I       =.true.    ! Infected
+    logical :: out_Ia      =.false.    ! Age-disaggregated symptomatic (Ia)
     logical :: out_I_new   =.true.   ! New infections (I_new)
     logical :: out_Ia_new  =.false.   ! Age-disaggregated new infections (Ia_new)
-    logical :: out_A       =.false.   ! Asymptomatic
-    logical :: out_Aa      =.false.  ! Age-disaggregated asymptomatic (Aa)
+    logical :: out_A       =.false.    ! Asymptomatic
+    logical :: out_Aa      =.false.    ! Age-disaggregated asymptomatic (Aa)
     logical :: out_R       =.false.  ! Recovered
 
     !--- Cholera ----
     logical :: out_B    =.false.  ! Bacterial density (could be changed to generic source of disease, e.g., B, V,...)
     logical :: out_F    =.false.  ! Force of infection
     !--- Malaria ----
-    logical :: out_EIR  =.true.  ! Entomological Inoculation Rate
-    logical :: out_imm  =.true.  ! Endemicity level / Immunity
-    logical :: out_imm_a=.false.  ! Age-disaggregated Immunity
-    logical :: out_hbr  =.false.  ! Human Biting Rate
+    logical :: out_EIR  =.true.   ! Entomological Inoculation Rate
+    logical :: out_P1   =.true.   ! Probability of >=1 infective bite per day (grid mean)
+    integer :: nday_sat_max = 730 ! Days of the real run used by the transmission saturation diagnostic
+    logical :: out_imm  =.true.   ! Endemicity level / Immunity
+    logical :: out_imm_a=.false.   ! Age-disaggregated Immunity
+    
+    logical :: out_N_a  =.false.  ! Age-disaggregated population (N_a)
+                                 ! --> People per age class per cell. Ia/Aa/Ia_new/imm_a are all divided by
+                                 !     N_a, so without it age-resolved output cannot be turned back into
+                                 !     counts except by assuming every cell shares the national age structure.
+    logical :: out_hbr  =.false. ! Human Biting Rate
     logical :: in_imm   =.false. ! Input immunity forcing flag: always false and automatically set to true is the corresponding
                                  ! forcing file is found.
+    logical :: in_spinup =.false. ! True only during the spin-up loop (mobile.f90). Selects the
+                                  ! shape-invariant g=1 rate regime (demog_rates_today).
     !
     ! Defined in mo_vectri.f90
     !
     !======= Clima
-    logical :: out_rain =.true.  ! Rainfall
+    logical :: out_rain =.true. ! Rainfall
     logical :: out_t2m  =.true. ! Air temperature
 
     !----------------------------------------------------------
     integer :: disID                 ! Disease ID (0: Cholera, 1: Malaria)
     character(len=100) :: run_name   ! Name of output files
-    character(len=100) :: pop_file   ! Name of population file
-    character(len=100) :: rain_file  ! Name of rain/precipitation file
-    character(len=100) :: t2m_file   ! Name of temperature file
-    character(len=100) :: area_file  ! Name of cell area file
-    character(len=100) :: imm_file   ! Name of immunity forcing file
-    character(len=100) :: namelist_filename
+    ! len=200 (not 100): these hold full file paths, which can exceed 100
+    ! characters once a caller uses an absolute path a few directories deep
+    ! (a Fortran namelist read silently truncates on overflow rather than
+    ! erroring, so this must be sized generously up front).
+    character(len=200) :: pop_file   ! Name of population file
+    character(len=200) :: rain_file  ! Name of rain/precipitation file
+    character(len=200) :: t2m_file   ! Name of temperature file
+    character(len=200) :: area_file  ! Name of cell area file
+    character(len=200) :: imm_file   ! Name of immunity forcing file
+    character(len=200) :: mortality_file = '' ! Name of age-specific mortality-rate file; blank = scalar mu
+    character(len=200) :: birthrate_file = '' ! Name of yearly birth-rate file; blank = scalar birth_rate
+    character(len=200) :: mortality_time_file = '' ! Name of age-AND-year mortality-rate file; blank = use mortality_file/mu (age-only, whole-run)
+    logical :: in_mortality_time = .false. ! True only if mortality_time_file was supplied -- gates the daily mu_age_today(:) update (see agents_pre_diagnostics)
+    
+    logical :: demog_counterfactual = .false. ! Counterfactual mode: the real simulation holds the age structure fixed at
+                                              ! cumm_age.txt's shape while matching the growth the FACTUAL rates imply,
+                                              ! instead of applying those rates to the agents directly. Set from &HUMAN
+                                              ! (it belongs with the demographic-file settings, not &CONST's physical
+                                              ! parameters). Requires at least one demographic rate file to be supplied.
+                                              ! Resolved once in demog_init (mo_agents.f90) from demog_counterfactual
+                                              ! plus which demographic files were actually given.
+    integer, parameter :: DEMOG_STANDARD = 0 ! scalar mu/birth_rate
+    integer, parameter :: DEMOG_FACTUAL  = 1 ! supplied files drive the real run
+    integer, parameter :: DEMOG_COUNTER  = 2 ! "shadow"-derived g(t) drives the real run
+    integer :: demog_mode = DEMOG_STANDARD
+    character(len=200) :: namelist_filename
     !----------------------------------------------------------
 
     ! https://fortran-lang.org/en/learn/quickstart/arrays_strings/#array-of-strings
-    character(len=100) ::  time_names(1)= [character(len=20) :: "time"]
+    character(len=100) ::  time_names(2)= [character(len=20) :: "time", "valid_time"]
     character(len=100) ::  lon_names(3) = [character(len=20) :: "lon", "longitude", "X"]
     character(len=100) ::  lat_names(3) = [character(len=20) :: "lat", "latitude", "Y"]
     character(len=100) ::  pop_names(4) = [character(len=20) :: "pop", "population", "population density", "Band1"]

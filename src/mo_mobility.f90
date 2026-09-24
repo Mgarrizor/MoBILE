@@ -10,7 +10,8 @@ MODULE mo_mobility
     !
     !--------------------------------------------------------------------------------------
     !
-    subroutine mob_dist_init(nxy,x_coord_1d,y_coord_1d,lon_coord,lat_coord,dx,dy,input,Re,pi,mask_pop,dist) !***************************
+    subroutine mob_dist_init(nxy,x_coord_1d,y_coord_1d,lon_coord,lat_coord,dx,dy,input,Re,pi,mask_pop,dist) 
+    !
       ! Calculate distances between all pairs for a given grid
       ! Currently calculates the shortest distance - could  be updated
       ! to calculate shortest distance for a given network 
@@ -67,7 +68,8 @@ MODULE mo_mobility
     !
     !--------------------------------------------------------------------------------------
     !
-    subroutine mob_gravity_init(nxy,agents,eps,mask_pop,mask_grav,mask_mob,D_grav,pop_dens,dist,Q,Q_2,Q_short,Q_long,m_short,m_long) !******************************************
+    subroutine mob_gravity_init(nxy,agents,eps,mask_pop,mask_grav,mask_mob,D_grav,pop_dens,dist,Q,Q_2,Q_short,Q_long,m_short,m_long) 
+    !
       ! Calculate 
       !     1) Visit probabilities of gravity model from
       !        Lorenzo et al. (http://doi.org/10.1098/rsif.2014.0840)
@@ -271,7 +273,8 @@ MODULE mo_mobility
     !
     !--------------------------------------------------------------------------------------
     !
-    subroutine mob_radiation_init !************************************************************
+    subroutine mob_radiation_init 
+    !
       ! Radiation model
 
     end subroutine mob_radiation_init
