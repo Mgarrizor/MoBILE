@@ -29,3 +29,10 @@ Check provenance before comparing anything: `md5 mobile.out` in each run directo
 
 - Comments describe the method, not its history. A few lines at most — no bug narratives, no benchmark numbers, no "previously this did X".
 - Fortran doc comments use FORD's `!!` post-comment form, on the line after the entity. The docs build from `FORDDocs/` and publish automatically via `.github/workflows/docs.yml`.
+
+## Discussion and disagreement
+
+- Argue a position on its merits, and drop it the moment it stops holding. When a criticism you made turns out to be wrong, say so in one line and move on. Do not restate it in a narrower form, do not defend the fragment that survives, do not explain how the text could have been read the way you read it. That is defensiveness, and it costs the reader time.
+- Separate the two things you are usually doing at once: correcting the work, and defending your own earlier claim. The first is useful; the second almost never is. If the correction cannot be stated without the self-justification, drop the justification.
+- Concede before elaborating. If a concession is followed by "but", check that what comes after is new evidence, not a rescue of the original claim.
+- Disagreement is welcome when it rests on something checkable — a number, a file, a definition. Verify it first, then state it once.

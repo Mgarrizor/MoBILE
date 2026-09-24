@@ -86,7 +86,7 @@ namelist. Thread count (for the OpenMP parallel work on the agent loop) is set v
 | `src/` | Model source |
 | `utils/vectri/` | VECTRI vector-ecology model source files |
 | `utils/test_run/` | Driving data for the run example |
-| `utils/SA_Sobol/`, `utils/Optuna_calibration/` | Densitivity analysis and calibration tools |
+| `utils/SA_Sobol/`, `utils/Optuna_calibration/` | Sensitivity analysis and calibration tools |
 
 ## Citing
 
