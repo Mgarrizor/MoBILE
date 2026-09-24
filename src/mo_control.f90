@@ -43,11 +43,11 @@ MODULE mo_control
     logical :: out_S       =.false.  ! Susceptible
     logical :: out_E       =.false.   ! Exposed
     logical :: out_I       =.true.    ! Infected
-    logical :: out_Ia      =.true.    ! Age-disaggregated symptomatic (Ia)
+    logical :: out_Ia      =.false.    ! Age-disaggregated symptomatic (Ia)
     logical :: out_I_new   =.true.   ! New infections (I_new)
-    logical :: out_Ia_new  =.true.   ! Age-disaggregated new infections (Ia_new)
-    logical :: out_A       =.true.    ! Asymptomatic
-    logical :: out_Aa      =.true.    ! Age-disaggregated asymptomatic (Aa)
+    logical :: out_Ia_new  =.false.   ! Age-disaggregated new infections (Ia_new)
+    logical :: out_A       =.false.    ! Asymptomatic
+    logical :: out_Aa      =.false.    ! Age-disaggregated asymptomatic (Aa)
     logical :: out_R       =.false.  ! Recovered
 
     !--- Cholera ----
@@ -58,9 +58,9 @@ MODULE mo_control
     logical :: out_P1   =.true.   ! Probability of >=1 infective bite per day (grid mean)
     integer :: nday_sat_max = 730 ! Days of the real run used by the transmission saturation diagnostic
     logical :: out_imm  =.true.   ! Endemicity level / Immunity
-    logical :: out_imm_a=.true.   ! Age-disaggregated Immunity
+    logical :: out_imm_a=.false.   ! Age-disaggregated Immunity
     
-    logical :: out_N_a  =.true.  ! Age-disaggregated population (N_a)
+    logical :: out_N_a  =.false.  ! Age-disaggregated population (N_a)
                                  ! --> People per age class per cell. Ia/Aa/Ia_new/imm_a are all divided by
                                  !     N_a, so without it age-resolved output cannot be turned back into
                                  !     counts except by assuming every cell shares the national age structure.

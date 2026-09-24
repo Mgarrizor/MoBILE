@@ -35,6 +35,40 @@ Trieste, Italy.
 The build requires `nf-config` for the compiler and flags. If that is unavailable on your system, set `FC`, `INC_FLAGS` and `INC_LIBS` directly at the top of the `Makefile`.
 
 
+## Build modes
+
+The model is compiled with `make`, which accepts a build mode:
+
+    make                # normal (default)
+    make MODE=debug
+    make MODE=fast
+
+| mode | flags | use |
+|---|---|---|
+| `normal` | `-O2 -ffp-contract=off -fbacktrace` | the default; what timings and production runs should use |
+| `debug` | `-Og -Wall -fcheck=all -fbacktrace` | full runtime checks, bounds-checks every array reference — roughly 25% slower |
+| `fast` | `-O3 -ffast-math -march=native` | untested; `-march=native` ties the binary to the CPU it was built on |
+
+> [!CAUTION]
+> **`-ffp-contract=off` in `normal` is load-bearing and must not be removed.** It is what
+> makes `normal` and `debug` builds produce identical results. With FMA contraction
+> enabled the compiler fuses multiply-add operations, shifting results by 1 ULP; those
+> shifts flip individual agents across the `generate_random() <= p` comparisons that
+> decide infection and symptom onset, so the two builds diverge. On clusters, take care
+> that a site-wide `-Ofast` or an aggressive toolchain default does not reintroduce it.
+
+`make PROFILE=1` additionally links the gperftools profiling libraries; the path is
+machine-specific and it is off by default.
+
+## Output volume
+
+Age-disaggregated diagnostics (`out_Ia`, `out_Ia_new`, `out_Aa`, `out_imm_a`, `out_N_a`
+in `src/mo_control.f90`) are **off by default**, because each writes one 3-D field per
+age band and they dominate the output size — enabling them takes the bundled example from
+roughly 400 MB to 1.8 GB. They are compile-time flags, so changing them requires a
+rebuild. Turn them on for age-structured analysis; leave them off for calibration runs,
+where thousands of trials would otherwise produce terabytes.
+
 ## VECTRI-ABM: run example
 
 The `utils/test_run/` folder contains everything a run needs — driving data (`area.nc`, `pop.nc`, `rain.nc`, `t2m.nc`), a parameter file, and `age_structure/cumm_age.txt`, the cumulative age distribution derived from WorldPop age structures as described in the accompanying paper — so the model can be tested without preparing any input of your own. Go to the MoBILE folder and do
@@ -71,13 +105,16 @@ block at the top (output name, disease, seed, agents, timesteps, spin-up, and th
 to your driving data). `params.txt` supplies the model parameters read into the `&CONST`
 namelist. Thread count (for the OpenMP parallel work on the agent loop) is set via `OMP_NUM_THREADS`.
 
-> [!CAUTION]
-> **Stochasticity.** VECTRI-ABM is a stochastic agent-based model driven by a seeded random
-> number generator. In this release, runs repeated with an identical seed are **not
-> guaranteed to be bit-identical**: agent updates are distributed across OpenMP threads
-> and some accumulations are order-dependent. Results should be interpreted as
-> realisations of a stochastic process, and ensembles over seeds are recommended for
-> quantitative comparison. Deterministic reproduction has been accomplished in an upcoming version (note yet available).
+> [!IMPORTANT]
+> **Reproducibility depends on the thread count.** VECTRI-ABM is a stochastic model driven
+> by a seeded random number generator. Repeated runs with the same seed **and the same
+> `OMP_NUM_THREADS`** are bit-identical — verified by comparing two complete runs of the
+> bundled example. Changing the thread count **does** change the results: agents are
+> partitioned across threads, so a different partition consumes the random stream in a
+> different order. That is expected, but it means a run is only
+> reproducible if the thread count is recorded alongside the seed. Pin `OMP_NUM_THREADS`
+> for anything that must be reproduced later, and treat results obtained with different
+> thread counts as separate realisations rather than comparable runs.
 
 ## Repository layout
 
