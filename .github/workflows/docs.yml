@@ -1,0 +1,62 @@
+name: docs
+
+# Builds the FORD documentation and publishes it to GitHub Pages.
+# Requires Settings -> Pages -> Source: "GitHub Actions".
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'utils/vectri/**'
+      - 'FORDDocs/**'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # graphviz is needed for FORD's call and dependency graphs
+      - name: Install FORD
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y graphviz
+          pip install ford
+
+      # reuses FORDDocs/build_doc.sh, so the build stays identical to a local one
+      - name: Build documentation
+        run: |
+          cd FORDDocs
+          bash build_doc.sh
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: FORDDocs/doc
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
