@@ -2390,9 +2390,12 @@ USE, INTRINSIC :: ISO_C_BINDING
           real :: r4_normal    !  Single precision (kind=4)
         
           r1 = generate_random()
+          ! M. Garrido Zornoza - October 2026
           ! random_number() returns [0,1): r1 = 0 gives log(0) = -inf, an infinite normal
           ! sample, and an overflowing ceiling(exp(...)) in tau_log (see the P_0/P_1 explanation and fix).
-          ! Redraw instead; results are unchanged unless r1 was exactly 0.
+          ! It created agents that were always infected (arm64, Mac) or had a negative
+          ! infection duration (x86, LEONARDO).
+          ! Fix: redraw instead; results are unchanged unless r1 was exactly 0.
           do while (r1 == 0.)
             r1 = generate_random()
           end do

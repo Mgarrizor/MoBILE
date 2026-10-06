@@ -314,7 +314,24 @@ EOM
 
 # 4) Execute MOBILE (mobile.out)
 echo '================= Running MoBILE ================='
+touch ${path}/.run_start           # Marks the run start: only crash reports newer than this count
 ${path}/mobile.out ${namelist}     # Pass namelist name as command line argument
+rc=$?
+# On macOS the crash backtrace has bare addresses; the system crash report has file:line
+# (with the .dSYM from MODE=debug). Print its top frames. macOS writes it a few seconds late.
+if [[ $rc -ne 0 && $(uname -s) == Darwin ]]; then
+  for i in {1..10}; do
+    report=$(find ~/Library/Logs/DiagnosticReports -name 'mobile.out-*.ips' -newer ${path}/.run_start 2>/dev/null | head -1)
+    [[ -n $report ]] && break; sleep 1
+  done
+  [[ -n $report ]] && python3 -c "
+import json, sys
+b = json.loads(open(sys.argv[1]).read().split('\n', 1)[1])
+t = [t for t in b['threads'] if t.get('triggered')][0]
+print('Crash report', sys.argv[1], '- top frames:')
+for f in t['frames'][:6]: print('  ', f.get('symbol', '?'), f.get('sourceFile', ''), f.get('sourceLine', ''))
+" "$report"
+fi
 #-------------------------------
 mv ${namelist} ${filename}.nc ${filename}.info ${filename}/
 cp $const ${filename}/

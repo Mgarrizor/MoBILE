@@ -37,8 +37,9 @@ endif
 MODE      ?= normal
 COMMON    := -ffixed-line-length-none -ffree-line-length-512 -fopenmp
 ifeq ($(MODE),debug)
-  OPT     := -Og -fbacktrace -Wall -fcheck=all \
-             -ffpe-summary=underflow,overflow $(COMMON)
+	# -g: puts source file and line numbers in the backtrace if the run fails
+  OPT     := -Og -g -fbacktrace -Wall -fcheck=all \
+             -ffpe-trap=invalid,zero,overflow -ffpe-summary=underflow -finit-real=snan $(COMMON)
 else ifeq ($(MODE),fast)
   OPT     := -O3 -ffast-math -march=native $(COMMON)
 else ifeq ($(MODE),normal)
@@ -47,6 +48,15 @@ else
   $(error MODE must be debug, normal or fast -- got '$(MODE)')
 endif
 EXE       := mobile.out # Name of executable file
+# macOS keeps debug info in the .o files; dsymutil gathers it into mobile.out.dSYM,
+# so a trapped run's crash report (Console.app > Crash Reports, or
+# ~/Library/Logs/DiagnosticReports/mobile.out-*.ips) shows file:line. Linux needs nothing.
+DSYM      :=
+ifeq ($(MODE),debug)
+ifeq ($(shell uname -s),Darwin)
+  DSYM    := dsymutil $(EXE)
+endif
+endif
 #=========
 # Coupling flag
 # Conditional definition of COUPLING_FLAG
@@ -117,7 +127,8 @@ all: $(EXE)
 
 $(EXE): ./build/mobile.o
 	@echo '2.- Link step'
-	@$(FC) $(OBJS) -o $(EXE) $(INC_LIBS) $(PROF_LIB) $(OPT) 
+	@$(FC) $(OBJS) -o $(EXE) $(INC_LIBS) $(PROF_LIB) $(OPT)
+	@$(DSYM)
 
 # Runs second ----------------------------------
 # - Generate main object file only if module object files or
