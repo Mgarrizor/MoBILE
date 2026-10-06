@@ -1801,7 +1801,7 @@ USE, INTRINSIC :: ISO_C_BINDING
                         ! Not min(real(floor(P/eps)),P) anymore: floor() returns a 32-bit integer, and P/eps
                         ! overflows it once P > 2.1e-6. x86 (like LEONARDO) turns the overflow into -2**31 (so P < 0
                         ! and nobody is ever infected); on arm64 it saturated (the result was clamped to the nearest value that fitted
-                        ! on a 32-but integer: +2,147,483,647 if too big or -2,147,483,647 if too small), and min() was returning P, which was only hidding the bug.
+                        ! on a 32-bit integer: +2,147,483,647 if too big or -2,147,483,648 if too small), and min() was returning P, which was only hiding the bug.
                         if (P_0 < eps) P_0 = 0.
                         if (P_1 < eps) P_1 = 0.
                         ! 
@@ -2390,6 +2390,12 @@ USE, INTRINSIC :: ISO_C_BINDING
           real :: r4_normal    !  Single precision (kind=4)
         
           r1 = generate_random()
+          ! random_number() returns [0,1): r1 = 0 gives log(0) = -inf, an infinite normal
+          ! sample, and an overflowing ceiling(exp(...)) in tau_log (see the P_0/P_1 explanation and fix).
+          ! Redraw instead; results are unchanged unless r1 was exactly 0.
+          do while (r1 == 0.)
+            r1 = generate_random()
+          end do
           r2 = generate_random()
           x = sqrt ( - 2.0E+00 * log ( r1 ) ) * cos ( 2.0E+00 * pi * r2 )
 
