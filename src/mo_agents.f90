@@ -1798,8 +1798,12 @@ USE, INTRINSIC :: ISO_C_BINDING
                         P_1 = 1 - exp(-people(iagent)%agent_ID%w_NB*lambda_1*P_v0)  ! Heterogeneous Poisson model
                         !
                         ! Apply numerical threshold ---> Need to optimize transmission events for cases where P < epsilon
-                        P_0 = min(real(floor(P_0/eps)),P_0)
-                        P_1 = min(real(floor(P_1/eps)),P_1)
+                        ! Not min(real(floor(P/eps)),P) anymore: floor() returns a 32-bit integer, and P/eps
+                        ! overflows it once P > 2.1e-6. x86 (like LEONARDO) turns the overflow into -2**31 (so P < 0
+                        ! and nobody is ever infected); on arm64 it saturated (the result was clamped to the nearest value that fitted
+                        ! on a 32-but integer: +2,147,483,647 if too big or -2,147,483,647 if too small), and min() was returning P, which was only hidding the bug.
+                        if (P_0 < eps) P_0 = 0.
+                        if (P_1 < eps) P_1 = 0.
                         ! 
                         ! Save agent-specific 'bulk' daily entomological inoculation rate (EIR)
                         people(iagent)%health_status%malaria_status%EIR_att = lambda_1
