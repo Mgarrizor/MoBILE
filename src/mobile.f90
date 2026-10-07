@@ -239,6 +239,10 @@ itime = 1
       ! Declarations or interfaces related to the coupled mode
       !=
         call init_constants() ! VECTRI-specific constants
+        ! Agents resolve bites per host, so blood-meal success belongs in m_0, not at
+        ! vector infection, where it would suppress only the human-to-vector direction.
+        ! Held at 1 by default ; it will be modelled for per-agent protection (e.g. bednets).
+        if (agents) rbiteratio = 1.0
       !=
       !
 #endif

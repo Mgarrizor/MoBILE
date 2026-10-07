@@ -213,6 +213,8 @@ MODULE mo_namelist
                              e_0, e1, e2, A1, e_th, mat_rate, rho,                       & ! Immunity scheme
                              m_a, m_c, k_m, i_star_a, i_star_c, k_star,                  & ! Symptomatic scheme
                              d_c, d_a, k_e,                                          & ! 
+                             fA_chr, tau_chr,                                        & ! Chronic asymptomatic reservoir
+                             rvecsurv, rvecsurv_min,                                 & ! Adult vector survival
                              alph_min,k_alph                                               !
 
             ! Does the file exist?
