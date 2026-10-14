@@ -89,7 +89,8 @@ endif
 # Note the single quotes around the * expressions. 
 # The shell will incorrectly expand these otherwise, 
 # but we want to send the * directly to the find command.
-SRCS := $(shell find -L $(SRC_DIR) -name '*.f90')# -or -name '*.c')
+# sort: fixed link order, so the same code always gives the same binary (comparable md5)
+SRCS := $(sort $(shell find -L $(SRC_DIR) -name '*.f90'))# -or -name '*.c')
 
 # Filter out main file (mobile.f90) and then substitute suffix		
 MOD1 := $(filter-out $(MAIN),$(SRCS))	
