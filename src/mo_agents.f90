@@ -226,7 +226,10 @@ USE, INTRINSIC :: ISO_C_BINDING
                     ! different atribute (age, sex, wealth) distributions. This choice 
                     ! is made when the standard method would require a prohibitive number of
                     ! agents, e.g., when run at regional scales.
-                    npeop(ixy) = min( ceiling(log(pop_dens(ixy)*A_cell(ixy)+1.)/norm*nagent),int(pop_dens(ixy)*A_cell(ixy)) )
+                    ! floor() (not ceiling()) so this first pass never exceeds nagent:
+                    ! ceiling() adds up to one agent per populated cell, which overshoots
+                    ! nagent on grids with many populated cells. The deficit is filled below.
+                    npeop(ixy) = min( floor(log(pop_dens(ixy)*A_cell(ixy)+1.)/norm*nagent),int(pop_dens(ixy)*A_cell(ixy)) )
                     !
                     if (npeop(ixy) /= 0) then ! If there is someone
                         do ipeo = 1,npeop(ixy)
@@ -359,6 +362,12 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             write(*,*) ' ' 
             print *, indx, '/ ', nagent
+            ! The loop below can only add agents; if the first pass already placed
+            ! more than nagent it would never terminate and overrun people(:).
+            if (indx > (nagent+1)) then
+                print *, 'First pass placed', indx-1, 'agents > nagent =', nagent, ' --> STOP'
+                STOP
+            end if
             do while (indx /= (nagent+1))
                !
                call random_number(rand)        ! Throw the dice
