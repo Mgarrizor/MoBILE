@@ -1,6 +1,9 @@
 #!/bin/bash
 
 # Script to run MOBILE
+#
+# Author: M. Garrido Zornoza
+# Contact: mgarrizoraca@gmail.com
 
 profiler=false     # Flag to profile model performance (time spent at each subroutine,... and memory usage at different simulation stages)
 freq=110           # Sampling frequency for profiler (default is 100 per second)
@@ -29,6 +32,7 @@ if ( $profiler ) ; then
 fi
 
 # ======================= FLAGS ==========
+
 # ----------------------------------------
 # -h Help! [Non-functional]
 #          ------------------------------- 
@@ -36,34 +40,45 @@ fi
 #          |Mandatory flags:
 #          |===============
 #           -o Output file name
-            output_name='control'
-#            output_name='1995'
+
+            output_name='output'
+
 #           -d Disease ID                       (0: Cholera ; 1: Malaria ; 2: Dengue [non-functional])
             disID=1
 #           -s Seed for random number generator (reproducibility)
-            seed=12345             
+            seed=12345    
+            name_list='namelist.nml'         
 #          -------------------------------
 #          |==============
 #          |Optional flags:
 #          |==============
+            help=""  # Write -h if you need help 
 #           -m Mobility flag (0 for now as mobility needs to be developed)
             mob=0
 #           -n Number of integrated days [days] (If n = 0 then nsteps=lenght of driving fields)
-            nstep=1096
-           # nstep=0
+            nstep=0
+
 #           -a Number of agents 
-            nagent=500000    
+            nagent=1000000
+
 #           -u Spin Up (0: no spin-up ; 1: automatic spin-up to some tolerance) 
-            spin_up=0
+            spin_up=1
+
+        # Kenya ============================
+
 #           -p Population file 
-            pop_file='Data/CHIRXS/pop.nc'
+            pop_file='path_to_pop_file/pop_file.nc'
+
 #           -r Rainfall file 
-            rain_file='Data/CHIRXS/rainfall/Senegal/rain.nc'
-            #rain_file='experiments/repeat_rainfall/1995/rain.nc'
+            rain_file='path_to_rain_file/rain_file.nc'
+
 #           -t Temperature file
-            temp_file='Data/CHIRXS/temperature/Senegal/t2m.nc'
+            temp_file='path_to_temp_file/temp_file.nc'
+
 #           -x Area file
-            area_file='Data/CHIRXS/area.nc'
+            area_file='path_to_area_file/area_file.nc'
+        # ===================================
+
 #           -M Age-specific mortality-rate file (Optional; blank/NONE = scalar mu)
             mortality_file='NONE'
 #           -B Time-varying birth-rate file (Optional; blank/NONE = scalar birth_rate)
@@ -72,7 +87,12 @@ fi
             const='params.txt'
 #           -v VECTRI          0: Inactive 1: Coupled
             vectri=$disID
-#           -i vectorID        [Non-functional]
+
+#           -i Immunity forcing
+         #   imm_forcing='experiments/imm_knockout/forcing/imm_bulk_counterfactual.nc'
+            imm_forcing='NONE'
+
+#           -?? vectorID        [Non-functional]
 #                               -- Anophelines --
             vectorID=0       # 0: An. gambiae s. s. 
 #                              1: An. funestus
@@ -108,57 +128,67 @@ fi
 # Variable list - to leave out a flag comment out the corresponding variable
 #----------------
 
-#var_1="-h" 
-var_2="${MOBILE}/mobile.sh"
+var_00=${help}
+var_01="${MOBILE}/mobile.sh"
 
 # Flags in their namelist category
 # INOUT
-var_3="-o ${output_name}"
-var_4="-d ${disID}"
-var_5="-n ${nstep}"
-var_6="-s ${seed}"
-var_7="-u ${spin_up}"
+var_10="-o ${output_name}"
+var_11="-d ${disID}"
+var_12="-n ${nstep}"
+var_13="-s ${seed}"
+var_14="-u ${spin_up}"
+var_15="-l ${name_list}"
 
 # CLIMA
-var_8="-r ${rain_file}"
-var_9="-t ${temp_file}"
-var_15="-x ${area_file}"
+var_20="-r ${rain_file}"
+var_21="-t ${temp_file}"
+var_22="-x ${area_file}"
 
 # HUMAN
-var_10="-p ${pop_file}"
-var_11="-a ${nagent}"
-var_16="-m ${mob}"
-var_17="-M ${mortality_file}"
-var_18="-B ${birthrate_file}"
+var_30="-p ${pop_file}"
+var_31="-a ${nagent}"
+var_32="-i ${imm_forcing}"
+var_33="-m ${mob}"
+var_34="-M ${mortality_file}"
+var_35="-B ${birthrate_file}"
 
 # CONST
-var_12="-c ${const}"
+var_40="-c ${const}"
 
 # VECTRI
-var_13="-v ${vectri}"
-var_14="-i ${vectorID}"
+var_50="-v ${vectri}"
 
 
 read -r -d '' command << EOM
-$var_1
-$var_2
-$var_3
-$var_4
-$var_5
-$var_6
-$var_7
-$var_8
-$var_9
+$var_00
+$var_01
+
 $var_10
 $var_11
 $var_12
 $var_13
+$var_14
 $var_15
-$var_16
-$var_17
-$var_18
+
+$var_20
+$var_21
+$var_22
+
+$var_30
+$var_31
+$var_32
+$var_33
+$var_34
+$var_35
+
+$var_40
+
+$var_50
+
 EOM
 
+echo ${command}
 echo 'Command:' ${command} > ${output_name}.info
 echo 'Version:' >> ${output_name}.info
 echo 'Retrieved from:' $(git -C ${MOBILE} remote get-url origin) >> ${output_name}.info
@@ -175,4 +205,6 @@ if ( $profiler ) ; then
     bash profiler.sh -n ${output_name}
 fi
 #--------------------------------
+
+ncks -6 -O ${output_name}/${output_name}.nc ${output_name}/${output_name}'3.nc'
 
