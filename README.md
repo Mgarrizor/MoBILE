@@ -85,10 +85,9 @@ used exactly as read, so the units below are requirements. Cells with `_FillValu
 Why: population is a quantity that must add up, so its regridding must conserve the total. Rain and temperature are averages, so a coarse cell takes the area-weighted mean of the fine cells inside it. 
 
 > [!NOTE] 
-> A population **count** product (persons per pixel) must first be divided by the true pixel area (`cdo div pop.nc -gridarea pop.nc`), not by a nominal 1 km².
+> A population **count** product (persons per pixel - such as WoldPop products) must first be divided by the true pixel area (`cdo div pop.nc -gridarea pop.nc`).
 
-**`fracarea` or `destarea`.** Both are conservative; they differ only when a model cell (final grid) is partly covered by source data (original grid), typically on the coast, where the source has no values over
-the sea. `fracarea` divides by the covered part: the cell gets the average of the data it has. `destarea` divides by the whole cell: the uncovered part counts as zero. Take a coastal cell that is half land:
+**`fracarea` or `destarea`.** Both are conservative; they differ only when a model cell (final grid) is partly covered by source data (original grid), typically on the coast, where the source has no values over the sea (*e.g.,*ERA5Land). Each model cell gets (sum of source value × overlap area) / A, and A is what differs between both conservative schemes. In `fracarea`: A = the covered area, so the cell gets the average of the data it has. `destarea`: A = the whole cell, so the uncovered part adds its area but no value, as if it were zero. For example, if we take a coastal cell that is half land:
 
 - **Rain** (and temperature): the land half gets 10 mm/day. `fracarea` gives the cell 10 mm/day; `destarea` gives 5 mm/day. The sea half is unmeasured, not dry, so the land value is the best estimate for the whole cell: use `fracarea`.
 - **People**: the land half holds 1,000 people. `destarea` gives 1,000 / (whole cell area); `fracarea` gives 1,000 / (half the area), twice the density. The model makes people from density × `cell_area`, so `fracarea` would put 2,000 people in the cell. The sea really is empty, so use `destarea`: it keeps the domain total equal to the source total.
