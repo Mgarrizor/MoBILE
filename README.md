@@ -75,17 +75,17 @@ Four netCDF files on the model grid. **The model applies no unit conversion**: v
 used exactly as read, so the units below are requirements. Cells with `_FillValue` in
 `pop`, `rain` or `t2m` are not simulated.
 
-| File | Variable names accepted | Units | Time axis | Putting it on the model grid with the Climate Data Operator (CDO))|
+| File | Variable names accepted | Units | Time axis | Putting it on the model grid with the Climate Data Operator (CDO)|
 |---|---|---|---|---|
 | `rain.nc` | `rain`, `rainfall`, `precipitation`, `tp`, `precip` | mm/day | daily; `time` or `valid_time` | use conservative interpolation, mean over the covered part: `CDO_REMAP_NORM=fracarea cdo remapcon` |
 | `t2m.nc` | `temperature`, `t2m` | °C (ERA5 is in K: `cdo subc,273.15`) | daily mean, same length as rain | as rain (`remapcon` + `fracarea`); none if the model grid is the temperature grid |
 | `pop.nc` | `pop`, `population`, `population density`, `Band1` | persons/m² (WorldPop density is per km²: `cdo mulc,1e-6`) | none (static) | conservative, conserves people: `CDO_REMAP_NORM=destarea cdo remapcon` |
 | `area.nc` | `cell_area` | m² | none (static) | `cdo gridarea` on the model grid, unmasked |
 
-Why: population is a quantity that must add up, so its regridding must conserve the total. Rain and temperature are averages, so a coarse cell takes the area-weighted mean of the fine cells inside it. 
+**Why `remapcon`, not bilinear.** Population must add up, so the regridding must conserve the total; rain and temperature are averages, so each model cell must get the mean of what falls in it. Conservative remapping does both, by giving each model cell the area-weighted mean of the source cells it overlaps. Bilinear interpolation, a common default, does neither in general.
 
 > [!NOTE] 
-> A population **count** product (persons per pixel - such as WoldPop products) must first be divided by the true pixel area (`cdo div pop.nc -gridarea pop.nc`).
+> A population **count** product (persons per pixel, such as WorldPop's count products) must first be divided by the true pixel area (`cdo div pop.nc -gridarea pop.nc`). WorldPop's **density** products (persons per km²) only need `cdo mulc,1e-6`.
 
 **`fracarea` or `destarea`.** Both are conservative; they differ only when a model cell (final grid) is partly covered by source data (original grid), typically on the coast, where the source has no values over the sea (*e.g.,*ERA5Land). Each model cell gets (sum of source value × overlap area) / A, and A is what differs between both conservative schemes. In `fracarea`: A = the covered area, so the cell gets the average of the data it has. `destarea`: A = the whole cell, so the uncovered part adds its area but no value, as if it were zero. For example, if we take a coastal cell that is half land:
 
