@@ -69,6 +69,25 @@ roughly 400 MB to 1.8 GB. They are compile-time flags, so changing them requires
 rebuild. Turn them on for age-structured analysis; leave them off for calibration runs,
 where thousands of trials would otherwise produce terabytes.
 
+## Driving data
+
+Four netCDF files on the model grid. **The model applies no unit conversion**: values are
+used exactly as read, so the units below are requirements. Cells with `_FillValue` in
+`pop`, `rain` or `t2m` are not simulated.
+
+| File | Variable names accepted | Units | Time axis | Putting it on the model grid |
+|---|---|---|---|---|
+| `rain.nc` | `rain`, `rainfall`, `precipitation`, `tp`, `precip` | mm/day | daily; `time` or `valid_time` | conservative, mean over the covered part: `CDO_REMAP_NORM=fracarea cdo remapcon` |
+| `t2m.nc` | `temperature`, `t2m` | °C (ERA5 is in K: `cdo subc,273.15`) | daily mean, same length as rain | as rain (`remapcon` + `fracarea`); none if the model grid is the temperature grid |
+| `pop.nc` | `pop`, `population`, `population density`, `Band1` | persons/m² (WorldPop density is per km²: `cdo mulc,1e-6`) | none (static) | conservative, conserves people: `CDO_REMAP_NORM=destarea cdo remapcon` |
+| `area.nc` | `cell_area` | m² | none (static) | `cdo gridarea` on the model grid, unmasked |
+
+Why: population is a quantity that must add up, so its regridding must conserve the total
+(bilinear interpolation lost 44% of Senegal's population in an earlier version). Rain and
+temperature are averages, so a coarse cell takes the area-weighted mean of the fine cells
+inside it. A population **count** product (persons per pixel) must first be divided by the
+true pixel area (`cdo div pop.nc -gridarea pop.nc`), not by a nominal 1 km².
+
 ## VECTRI-ABM: run example
 
 The `utils/test_run/` folder contains everything a run needs — driving data (`area.nc`, `pop.nc`, `rain.nc`, `t2m.nc`), a parameter file, and `age_structure/cumm_age.txt`, the cumulative age distribution derived from WorldPop age structures as described in the accompanying paper — so the model can be tested without preparing any input of your own. Go to the MoBILE folder and do

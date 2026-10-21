@@ -782,12 +782,18 @@ USE, INTRINSIC :: ISO_C_BINDING
             if (wsum <= 0._8) return
 
             print *, '===== Transmission saturation ====='
-            print '("  days accumulated: ",i0," (",f5.2," yr), rescaled to 365")', &
+            print '("  per-year average over first ",i0," days (",f5.2," yr) of the run")', &
                 nday_sat, 1._8/yr
-            print '("  annual exposure Lambda, pop-weighted:  ",f9.3)', lsum/wsum
-            print '("  P(infection/yr), pop-weighted mean:    ",f9.4)', psum/wsum
-            print '("  population with P > 0.99:              ",f8.1,"%")', 100._8*w99/wsum
-            print '("  population with P > 0.90:              ",f8.1,"%")', 100._8*w90/wsum
+            ! Lambda = -sum_t log(1-P1): cumulative force of infection, i.e. expected
+            ! infecting bites per person per year (exposure, ignoring immunity and
+            ! current infection status). 365/Lambda = mean wait to infection.
+            print '("  cumulative force of infection [/person/yr]: ",f9.1)', lsum/wsum
+            print '("  mean time to infection [days]:              ",f9.1)', 365._8/max(lsum/wsum, 1.e-12_8)
+            print '("  daily P(infection), pop-weighted:           ",f8.1,"%")', &
+                100._8*(1._8 - exp(-lsum/wsum/365._8))
+            print '("  P(infection/yr), pop-weighted mean:        ",f9.4)', psum/wsum
+            print '("  population with P > 0.99:                  ",f8.1,"%")', 100._8*w99/wsum
+            print '("  population with P > 0.90:                  ",f8.1,"%")', 100._8*w90/wsum
             if (w99/wsum > 0.5_8) then
                 print *, ' --> SATURATED: infection is near-certain for most of the population.'
                 print *, '     Incidence cannot resolve the transmission gradient at this HA.'
