@@ -84,7 +84,8 @@ used exactly as read, so the units below are requirements. Cells with `_FillValu
 
 Why: population is a quantity that must add up, so its regridding must conserve the total. Rain and temperature are averages, so a coarse cell takes the area-weighted mean of the fine cells inside it. 
 
-> [!NOTE] A population **count** product (persons per pixel) must first be divided by the true pixel area (`cdo div pop.nc -gridarea pop.nc`), not by a nominal 1 km².
+> [!NOTE] 
+> A population **count** product (persons per pixel) must first be divided by the true pixel area (`cdo div pop.nc -gridarea pop.nc`), not by a nominal 1 km².
 
 **`fracarea` or `destarea`.** Both are conservative; they differ only when a model cell (final grid) is partly covered by source data (original grid), typically on the coast, where the source has no values over
 the sea. `fracarea` divides by the covered part: the cell gets the average of the data it has. `destarea` divides by the whole cell: the uncovered part counts as zero. Take a coastal cell that is half land:
