@@ -37,7 +37,10 @@ to all models.
 
 ## VECTRI-ABM
 
-<div align="right"><a href="#models">↑ Back to models</a></div>
+<div align="right"><a href="#models"><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://img.shields.io/badge/%E2%86%91_Back_to_models-4C3A6B">
+  <img alt="Back to models" src="https://img.shields.io/badge/%E2%86%91_Back_to_models-E6DEFF">
+</picture></a></div>
 
 An agent-based model of malaria transmission coupled to the
 [VECTRI](https://users.ictp.it/~tompkins/vectri/documentation/) vector-ecology model.
@@ -111,7 +114,10 @@ namelist. Thread count (for the OpenMP parallel work on the agent loop) is set v
 
 ## Cholera model
 
-<div align="right"><a href="#models">↑ Back to models</a></div>
+<div align="right"><a href="#models"><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://img.shields.io/badge/%E2%86%91_Back_to_models-4C3A6B">
+  <img alt="Back to models" src="https://img.shields.io/badge/%E2%86%91_Back_to_models-E6DEFF">
+</picture></a></div>
 
 > [!NOTE]
 > **In development.** A model of cholera transmission on the MoBILE framework, under
@@ -201,4 +207,7 @@ publication.
 
 GNU General Public License v3.0 — see [`LICENSE.md`](LICENSE.md).
 
-<div align="right"><a href="#models">↑ Back to models</a></div>
+<div align="right"><a href="#models"><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://img.shields.io/badge/%E2%86%91_Back_to_models-4C3A6B">
+  <img alt="Back to models" src="https://img.shields.io/badge/%E2%86%91_Back_to_models-E6DEFF">
+</picture></a></div>
