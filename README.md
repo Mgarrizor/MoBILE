@@ -17,12 +17,13 @@ citation.
 Developed at the Abdus Salam International Centre for Theoretical Physics (ICTP),
 Trieste, Italy.
 
-## Models
+<a id="models"></a>
+## ![](https://placehold.co/14/FFE0B2/FFE0B2.png) Models
 
 | Model | Disease | Status | |
 |---|---|---|---|
-| **VECTRI-ABM** | malaria | in use; paper in preparation | [read ↓](#vectri-abm) |
-| **Cholera model** | cholera | in development | [read ↓](#cholera-model) |
+| **VECTRI-ABM** | malaria | in use; paper in review | [read ↓](#vectri-abm) |
+| **Cholera model** | cholera | untested | [read ↓](#cholera-model) |
 
 The sections below each model are specific to it. Everything from
 [Requirements](#requirements) onwards — build, driving data, repository layout — is common
@@ -35,7 +36,8 @@ to all models.
 
 ---
 
-## VECTRI-ABM
+<a id="vectri-abm"></a>
+## ![](https://placehold.co/14/C8E6C9/C8E6C9.png) VECTRI-ABM
 
 <div align="right"><a href="#models"><picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://img.shields.io/badge/%E2%86%91_Back_to_models-4C3A6B">
@@ -112,7 +114,8 @@ namelist. Thread count (for the OpenMP parallel work on the agent loop) is set v
 
 ---
 
-## Cholera model
+<a id="cholera-model"></a>
+## ![](https://placehold.co/14/C8E6C9/C8E6C9.png) Cholera model
 
 <div align="right"><a href="#models"><picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://img.shields.io/badge/%E2%86%91_Back_to_models-4C3A6B">
@@ -126,7 +129,8 @@ namelist. Thread count (for the OpenMP parallel work on the agent loop) is set v
 
 ---
 
-## Requirements
+<a id="requirements"></a>
+## ![](https://placehold.co/14/FFE0B2/FFE0B2.png) Requirements
 
 - A Fortran compiler with OpenMP support (gfortran)
 - netCDF-Fortran, providing `nf-config` and `nc-config` on your `PATH`
@@ -134,7 +138,8 @@ namelist. Thread count (for the OpenMP parallel work on the agent loop) is set v
 
 The build requires `nf-config` for the compiler and flags. If that is unavailable on your system, set `FC`, `INC_FLAGS` and `INC_LIBS` directly at the top of the `Makefile`.
 
-## Build modes
+<a id="build-modes"></a>
+## ![](https://placehold.co/14/FFE0B2/FFE0B2.png) Build modes
 
 The model is compiled with `make`, which accepts a build mode:
 
@@ -159,7 +164,8 @@ The model is compiled with `make`, which accepts a build mode:
 `make PROFILE=1` additionally links the gperftools profiling libraries; the path is
 machine-specific and it is off by default.
 
-## Driving data
+<a id="driving-data"></a>
+## ![](https://placehold.co/14/FFE0B2/FFE0B2.png) Driving data
 
 Four netCDF files on the model grid. **The model applies no unit conversion**: values are
 used exactly as read, so the units below are requirements. Cells with `_FillValue` in
@@ -182,7 +188,8 @@ used exactly as read, so the units below are requirements. Cells with `_FillValu
 > [!NOTE] 
 > A population **count** product (persons per pixel, such as WorldPop's count products) must first be divided by the true pixel area (`cdo div pop.nc -gridarea pop.nc`). WorldPop's **density** products (persons per km²) only need `cdo mulc,1e-6`.
 
-## Repository layout
+<a id="repository-layout"></a>
+## ![](https://placehold.co/14/FFE0B2/FFE0B2.png) Repository layout
 
 | path | contents |
 |---|---|
@@ -191,7 +198,8 @@ used exactly as read, so the units below are requirements. Cells with `_FillValu
 | `utils/test_run/` | Driving data for the run example |
 | `utils/SA_Sobol/`, `utils/Optuna_calibration/` | Sensitivity analysis and calibration tools |
 
-## Citing
+<a id="citing"></a>
+## ![](https://placehold.co/14/FFE0B2/FFE0B2.png) Citing
 
 See [`CITATION.cff`](CITATION.cff), or use the "Cite this repository" button on GitHub.
 
@@ -203,7 +211,8 @@ A paper describing VECTRI-ABM is in preparation. Until then, please cite the
 software record above; this page will be updated with the article reference on
 publication.
 
-## License
+<a id="license"></a>
+## ![](https://placehold.co/14/FFE0B2/FFE0B2.png) License
 
 GNU General Public License v3.0 — see [`LICENSE.md`](LICENSE.md).
 
