@@ -37,6 +37,8 @@ to all models.
 
 ## VECTRI-ABM
 
+<div align="right"><a href="#models">↑ Back to models</a></div>
+
 An agent-based model of malaria transmission coupled to the
 [VECTRI](https://users.ictp.it/~tompkins/vectri/documentation/) vector-ecology model.
 Agents carry age-structured diagnostics including per-timestep symptomatic and
@@ -108,6 +110,8 @@ namelist. Thread count (for the OpenMP parallel work on the agent loop) is set v
 ---
 
 ## Cholera model
+
+<div align="right"><a href="#models">↑ Back to models</a></div>
 
 > [!NOTE]
 > **In development.** A model of cholera transmission on the MoBILE framework, under
@@ -196,3 +200,5 @@ publication.
 ## License
 
 GNU General Public License v3.0 — see [`LICENSE.md`](LICENSE.md).
+
+<div align="right"><a href="#models">↑ Back to models</a></div>
