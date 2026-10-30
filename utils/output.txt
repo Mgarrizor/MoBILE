@@ -1,0 +1,32 @@
+! Example output selection for the -O flag of mobile.sh. Values are the defaults.
+! Flags left out keep their default. Rainfall and temperature are always written.
+! 2D (x,y) fields
+out_pop=.true.,      ! Human population density
+out_age=.true.,      ! Age structure
+out_wperm=.true.,    ! Permanent water fraction
+out_wurbn=.false.,   ! Urban water fraction
+! 3D (x,y,t) fields: agents
+out_N=.true.,        ! Agents per cell
+out_HA=.true.,       ! Humans per agent
+! 3D (x,y,t) fields: disease
+out_S=.false.,       ! Susceptible
+out_E=.false.,       ! Exposed
+out_I=.true.,        ! Symptomatic
+out_I_new=.true.,    ! New symptomatic cases
+out_A=.false.,       ! Asymptomatic
+out_R=.false.,       ! Recovered
+out_EIR=.true.,      ! Entomological inoculation rate
+out_P1=.true.,       ! Probability of at least one infective bite per day
+out_hbr=.false.,     ! Human biting rate
+out_imm=.true.,      ! Immunity
+! 3D (x,y,t) fields: disaggregated by age (one field per age band, large output)
+out_Ia=.false.,      ! Symptomatic
+out_Ia_new=.false.,  ! New symptomatic cases
+out_Aa=.false.,      ! Asymptomatic
+out_imm_a=.false.,   ! Immunity
+out_N_a=.false.,     ! Agents
+! 3D (x,y,t) fields: vectors and water
+out_vect=.true.,     ! Vector density
+out_vecinfc=.true.,  ! Infective vector density
+out_larv=.false.,    ! Larval density
+out_wpond=.true.,    ! Pond fraction

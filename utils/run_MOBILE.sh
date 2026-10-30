@@ -85,6 +85,8 @@ fi
             birthrate_file='NONE'
 #           -c Constants/parameters file (example in params.txt)
             const='params.txt'
+#           -O Output selection file (Optional; blank/NONE = default output; example in output.txt)
+            output_file='NONE'
 #           -v VECTRI          0: Inactive 1: Coupled
             vectri=$disID
 
@@ -155,6 +157,7 @@ var_35="-B ${birthrate_file}"
 
 # CONST
 var_40="-c ${const}"
+var_41="-O ${output_file}"
 
 # VECTRI
 var_50="-v ${vectri}"
@@ -183,6 +186,7 @@ $var_34
 $var_35
 
 $var_40
+$var_41
 
 $var_50
 
@@ -205,6 +209,4 @@ if ( $profiler ) ; then
     bash profiler.sh -n ${output_name}
 fi
 #--------------------------------
-
-ncks -6 -O ${output_name}/${output_name}.nc ${output_name}/${output_name}'3.nc'
 

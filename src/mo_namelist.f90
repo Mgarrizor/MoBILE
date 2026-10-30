@@ -12,6 +12,9 @@ MODULE mo_namelist
 
     use mo_constants !-- VECTRI
 
+#ifdef COUPLED
+    use mo_vectri, only: out_vect, out_vecinfc, out_larv, out_wpond, out_wurbn, out_wperm
+#endif
 
     implicit none
 
@@ -290,6 +293,53 @@ MODULE mo_namelist
             end if
             nagent_max = ceiling(real(nagent) * growth_ratio_ceiling)
         end subroutine namelist_const
+
+
+        subroutine namelist_output
+        ! - Selects the output fields at run time. Flags not set in &OUTPUT keep the defaults in
+        !   mo_control and mo_vectri.
+        ! - Only flags that do nothing but select output are listed. out_rain and out_t2m also
+        !   gate reading the forcing, and diag_age the age-stratified accumulation.
+            implicit none
+
+            ! Local use only
+            character(len=1000) :: line
+            integer:: file_unit, iostats
+
+            ! Define namelist
+            namelist /OUTPUT/ out_pop, out_age, out_N, out_HA, out_S, out_E, out_I, out_Ia, &
+                              out_I_new, out_Ia_new, out_A, out_Aa, out_R, out_EIR, out_P1, &
+                              out_hbr, out_imm, out_imm_a, out_N_a
+#ifdef COUPLED
+            namelist /OUTPUT/ out_vect, out_vecinfc, out_larv, out_wpond, out_wurbn, out_wperm
+#endif
+
+            ! Does the file exist?
+            inquire (file=namelist_filename, iostat=iostats)
+
+             if (iostats /= 0) then
+                 write (stderr, '("Error: namelist file does not exist")')
+                 return
+             end if
+
+            ! Open and read namelist
+            open (action='read', file=namelist_filename, iostat=iostats, newunit=file_unit)
+            read (nml=OUTPUT, iostat=iostats, unit=file_unit)
+
+            ! If file exists but reading failed
+            if (iostats /= 0) then
+                write (stderr, '("Error: invalid namelist format")')
+                ! Output line where failure occured
+                ! https://degenerateconic.com/namelist-error-checking.html
+                backspace(file_unit)
+                read(file_unit,fmt='(A)') line
+                write(stderr,'(A)') 'Invalid line in namelist is: '//trim(line)
+                STOP
+            end if
+
+            close (file_unit)
+
+        end subroutine namelist_output
 
 
 

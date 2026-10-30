@@ -5,7 +5,6 @@
 #   mkdir -p run && cd run
 #   bash $MOBILE/utils/test_run/run_example.sh
 #
-# nagent must stay near 1e6: below that, agent initialisation overruns its allocation.
 
 set -euo pipefail
 [ -n "${MOBILE:-}" ] || { echo "set MOBILE first" >&2; exit 1; }

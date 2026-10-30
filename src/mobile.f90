@@ -317,6 +317,9 @@ itime = 1
     ! - Population density and forcing fields
     !
     ! ************** 0.2 Common information **************
+    ! Output selection. Read before the safety block below, which has the last word.
+    call namelist_output()
+    !
 ! Safety ===============
 #ifdef COUPLED   
     coupling =.true.    ! Vector-borne setting

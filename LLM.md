@@ -9,7 +9,6 @@
 ## Configuration
 
 - **`nagent` is very important.** Results depend on the human-to-agent ratio `HA = pop_dens*A_cell/npeop`. Convergence needs HA close to 1; at HA ~ 1.9 the incidence in under-fives is ~18% too high. Lower `nagent` to save time and the answer changes. The model is not resolution independent (yet) - a "sub-agent" scheme needs to be developed. 
-- `nagent` also has a floor: agents are handed out per cell with a `ceiling()` in `agents_init`, which overshoots the budget by roughly half the number of populated cells until the per-cell population cap binds. Too low and initialisation runs past `people(nagent)`.
 - Runs are bit-identical for a fixed seed AND fixed number of threads.
 
 ## Reading model output

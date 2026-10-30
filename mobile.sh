@@ -38,6 +38,7 @@ usage() { echo "Usage:              \n
                 -B: Time-varying birth-rate file (Optional; blank = scalar birth_rate) \n
                 -T: Age-AND-year mortality-rate file (Optional; blank = use -M/scalar mu; overrides -M if both given) \n
                 -C: Counterfactual mode [1: hold the age structure fixed; anything else: factual] (Optional; needs -M/-B/-T) \n
+                -O: Output selection file, out_*=.true./.false. lines for &OUTPUT (Optional; blank/NONE = default output) \n
 
                  "; }
 # Resources
@@ -50,8 +51,9 @@ mortality_file=""
 birthrate_file=""
 mortality_time_file=""
 demog_counterfactual=".false."
+output_file=""
 
-while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:x:i:l:M:B:T:C:" flag; do
+while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:x:i:l:M:B:T:C:O:" flag; do
  case $flag in
    h) # Handle the -h flag
    # Display script help information
@@ -137,6 +139,13 @@ while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:x:i:l:M:B:T:C:" flag; do
      demog_counterfactual=".true."
    else
      demog_counterfactual=".false."
+   fi
+   ;;
+   O) # Handle the -O flag (output selection file; 'NONE' = blank = default output)
+   if [ "$OPTARG" = "NONE" ]; then
+     output_file=""
+   else
+     output_file="$OPTARG"
    fi
    ;;
    \?) # Handle invalid options
@@ -280,6 +289,13 @@ fi
 [ -r "$const" ] || { echo "Constants file not readable: $const" >&2; exit 1; }
 
 lines=$(<"$const")  # < reads the entire content of the file into the variable "lines"
+
+# Same check as $const: an unreadable file would silently give the default output
+output_lines=""
+if [ -n "$output_file" ]; then
+  [ -r "$output_file" ] || { echo "Output selection file not readable: $output_file" >&2; exit 1; }
+  output_lines=$(<"$output_file")
+fi
 #echo $lines
 # 3) Create NAMELIST
 # https://cyber.dabamos.de/programming/modernfortran/namelists.html
@@ -309,6 +325,9 @@ demog_counterfactual=${demog_counterfactual},
 /
 &CONST
 ${lines}
+/
+&OUTPUT
+${output_lines}
 /
 EOM
 
