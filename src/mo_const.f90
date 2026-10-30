@@ -464,8 +464,9 @@ MODULE mo_const
       !  srho = 1.0
 
         ! mu  = 1./(61.*365)    ! Background human mortality rate [day^-1] [ref] 
-        mu  = 0.0416/365.   ! Birth and mortality rate - Exponential fit to Senegal's 2000 WorldPop age structure
-      !  mu  = 0.0354/365.  ! Birth and mortality rate - Exponential fit to Senegal's 2020 WorldPop age structure 
+      !  mu  = 0.0416/365.   ! Birth and mortality rate - Exponential fit to Senegal's 2000 WorldPop age structure
+      !  mu  = 0.0354/365.  ! Birth and mortality rate - Exponential fit to Senegal's 2020 WorldPop age structure
+        mu = 0.0291/365.    ! Birth and mortality rate - Exponential fit to Ghana's 2020 WorldPop age structure
         !-- Immunity scheme --!
         e_0    = 0.2
         !e_0    = 0.09     ! Base increase in endemicity level [per infectious bite]                  [x]

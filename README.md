@@ -1,66 +1,55 @@
-# VECTRI-ABM
+# MoBILE
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22146187.svg)](https://doi.org/10.5281/zenodo.22146187)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Docs](https://img.shields.io/badge/docs-FORD-blue)](https://mgarrizor.github.io/MoBILE/)
 
-VECTRI-ABM: an agent-based model of
-disease transmission coupled to the [VECTRI](https://users.ictp.it/~tompkins/vectri/documentation/)
-vector-ecology model. The framework resolves individual human agents on a
-climate-driven grid, with age-structured diagnostics including
-per-timestep symptomatic and asymptomatic incidence & age-dependent acquisition and
-waning of immunity. Calibration tools - Sobol sensitivity analysis ([SALiB](https://salib.readthedocs.io/en/latest/)), a genetic
-algorithm ([Tompkins et al. 2018](https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0200638)) and an integration to the [Optuna](https://optuna.readthedocs.io/en/stable/) calibration suite are included. Agent
-mobility is defined but not yet functional.  
+**Mo**bility-**B**ased **I**ntegrated **L**andscape **E**pidemiology — a framework for
+agent-based epidemiological modelling. It resolves individual human agents on a
+climate-driven grid and provides the machinery that disease-specific models are built on:
+agent initialisation from population density and age structure, the driving-data
+interface, age-structured diagnostics, netCDF output, and calibration tooling.
+
+MoBILE is the repository name and the name used throughout the source (`mobile.sh`,
+`mobile.out`, `$MOBILE`). Each disease model built on it carries its own name and its own
+citation.
+
 Developed at the Abdus Salam International Centre for Theoretical Physics (ICTP),
 Trieste, Italy.
 
+## Models
+
+| Model | Disease | Status | |
+|---|---|---|---|
+| **VECTRI-ABM** | malaria | in use; paper in preparation | [read ↓](#vectri-abm) |
+| **Cholera model** | cholera | in development | [read ↓](#cholera-model) |
+
+The sections below each model are specific to it. Everything from
+[Requirements](#requirements) onwards — build, driving data, repository layout — is common
+to all models.
+
 > [!CAUTION]
 > **Mobility is not yet functional.** Agent mobility (gravity and radiation models) is
-> defined in the source but not active; it is planned work pending funding.
+> defined in the source but not active; it is planned work pending funding. This affects
+> every model built on MoBILE.
 
-> [!NOTE]
-> **On naming.** The underlying agent-based framework is called **MoBILE**
-> (**Mo**bility-**B**ased **I**ntegrated **L**andscape **E**pidemiology), which remains
-> the repository name and appears throughout the source (`mobile.sh`, `mobile.out`,
-> `$MOBILE`). **VECTRI-ABM** is the vector-borne disease model built on it — the coupling of that
-> framework to VECTRI — and is the name used in the accompanying paper and for citation.
+---
 
-## Requirements
+## VECTRI-ABM
 
-- A Fortran compiler with OpenMP support (gfortran)
-- netCDF-Fortran, providing `nf-config` and `nc-config` on your `PATH`
-- Optional, profiling only: [gperftools](https://github.com/gperftools/gperftools)
+An agent-based model of malaria transmission coupled to the
+[VECTRI](https://users.ictp.it/~tompkins/vectri/documentation/) vector-ecology model.
+Agents carry age-structured diagnostics including per-timestep symptomatic and
+asymptomatic incidence, and age-dependent acquisition and waning of immunity. Calibration
+tools — Sobol sensitivity analysis ([SALib](https://salib.readthedocs.io/en/latest/)), a
+genetic algorithm ([Tompkins et al. 2018](https://journals.plos.org/plosone/article?id=10.1371/journal.pone.0200638))
+and an integration to the [Optuna](https://optuna.readthedocs.io/en/stable/) calibration
+suite — are included.
 
-The build requires `nf-config` for the compiler and flags. If that is unavailable on your system, set `FC`, `INC_FLAGS` and `INC_LIBS` directly at the top of the `Makefile`.
+VECTRI-ABM is the name used in the accompanying paper and the one to cite for the malaria
+model; see [Citing](#citing).
 
-
-## Build modes
-
-The model is compiled with `make`, which accepts a build mode:
-
-    make                # normal (default)
-    make MODE=debug
-    make MODE=fast
-
-| mode | flags | use |
-|---|---|---|
-| `normal` | `-O2 -ffp-contract=off -fbacktrace` | the default; what timings and production runs should use |
-| `debug` | `-Og -Wall -fcheck=all -fbacktrace` | full runtime checks, bounds-checks every array reference — roughly 25% slower |
-| `fast` | `-O3 -ffast-math -march=native` | untested; `-march=native` ties the binary to the CPU it was built on |
-
-> [!CAUTION]
-> **`-ffp-contract=off` in `normal` is load-bearing and must not be removed.** It is what
-> makes `normal` and `debug` builds produce identical results. With FMA contraction
-> enabled the compiler fuses multiply-add operations, shifting results by 1 ULP; those
-> shifts flip individual agents across the `generate_random() <= p` comparisons that
-> decide infection and symptom onset, so the two builds diverge. On clusters, take care
-> that a site-wide `-Ofast` or an aggressive toolchain default does not reintroduce it.
-
-`make PROFILE=1` additionally links the gperftools profiling libraries; the path is
-machine-specific and it is off by default.
-
-## Output volume
+### Output volume
 
 Age-disaggregated diagnostics (`out_Ia`, `out_Ia_new`, `out_Aa`, `out_imm_a`, `out_N_a`
 in `src/mo_control.f90`) are **off by default**, because each writes one 3-D field per
@@ -69,30 +58,7 @@ roughly 400 MB to 1.8 GB. They are compile-time flags, so changing them requires
 rebuild. Turn them on for age-structured analysis; leave them off for calibration runs,
 where thousands of trials would otherwise produce terabytes.
 
-## Driving data
-
-Four netCDF files on the model grid. **The model applies no unit conversion**: values are
-used exactly as read, so the units below are requirements. Cells with `_FillValue` in
-`pop`, `rain` or `t2m` are not simulated.
-
-| File | Variable names accepted | Units | Time axis | Putting it on the model grid with the Climate Data Operator (CDO)|
-|---|---|---|---|---|
-| `rain.nc` | `rain`, `rainfall`, `precipitation`, `tp`, `precip` | mm/day | daily; `time` or `valid_time` | use conservative interpolation, mean over the covered part: `CDO_REMAP_NORM=fracarea cdo remapcon` |
-| `t2m.nc` | `temperature`, `t2m` | °C (ERA5 is in K: `cdo subc,273.15`) | daily mean, same length as rain | as rain (`remapcon` + `fracarea`); none if the model grid is the temperature grid |
-| `pop.nc` | `pop`, `population`, `population density`, `Band1` | persons/m² (WorldPop density is per km²: `cdo mulc,1e-6`) | none (static) | conservative, conserves people: `CDO_REMAP_NORM=destarea cdo remapcon` |
-| `area.nc` | `cell_area` | m² | none (static) | `cdo gridarea` on the model grid, unmasked |
-
-**Why `remapcon`, not bilinear.** Population must add up, so the regridding must conserve the total; rain and temperature are averages, so each model cell must get the mean of what falls in it. Conservative remapping does both, by giving each model cell the area-weighted mean of the source cells it overlaps. Bilinear interpolation, a common default, does neither in general.
-
-**`fracarea` or `destarea`.** Both are conservative; they differ only when a model cell (final grid) is partly covered by source data (original grid), typically on the coast, where the source has no values over the sea (*e.g.,*ERA5Land). Each model cell gets (sum of source value × overlap area) / A, and A is what differs between both conservative schemes. In `fracarea`: A = the covered area, so the cell gets the average of the data it has. `destarea`: A = the whole cell, so the uncovered part adds its area but no value, as if it were zero. For example, if we take a coastal cell that is half land:
-
-- **Rain** (and temperature): the land half gets 10 mm/day. `fracarea` gives the cell 10 mm/day; `destarea` gives 5 mm/day. The sea half is unmeasured, not dry, so the land value is the best estimate for the whole cell: use `fracarea`.
-- **People**: the land half holds 1,000 people. `destarea` gives 1,000 / (whole cell area); `fracarea` gives 1,000 / (half the area), twice the density. The model makes people from density × `cell_area`, so `fracarea` would put 2,000 people in the cell. The sea really is empty, so use `destarea`: it keeps the domain total equal to the source total.
-
-> [!NOTE] 
-> A population **count** product (persons per pixel, such as WorldPop's count products) must first be divided by the true pixel area (`cdo div pop.nc -gridarea pop.nc`). WorldPop's **density** products (persons per km²) only need `cdo mulc,1e-6`.
-
-## VECTRI-ABM: run example
+### Run example
 
 The `utils/test_run/` folder contains everything a run needs — driving data (`area.nc`, `pop.nc`, `rain.nc`, `t2m.nc`), a parameter file, and `age_structure/cumm_age.txt`, the cumulative age distribution derived from WorldPop age structures as described in the accompanying paper — so the model can be tested without preparing any input of your own. Go to the MoBILE folder and do
 
@@ -138,6 +104,73 @@ namelist. Thread count (for the OpenMP parallel work on the agent loop) is set v
 > reproducible if the thread count is recorded alongside the seed. Pin `OMP_NUM_THREADS`
 > for anything that must be reproduced later, and treat results obtained with different
 > thread counts as separate realisations rather than comparable runs.
+
+---
+
+## Cholera model
+
+> [!NOTE]
+> **In development.** A model of cholera transmission on the MoBILE framework, under
+> active development. It is not yet usable; this section will be filled in as the model
+> takes shape.
+
+---
+
+## Requirements
+
+- A Fortran compiler with OpenMP support (gfortran)
+- netCDF-Fortran, providing `nf-config` and `nc-config` on your `PATH`
+- Optional, profiling only: [gperftools](https://github.com/gperftools/gperftools)
+
+The build requires `nf-config` for the compiler and flags. If that is unavailable on your system, set `FC`, `INC_FLAGS` and `INC_LIBS` directly at the top of the `Makefile`.
+
+## Build modes
+
+The model is compiled with `make`, which accepts a build mode:
+
+    make                # normal (default)
+    make MODE=debug
+    make MODE=fast
+
+| mode | flags | use |
+|---|---|---|
+| `normal` | `-O2 -ffp-contract=off -fbacktrace` | the default; what timings and production runs should use |
+| `debug` | `-Og -Wall -fcheck=all -fbacktrace` | full runtime checks, bounds-checks every array reference — roughly 25% slower |
+| `fast` | `-O3 -ffast-math -march=native` | untested; `-march=native` ties the binary to the CPU it was built on |
+
+> [!CAUTION]
+> **`-ffp-contract=off` in `normal` is load-bearing and must not be removed.** It is what
+> makes `normal` and `debug` builds produce identical results. With FMA contraction
+> enabled the compiler fuses multiply-add operations, shifting results by 1 ULP; those
+> shifts flip individual agents across the `generate_random() <= p` comparisons that
+> decide infection and symptom onset, so the two builds diverge. On clusters, take care
+> that a site-wide `-Ofast` or an aggressive toolchain default does not reintroduce it.
+
+`make PROFILE=1` additionally links the gperftools profiling libraries; the path is
+machine-specific and it is off by default.
+
+## Driving data
+
+Four netCDF files on the model grid. **The model applies no unit conversion**: values are
+used exactly as read, so the units below are requirements. Cells with `_FillValue` in
+`pop`, `rain` or `t2m` are not simulated.
+
+| File | Variable names accepted | Units | Time axis | Putting it on the model grid with the Climate Data Operator (CDO)|
+|---|---|---|---|---|
+| `rain.nc` | `rain`, `rainfall`, `precipitation`, `tp`, `precip` | mm/day | daily; `time` or `valid_time` | use conservative interpolation, mean over the covered part: `CDO_REMAP_NORM=fracarea cdo remapcon` |
+| `t2m.nc` | `temperature`, `t2m` | °C (ERA5 is in K: `cdo subc,273.15`) | daily mean, same length as rain | as rain (`remapcon` + `fracarea`); none if the model grid is the temperature grid |
+| `pop.nc` | `pop`, `population`, `population density`, `Band1` | persons/m² (WorldPop density is per km²: `cdo mulc,1e-6`) | none (static) | conservative, conserves people: `CDO_REMAP_NORM=destarea cdo remapcon` |
+| `area.nc` | `cell_area` | m² | none (static) | `cdo gridarea` on the model grid, unmasked |
+
+**Why `remapcon`, not bilinear.** Population must add up, so the regridding must conserve the total; rain and temperature are averages, so each model cell must get the mean of what falls in it. Conservative remapping does both, by giving each model cell the area-weighted mean of the source cells it overlaps. Bilinear interpolation, a common default, does neither in general.
+
+**`fracarea` or `destarea`.** Both are conservative; they differ only when a model cell (final grid) is partly covered by source data (original grid), typically on the coast, where the source has no values over the sea (*e.g.,*ERA5Land). Each model cell gets (sum of source value × overlap area) / A, and A is what differs between both conservative schemes. In `fracarea`: A = the covered area, so the cell gets the average of the data it has. `destarea`: A = the whole cell, so the uncovered part adds its area but no value, as if it were zero. For example, if we take a coastal cell that is half land:
+
+- **Rain** (and temperature): the land half gets 10 mm/day. `fracarea` gives the cell 10 mm/day; `destarea` gives 5 mm/day. The sea half is unmeasured, not dry, so the land value is the best estimate for the whole cell: use `fracarea`.
+- **People**: the land half holds 1,000 people. `destarea` gives 1,000 / (whole cell area); `fracarea` gives 1,000 / (half the area), twice the density. The model makes people from density × `cell_area`, so `fracarea` would put 2,000 people in the cell. The sea really is empty, so use `destarea`: it keeps the domain total equal to the source total.
+
+> [!NOTE] 
+> A population **count** product (persons per pixel, such as WorldPop's count products) must first be divided by the true pixel area (`cdo div pop.nc -gridarea pop.nc`). WorldPop's **density** products (persons per km²) only need `cdo mulc,1e-6`.
 
 ## Repository layout
 

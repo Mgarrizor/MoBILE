@@ -1,4 +1,4 @@
-# Notes for AI assistants working on this repository
+# Notes for LLM assistants working on this repository
 
 ## Building and running
 
@@ -27,6 +27,7 @@ Check provenance before comparing anything: `md5 mobile.out` in each run directo
 
 - Source code comments should describe the method, not its history, unless this is needed to understand a particular method. A few lines at most — no bug narratives, no benchmark numbers, no "previously this did X".
 - Fortran doc comments use FORD's `!!` post-comment form, on the line after the entity. The docs build from `FORDDocs/` and publish automatically via `.github/workflows/docs.yml`.
+- Do not run simulations without and explicit GO from the user.
 
 ## Discussion and disagreement
 
