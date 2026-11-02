@@ -10,8 +10,6 @@ The *Mobility-Based Integrated Landscape Epidemiology* (**MoBILE**) model is an 
 
 **Authors** in alphabetic order
    
-   - Adrian M. Tompkins (ICTP)
-   - Cyril Caminade (ICTP)
    - Miguel Garrido Zornoza (ICTP)
    
 For issues not included in this documentation, please reach out at *mobile@ictp.it*. 
