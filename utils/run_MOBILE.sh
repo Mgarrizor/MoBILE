@@ -202,7 +202,7 @@ EOM
 
 echo ${command}
 echo 'Command:' ${command} > ${output_name}.info
-echo 'Version:' >> ${output_name}.info
+echo 'Version:' $(git -C ${MOBILE} describe --tags --always --dirty) >> ${output_name}.info
 echo 'Retrieved from:' $(git -C ${MOBILE} remote get-url origin) >> ${output_name}.info
 echo 'Date:' $(date) >> ${output_name}.info
 
@@ -217,4 +217,6 @@ if ( $profiler ) ; then
     bash profiler.sh -n ${output_name}
 fi
 #--------------------------------
+
+cp "$0" ${output_name}/ # The script that ran this simulation
 
