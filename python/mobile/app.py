@@ -34,6 +34,7 @@ ASSETS = Path(__file__).parent / "assets"
 LOGO_SUFFIXES = (".png", ".svg", ".jpg", ".jpeg")
 FUNDER_PLACEHOLDERS = 3
 CODE_DOCS_URL = "https://mgarrizor.github.io/MoBILE/"  # FORD, built from the source code
+USER_DOCS_URL = "https://mobile-ictp.readthedocs.io/en/latest/"  # Sphinx, on Read the Docs
 PREFERRED_VARIABLES = ("EIR", "V")
 # A variable by age has a group of its own in the output file, of fields <name>_<age>
 AGE_FIELD = re.compile(r"^.+_(bulk|\d+-\d+|\d+\+)$")
@@ -839,11 +840,13 @@ def _player_controls():
 def _docs():
     """The documentation built with the package, readable offline; a placeholder until there is one."""
     code_docs = ui.p("Documentation of the source code: ", ui.a(CODE_DOCS_URL, href=CODE_DOCS_URL, target="_blank"), class_="small")
+    online = ui.p("User documentation online: ", ui.a(USER_DOCS_URL, href=USER_DOCS_URL, target="_blank"), class_="small")
     if not (ASSETS / "docs" / "index.html").is_file():
-        return ui.div(ui.p("User documentation: to come.", class_="text-muted mt-3"), code_docs)
+        return ui.div(ui.p("The user documentation is not included in this installation.", class_="text-muted mt-3"), online, code_docs)
     return ui.div(
         ui.p(ui.a("Open in a new window", href="/assets/docs/index.html", target="_blank"), class_="small mt-3 mb-2"),
         ui.tags.iframe(src="/assets/docs/index.html", title="Documentation", style="width: 100%; height: 80vh; border: 1px solid #dee2e6;"),
+        online,
         code_docs,
     )
 

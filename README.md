@@ -2,7 +2,8 @@
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.22146187.svg)](https://doi.org/10.5281/zenodo.22146187)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![Docs](https://img.shields.io/badge/docs-FORD-blue)](https://mgarrizor.github.io/MoBILE/)
+[![User docs](https://readthedocs.org/projects/mobile-ictp/badge/?version=latest)](https://mobile-ictp.readthedocs.io/en/latest/)
+[![Code docs](https://img.shields.io/badge/code_docs-FORD-blue)](https://mgarrizor.github.io/MoBILE/)
 
 **Mo**bility-**B**ased **I**ntegrated **L**andscape **E**pidemiology — a framework for
 agent-based epidemiological modelling. It resolves individual human agents on a

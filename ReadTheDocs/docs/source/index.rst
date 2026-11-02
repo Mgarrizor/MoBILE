@@ -14,6 +14,8 @@ The *Mobility-Based Integrated Landscape Epidemiology* (**MoBILE**) model is an 
    
 For issues not included in this documentation, please reach out at *mobile@ictp.it*. 
 
+The source code, its numerical methods and its subroutines are documented separately, with `FORD <https://mgarrizor.github.io/MoBILE/>`_.
+
 .. note::
 
    This project is under active development. Current features in development are:
