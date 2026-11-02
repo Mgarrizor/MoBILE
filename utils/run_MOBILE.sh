@@ -83,6 +83,10 @@ fi
             mortality_file='NONE'
 #           -B Time-varying birth-rate file (Optional; blank/NONE = scalar birth_rate)
             birthrate_file='NONE'
+#           -T Age-AND-year mortality-rate file (Optional; blank/NONE = use -M/scalar mu; overrides -M if both given)
+            mortality_time_file='NONE'
+#           -C Counterfactual mode (1: hold the age structure fixed; 0: factual) (Optional; 1 needs -M/-B/-T)
+            counterfactual=0
 #           -c Constants/parameters file (example in params.txt)
             const='params.txt'
 #           -O Output selection file (Optional; blank/NONE = default output; example in output.txt)
@@ -154,6 +158,8 @@ var_32="-i ${imm_forcing}"
 var_33="-m ${mob}"
 var_34="-M ${mortality_file}"
 var_35="-B ${birthrate_file}"
+var_36="-T ${mortality_time_file}"
+var_37="-C ${counterfactual}"
 
 # CONST
 var_40="-c ${const}"
@@ -184,6 +190,8 @@ $var_32
 $var_33
 $var_34
 $var_35
+$var_36
+$var_37
 
 $var_40
 $var_41

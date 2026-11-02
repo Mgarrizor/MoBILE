@@ -1,0 +1,28 @@
+[project]
+name = "mobile"
+version = "0.1.0"
+description = "Python wrapper and local interface for running MoBILE"
+requires-python = ">=3.11"
+dependencies = [
+    "pyyaml",
+    "xarray",
+    "netCDF4",
+    "shiny",
+    "plotly",
+    "pillow",
+    "pyshp",
+    "shapely",
+]
+
+[project.scripts]
+mobile = "mobile.__main__:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["mobile"]
+
+[tool.setuptools.package-data]
+mobile = ["configs/*.yaml", "assets/*", "assets/funders/*", "assets/docs/**/*"]

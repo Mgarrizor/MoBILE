@@ -484,6 +484,11 @@ USE, INTRINSIC :: ISO_C_BINDING
                end if
                !
             end do
+            ! Cells with fewer than one person are capped at zero agents above, whatever nagent is.
+            if (any(mask_pop .and. npeop==0 .and. pop_dens*A_cell>=1.)) then
+                print *, count(mask_pop .and. npeop==0 .and. pop_dens*A_cell>=1.), 'populated cells have no agents; nagent =', nagent, ' is too low --> STOP'
+                STOP
+            end if
             !
             ! Extra growth-capacity slots (nagent+1..nagent_max): distributed
             ! proportional to the just-finished real population npeop(:) --

@@ -197,6 +197,7 @@ used exactly as read, so the units below are requirements. Cells with `_FillValu
 | `utils/vectri/` | VECTRI vector-ecology model source files |
 | `utils/test_run/` | Driving data for the run example |
 | `utils/SA_Sobol/`, `utils/Optuna_calibration/` | Sensitivity analysis and calibration tools |
+| `python/` | Python package and local app for running the model; see [`python/README.md`](python/README.md) |
 
 <a id="citing"></a>
 ## ![](https://placehold.co/14/FFE0B2/FFE0B2.png) Citing
