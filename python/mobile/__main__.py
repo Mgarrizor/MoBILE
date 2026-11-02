@@ -47,7 +47,7 @@ def main():
 
     app = commands.add_parser("gui", aliases=["app"], help="open the GUI in your browser")
     app.add_argument("config", nargs="?", help="YAML configuration file (default: the bundled example)")
-    app.add_argument("--port", type=int, default=8000)
+    app.add_argument("--port", type=int, default=8000, help="first port to try (default: %(default)s)")
     app.add_argument("--no-browser", action="store_true", help="do not open a browser window")
 
     args = parser.parse_args()

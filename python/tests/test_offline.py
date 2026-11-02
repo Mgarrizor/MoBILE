@@ -4,6 +4,7 @@ import json
 import math
 import os
 import re
+import socket
 import tempfile
 import unittest
 from dataclasses import replace
@@ -23,6 +24,7 @@ from mobile.config import (
 from mobile.rundir import create_run_dir, fill_template
 from mobile.app import (
     OUTPUT_FLAGS,
+    free_port,
     colour_values,
     grid_step,
     units_label,
@@ -180,6 +182,22 @@ class TestOutputs(unittest.TestCase):
         self.assertEqual(preferred_variable(variables, "rain"), "rain")
         self.assertEqual(preferred_variable(variables, "V"), "EIR")
         self.assertEqual(preferred_variable({"rain": variables["rain"]}, "V"), "rain")
+
+
+class TestPort(unittest.TestCase):
+    def test_a_port_in_use_is_skipped(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as busy:
+            busy.bind(("127.0.0.1", 0))
+            busy.listen()
+            taken = busy.getsockname()[1]
+            self.assertNotEqual(free_port(taken), taken)
+            self.assertGreater(free_port(taken), taken)
+
+    def test_a_free_port_is_kept(self):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        self.assertEqual(free_port(port), port)
 
 
 class TestMapScale(unittest.TestCase):

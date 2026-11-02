@@ -6,6 +6,7 @@ import math
 import os
 import re
 import signal
+import socket
 import threading
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -1422,5 +1423,25 @@ def create_app(config):
     return App(app_ui, server, static_assets={"/assets": ASSETS})
 
 
+HOST = "127.0.0.1"
+PORTS_TO_TRY = 20
+
+
+def free_port(port, host=HOST, tries=PORTS_TO_TRY):
+    """The first port from `port` on that nothing is listening on, e.g. another GUI still open."""
+    for candidate in range(port, port + tries):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            try:
+                probe.bind((host, candidate))
+            except OSError:
+                continue
+            return candidate
+    raise OSError(f"Ports {port} to {port + tries - 1} are all in use: close another GUI, or choose one with --port")
+
+
 def launch(config, port=8000, browser=True):
-    run_app(create_app(config), port=port, launch_browser=browser)
+    chosen = free_port(port)
+    if chosen != port:
+        print(f"Port {port} is in use, probably by another GUI: using {chosen}.", flush=True)
+    print(f"GUI at http://{HOST}:{chosen}", flush=True)
+    run_app(create_app(config), host=HOST, port=chosen, launch_browser=browser)
