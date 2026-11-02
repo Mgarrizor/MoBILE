@@ -781,7 +781,7 @@ MODULE mo_netcdf
                 status = nf90_def_var(ncid = ncid_sbgrp(4), name = A_age_names(k), xtype = nf90_float, &
                           dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = arr_VarID(var_out))
                 status = nf90_put_att(ncid = ncid_sbgrp(4), varid = arr_VarID(var_out), name = "units", values = "fraction")
-                status = nf90_put_att(ncid = ncid_sbgrp(4), varid = arr_VarID(var_out), name = "long_name", values = "Age-disaggregated Infected symptomatic population per person")
+                status = nf90_put_att(ncid = ncid_sbgrp(4), varid = arr_VarID(var_out), name = "long_name", values = "Age-disaggregated Infected asymptomatic prevalence per person")
                 var_out = var_out + 1
                 !
             end do
