@@ -24,7 +24,7 @@ def _release():
 
 project = 'MoBILE'
 copyright = f'2025-{datetime.date.today().year}, Miguel Garrido Zornoza'
-author = 'Miguel Garrido Zornoza & Adrian M. Tompkins'
+author = 'Miguel Garrido Zornoza'
 release = _release()
 
 # -- General configuration ---------------------------------------------------

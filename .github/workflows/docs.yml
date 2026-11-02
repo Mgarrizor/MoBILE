@@ -66,9 +66,9 @@ jobs:
       - name: Install Sphinx
         run: pip install -r ReadTheDocs/docs/requirements.txt
 
-      # The same build as Read the Docs; it fails on errors, not on warnings
+      # The same build as Read the Docs; warnings, such as broken cross-references, fail it too
       - name: Build documentation
-        run: sphinx-build -b html ReadTheDocs/docs/source ReadTheDocs/docs/build/html
+        run: sphinx-build -W --keep-going -b html ReadTheDocs/docs/source ReadTheDocs/docs/build/html
 
   deploy:
     needs: build
