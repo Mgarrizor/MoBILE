@@ -17,7 +17,7 @@ import xarray as xr
 from shiny import App, reactive, render, run_app, ui
 
 from .basemap import PADDING_DEGREES, load_basemap, load_terrain
-from .config import SLIDER_GROUPS, ConfigError, read_params
+from .config import SLIDER_GROUPS, ConfigError, default_params, default_sliders, read_params
 from .results import list_runs, load_run, load_seed_band, write_seed_band
 from .rundir import new_run_id
 from .runner import Runner, RunnerBusy
@@ -36,6 +36,7 @@ FUNDER_PLACEHOLDERS = 3
 CODE_DOCS_URL = "https://mgarrizor.github.io/MoBILE/"  # FORD, built from the source code
 USER_DOCS_URL = "https://mobile-ictp.readthedocs.io/en/latest/"  # Sphinx, on Read the Docs
 PREFERRED_VARIABLES = ("EIR", "V")
+GUI_OUTPUT = ("out_EIR", "out_vect")  # What a run writes unless changed in the Outputs tab
 # A variable by age has a group of its own in the output file, of fields <name>_<age>
 AGE_FIELD = re.compile(r"^.+_(bulk|\d+-\d+|\d+\+)$")
 ALL_AGES = "bulk"
@@ -269,7 +270,7 @@ Shiny.addCustomMessageHandler('plot', function(message) {
 
 CLOSED_HANDLER = """
 Shiny.addCustomMessageHandler('closed', function(message) {
-  document.body.innerHTML = '<p style="margin: 2rem; font-family: sans-serif;">The app is closed. You can close this tab.</p>';
+  document.body.innerHTML = '<p style="margin: 2rem; font-family: sans-serif;">The GUI is closed. You can close this tab.</p>';
   window.close();
 });
 """
@@ -765,9 +766,10 @@ def _slider_grid(spec):
     )
 
 
-def _slider(name, spec, value):
+def _slider(name, spec, value, source="const"):
     low, high, step, _ = _slider_grid(spec)
-    return ui.input_slider(f"param_{name}", spec.get("label", name), min=low, max=high, value=value, step=step)
+    label = spec.get("label", name) + (" (default)" if source == "default" else "")
+    return ui.input_slider(f"param_{name}", label, min=low, max=high, value=value, step=step)
 
 
 def logo_files(folder, stem=None):
@@ -864,31 +866,64 @@ def _output_groups(selected):
     return panels
 
 
-def _slider_groups(config, values):
+PARAMETER_SOURCES = {
+    "const": ("#007bc2", "from {const}"),  # The colour of the sliders of the theme
+    "default": ("#8a8984", "model default"),
+}
+PARAMETER_STYLE = """
+.param-default .irs--shiny .irs-bar, .param-default .irs--shiny .irs-single,
+.param-default .irs--shiny .irs-handle { background: #8a8984; border-color: #8a8984; }
+.param-default .irs--shiny .irs-single:before { border-top-color: #8a8984; }
+.param-default label { color: #52514e; }
+.param-swatch { display: inline-block; width: 0.8em; height: 0.8em; border-radius: 2px; margin-right: 0.3em; }
+"""
+
+
+def _parameter_legend(const):
+    """What the two colours of the sliders mean; the labels also say it, so not by colour alone."""
+    items = [
+        ui.span(ui.span(class_="param-swatch", style=f"background: {colour};"), text.format(const=const), class_="me-3")
+        for colour, text in PARAMETER_SOURCES.values()
+    ]
+    return ui.div(*items, class_="small mb-2")
+
+
+def _slider_groups(sliders, values, sources):
     """One collapsible panel per group that has sliders."""
     panels = []
     for group in SLIDER_GROUPS:
-        sliders = [_slider(name, spec, values[name]) for name, spec in config.sliders.items() if spec["group"] == group]
-        if sliders:
-            panels.append(ui.accordion_panel(group, *sliders))
+        group_sliders = [
+            ui.div(_slider(name, spec, values[name], sources[name]), class_=f"param-{sources[name]}")
+            for name, spec in sliders.items() if spec["group"] == group
+        ]
+        if group_sliders:
+            panels.append(ui.accordion_panel(group, *group_sliders))
     return panels
 
 
 def create_app(config):
     grid = load_grid(config)
     default_output = {flag for flags in OUTPUT_FLAGS.values() for flag, _, on in flags if on}
-    initial_output = set(config.output) if config.output is not None else default_output
-    defaults = read_params(config.inputs["const"])
-    missing = set(config.sliders) - set(defaults)
+    initial_output = set(config.output) if config.output is not None else set(GUI_OUTPUT)
+    # A slider starts at the value in the `const` file, or else at the value compiled into the model
+    in_const = read_params(config.inputs["const"])
+    compiled = default_params()
+    missing = set(default_sliders()) - set(in_const) - set(compiled)
     if missing:
-        raise ConfigError(f"sliders need a value in the `const` file: {sorted(missing)}")
-    slider_defaults = {name: float(defaults[name]) for name in config.sliders}
+        raise ConfigError(f"default_params.txt in the package has no value for the sliders {sorted(missing)}")
+    slider_defaults = {name: float(in_const.get(name, compiled.get(name))) for name in default_sliders()}
+    slider_sources = {name: "const" if name in in_const else "default" for name in default_sliders()}
+    # The range includes the starting value: a slider cannot start outside it
+    sliders = {
+        name: {**spec, "min": min(spec["min"], slider_defaults[name]), "max": max(spec["max"], slider_defaults[name])}
+        for name, spec in default_sliders().items()
+    }
 
     app_ui = ui.page_sidebar(
         ui.sidebar(
             ui.input_task_button("run", "Run", label_busy="Running…", class_="btn-primary"),
             ui.input_action_button("cancel", "Cancel"),
-            ui.input_action_button("close", "Close app"),
+            ui.input_action_button("close", "Close GUI"),
             ui.input_numeric("nagent", "Number of agents", value=config.run["nagent"], min=1, step=100000),
             ui.output_text("humans_per_agent"),
             ui.input_numeric("seed", "Seed", value=config.run["seed"], min=1, step=1),
@@ -900,7 +935,8 @@ def create_app(config):
                 ui.accordion_panel(
                     "Parameters",
                     ui.input_action_button("reset", "Reset parameters", class_="mb-2 w-100"),
-                    ui.accordion(*_slider_groups(config, slider_defaults), open=False, multiple=True),
+                    _parameter_legend(Path(config.inputs["const"]).name),
+                    ui.accordion(*_slider_groups(sliders, slider_defaults, slider_sources), open=False, multiple=True),
                 ),
                 ui.accordion_panel(
                     "Outputs",
@@ -918,7 +954,8 @@ def create_app(config):
             ui.tags.script(ui.HTML(PLOT_HANDLER)),
             ui.tags.script(ui.HTML(CLOSED_HANDLER)),
             ui.tags.style("#shiny-disconnected-overlay { display: none; }"),
-            ui.tags.script(ui.HTML(SLIDER_FORMAT % json.dumps({f"param_{n}": _slider_grid(s)[3] for n, s in config.sliders.items()}))),
+            ui.tags.style(PARAMETER_STYLE),
+            ui.tags.script(ui.HTML(SLIDER_FORMAT % json.dumps({f"param_{n}": _slider_grid(s)[3] for n, s in sliders.items()}))),
         ),
         ui.output_ui("status"),
         ui.navset_tab(
@@ -969,7 +1006,7 @@ def create_app(config):
         def overrides():
             """Sliders moved from their value in the `const` file; the others keep it as written there."""
             moved = {}
-            for name, spec in config.sliders.items():
+            for name, spec in sliders.items():
                 value = input[f"param_{name}"]()
                 _, _, step, decimals = _slider_grid(spec)
                 # A slider starts at the value of the `const` file snapped to its step
@@ -1078,8 +1115,8 @@ def create_app(config):
                 return
             ui.modal_show(
                 ui.modal(
-                    "A run is in progress. Closing the app will cancel it.",
-                    title="Close the app?",
+                    "A run is in progress. Closing the GUI will cancel it.",
+                    title="Close the GUI?",
                     footer=ui.TagList(ui.modal_button("Keep running"), ui.input_action_button("close_confirmed", "Cancel run and close")),
                 )
             )

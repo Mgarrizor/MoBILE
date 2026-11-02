@@ -1,7 +1,7 @@
 """What `mobile help` and `mobile.help()` print."""
 
 TEXT = """\
-mobile: run MoBILE from Python or a terminal, and explore it in a local app.
+mobile: run MoBILE from Python or a terminal, and explore it in a GUI in your browser.
 
 BEFORE THE FIRST RUN
   1. gfortran, make, netCDF-Fortran (nf-config, nc-config) must be installed.
@@ -10,10 +10,10 @@ BEFORE THE FIRST RUN
      Add that line to ~/.zshrc or ~/.bashrc to keep it.
 
 IN A TERMINAL
-  mobile app                 Open the app in your browser, using the example
-                             bundled with MoBILE. Stop it with its Close app
+  mobile gui                 Open the GUI in your browser, using the example
+                             bundled with MoBILE. Stop it with its Close GUI
                              button or Ctrl+C.
-  mobile app my_config.yaml  The same with your own configuration.
+  mobile gui my_config.yaml  The same with your own configuration.
   mobile run my_config.yaml  Run the model once, without the app.
       --set e_0=0.25            Change a parameter of &CONST
       --run seed=1 nagent=2000000
@@ -21,7 +21,8 @@ IN A TERMINAL
       --name my_run             Name of the run folder
   mobile example my_config.yaml
                              Write a copy of the example configuration to edit:
-                             driving data, run settings, sliders, output.
+                             driving data and run settings. Parameters and
+                             outputs are then set in the GUI.
   mobile help                This text.
 
   Run these from any folder outside the MoBILE repository. Each run creates a

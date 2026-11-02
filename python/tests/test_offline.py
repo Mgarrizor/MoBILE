@@ -1,14 +1,25 @@
 """Checks that need no simulation: python -m unittest discover tests"""
 
 import json
+import math
 import os
+import re
 import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
-from mobile.config import Config, ConfigError, example_config, namelist_names, read_params
+from mobile.config import (
+    SLIDER_GROUPS,
+    Config,
+    ConfigError,
+    default_params,
+    default_sliders,
+    example_config,
+    namelist_names,
+    read_params,
+)
 from mobile.rundir import create_run_dir, fill_template
 from mobile.app import (
     OUTPUT_FLAGS,
@@ -29,6 +40,34 @@ from mobile.results import list_runs, load_run, load_seed_band, write_seed_band
 from mobile.runner import ProgressParser
 
 CONFIG = example_config()
+
+
+def fortran_defaults(mobile):
+    """Compiled-in values of the slider parameters: the malaria case of const_disease, then VECTRI's
+    init_constants for the default vector (ivec=0). Each assignment is evaluated in order."""
+    def assignments(text):
+        for line in text.splitlines():
+            code = line.split("!")[0].strip()
+            match = re.match(r"^([A-Za-z_]\w*)\s*=\s*(.+)$", code)
+            if match:
+                yield match.group(1), match.group(2)
+
+    const = Path(mobile, "src", "mo_const.f90").read_text()
+    malaria = const[const.index("subroutine const_disease"):]
+    malaria = malaria[re.search(r"case\s*\(1\)", malaria).end():re.search(r"case\s*\(2\)", malaria).start()]
+    vectri = Path(mobile, "utils", "vectri", "mo_constants.f90").read_text()
+    vectri = vectri[vectri.index("SUBROUTINE init_constants") if "SUBROUTINE init_constants" in vectri else vectri.lower().index("subroutine init_constants"):]
+    start = re.search(r"SELECT\s+CASE\s*\(\s*ivec\s*\)", vectri, re.I)
+    case0 = vectri[start.end():]
+    case0 = case0[re.search(r"CASE\s*\(\s*0\s*\)", case0, re.I).end():re.search(r"CASE\s*\(\s*1\s*\)", case0, re.I).start()]
+    values = {}
+    for text in (malaria, vectri[:start.start()], case0):
+        for name, expression in assignments(text):
+            try:
+                values[name] = float(eval(expression.replace("log(", "math.log("), {"math": math}, dict(values)))
+            except Exception:
+                continue
+    return values
 MOBILE = os.environ["MOBILE"]
 
 
@@ -56,11 +95,34 @@ class TestConfig(unittest.TestCase):
         with self.assertRaises(ConfigError):
             self.config.with_run(unknown=1)
 
-    def test_slider_needs_a_known_group(self):
-        self.assertEqual({spec["group"] for spec in self.config.sliders.values()}, {"Human", "Vector"})
-        bad = replace(self.config, sliders={"e_0": {"group": "Other", "min": 0, "max": 1}})
-        with self.assertRaises(ConfigError):
-            bad.validate()
+    def test_standard_sliders(self):
+        sliders = default_sliders()
+        self.assertEqual(len(sliders), 12)
+        self.assertTrue(set(sliders) <= namelist_names(MOBILE, "CONST"))
+        self.assertTrue(all(spec["group"] in SLIDER_GROUPS for spec in sliders.values()))
+        self.assertTrue(all(spec["min"] < spec["max"] for spec in sliders.values()))
+
+    def test_default_params_match_the_source(self):
+        self.assertEqual(set(default_params()), set(default_sliders()))
+        source = fortran_defaults(MOBILE)
+        for name, value in default_params().items():
+            self.assertAlmostEqual(float(value), source[name], msg=f"{name}: default_params.txt {value}, source {source[name]}")
+
+    def test_fortran_defaults_detects_a_change(self):
+        # Control: a default changed in a copy of the source is found
+        with tempfile.TemporaryDirectory() as copy:
+            for path in ("src/mo_const.f90", "utils/vectri/mo_constants.f90"):
+                (Path(copy) / path).parent.mkdir(parents=True, exist_ok=True)
+                text = Path(MOBILE, path).read_text()
+                (Path(copy) / path).write_text(text.replace("k_star   = 10", "k_star   = 12") if "mo_const.f90" in path else text)
+            self.assertEqual(fortran_defaults(copy)["k_star"], 12.0)
+            self.assertEqual(fortran_defaults(copy)["e1"], 0.1)
+
+    def test_configuration_has_only_the_essentials(self):
+        path = Path(os.getcwd()) / "old.yaml"
+        path.write_text(example_config().read_text() + "\nsliders: {}\noutput: [out_EIR]\n")
+        with self.assertRaisesRegex(ConfigError, "set in the GUI"):
+            Config.load(path)
 
     def test_override_keeps_other_values_verbatim(self):
         base = read_params(self.config.inputs["const"])
@@ -79,7 +141,7 @@ class TestConfig(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=os.path.expanduser("~")) as tmp:
             config = Config.load(CONFIG)
             object.__setattr__(config, "runs_dir", Path(tmp))
-            run_dir = create_run_dir(config.with_params(e_0=0.25), "x")
+            run_dir = create_run_dir(replace(config, output=("out_EIR", "out_vect")).with_params(e_0=0.25), "x")
             script = (run_dir / "run_MOBILE.sh").read_text()
             self.assertRegex(script, r"(?m)^\s*seed=12345$")
             self.assertRegex(script, r"(?m)^\s*const='params.txt'$")

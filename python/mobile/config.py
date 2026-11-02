@@ -8,6 +8,8 @@ from pathlib import Path
 
 import yaml
 
+# The keys of a configuration file. Parameters, outputs and sliders are set in the GUI.
+CONFIG_KEYS = {"mobile", "runs_dir", "project", "run", "inputs"}
 RUN_KEYS = {"disID", "mob", "nstep", "spin_up", "nagent", "seed", "threads"}
 REQUIRED_INPUTS = {"rain_file", "temp_file", "pop_file", "area_file", "age_file", "const"}
 OPTIONAL_INPUTS = {"mortality_file", "birthrate_file", "mortality_time_file", "imm_forcing"}
@@ -18,6 +20,16 @@ SLIDER_GROUPS = ("Human", "Vector", "Hydro", "Climate")
 
 # character(len=200) in mo_control.f90; a namelist read truncates longer paths silently
 MAX_PATH_LENGTH = 200
+
+
+def default_sliders():
+    """{name: {group, label, min, max}} of the sliders of the GUI, from sliders.yaml in the package."""
+    return yaml.safe_load((Path(str(resources.files("mobile"))) / "sliders.yaml").read_text())["sliders"]
+
+
+def default_params():
+    """{name: value} of the compiled-in values of the slider parameters, from default_params.txt in the package."""
+    return read_params(Path(str(resources.files("mobile"))) / "default_params.txt")
 
 
 def example_config():
@@ -61,7 +73,6 @@ class Config:
     inputs: dict
     params: dict = field(default_factory=dict)
     output: tuple | None = None
-    sliders: dict = field(default_factory=dict)  # {name: {label, min, max}}, used by the app
     project: str = ""  # Name shown in the app
 
     @classmethod
@@ -69,7 +80,13 @@ class Config:
         path = Path(path).resolve() if path else example_config()
         if not path.is_file():
             raise ConfigError(f"Configuration file not found: {path}")
-        raw = yaml.safe_load(path.read_text())
+        raw = yaml.safe_load(path.read_text()) or {}
+        unknown = set(raw) - CONFIG_KEYS
+        if unknown:
+            raise ConfigError(
+                f"{path}: unknown {sorted(unknown)}; a configuration has only {sorted(CONFIG_KEYS)}. "
+                "Parameters, outputs and sliders are set in the GUI."
+            )
         mobile = mobile or raw.get("mobile") or os.environ.get("MOBILE")
         if not mobile:
             raise ConfigError("MoBILE location unknown: run `export MOBILE=/path/to/MoBILE` or set `mobile` in the config")
@@ -83,15 +100,11 @@ class Config:
         inputs = dict(OPTIONAL_DEFAULTS)
         for key, value in raw.get("inputs", {}).items():
             inputs[key] = value if key in OPTIONAL_DEFAULTS or value == "NONE" else str(resolve(value))
-        output = raw.get("output")
         config = cls(
             mobile=mobile,
             runs_dir=Path(raw.get("runs_dir", "runs")).expanduser().resolve(),
             run=dict(raw.get("run", {})),
             inputs=inputs,
-            params=dict(raw.get("params") or {}),
-            output=None if output is None else tuple(output),
-            sliders=dict(raw.get("sliders") or {}),
             project=str(raw.get("project") or ""),
         )
         config.validate()
@@ -165,12 +178,6 @@ class Config:
             unknown = set(self.params) - namelist_names(self.mobile, "CONST")
             if unknown:
                 errors.append(f"params: not in &CONST: {sorted(unknown)}")
-            unknown = set(self.sliders) - namelist_names(self.mobile, "CONST")
-            if unknown:
-                errors.append(f"sliders: not in &CONST: {sorted(unknown)}")
-            for name, spec in self.sliders.items():
-                if spec.get("group") not in SLIDER_GROUPS:
-                    errors.append(f"sliders: {name} needs a group, one of {list(SLIDER_GROUPS)}")
             if self.output is not None:
                 unknown = set(self.output) - namelist_names(self.mobile, "OUTPUT")
                 if unknown:

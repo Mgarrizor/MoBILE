@@ -41,11 +41,11 @@ def main():
 
     run = commands.add_parser("run", help="run the model once")
     run.add_argument("config", nargs="?", help="YAML configuration file (default: the bundled example)")
-    run.add_argument("--set", nargs="*", default=[], metavar="NAME=VALUE", help="&CONST parameter")
+    run.add_argument("--set", nargs="*", default=[], metavar="NAME=VALUE", help="&CONST parameter, instead of its value in `const`")
     run.add_argument("--run", nargs="*", default=[], metavar="NAME=VALUE", help="run setting, e.g. seed=1")
     run.add_argument("--name", help="run folder name (default: date and random suffix)")
 
-    app = commands.add_parser("app", help="open the local app")
+    app = commands.add_parser("gui", aliases=["app"], help="open the GUI in your browser")
     app.add_argument("config", nargs="?", help="YAML configuration file (default: the bundled example)")
     app.add_argument("--port", type=int, default=8000)
     app.add_argument("--no-browser", action="store_true", help="do not open a browser window")
@@ -63,7 +63,7 @@ def main():
     _exit_if_tools_missing()
     try:
         config = Config.load(args.config)
-        if args.command == "app":
+        if args.command in ("gui", "app"):
             from .app import launch
 
             launch(config, port=args.port, browser=not args.no_browser)

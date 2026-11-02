@@ -21,25 +21,3 @@ inputs:
   area_file: $MOBILE/utils/test_run/area.nc
   age_file: $MOBILE/utils/test_run/age_structure/cumm_age.txt
   const: $MOBILE/utils/test_run/params.txt
-
-# Overrides of the values in `const`, written to &CONST as in params.txt
-params: {}
-
-# Output flags to switch on, all others off. Leave out for the default output.
-output: [out_EIR, out_vect]
-
-# Sliders of the app. Placeholder ranges: value +/- 50%, capped at 1 for fractions.
-# group: the tab of the slider, one of the groups of the netCDF output (Human, Vector, Hydro, Climate).
-sliders:
-  e_0: {group: Human, label: e_0, min: 0.0985, max: 0.296}
-  e1: {group: Human, label: e1, min: 0.12, max: 0.359}
-  e2: {group: Human, label: e2, min: 0.864, max: 2.59}
-  A1: {group: Human, label: A1, min: 0.495, max: 1}
-  i_star_c: {group: Human, label: i_star_c, min: 0.493, max: 1}
-  k_star: {group: Human, label: k_star, min: 7.94, max: 23.8}
-  alph_min: {group: Human, label: alph_min, min: 0.213, max: 0.639}
-  k_alph: {group: Human, label: k_alph, min: 3.62, max: 10.9}
-  P_v0: {group: Human, label: P_v0, min: 0.173, max: 0.518}
-  P_max: {group: Vector, label: P_max, min: 0.123, max: 0.37}
-  dsporo: {group: Vector, label: dsporo, min: 61.2, max: 184}
-  dgono: {group: Vector, label: dgono, min: 22.1, max: 66.3}

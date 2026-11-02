@@ -1,0 +1,16 @@
+! Compiled-in values of the slider parameters, for malaria (disID=1) and the default vector
+! (ivec=0): from const_disease in src/mo_const.f90 and init_constants in utils/vectri/mo_constants.f90.
+! Used only by the GUI, to start a slider whose parameter is not in the `const` file of the
+! configuration. Update it when these defaults change in the source: the tests compare the two.
+e_0=0.2,
+e1=0.1,
+e2=2.0,
+A1=0.9,
+i_star_c=0.5,
+k_star=10.0,
+P_v0=0.3,
+P_max=0.2,
+alph_min=0.28,
+k_alph=1.0,
+dsporo=111.0,
+dgono=37.1,

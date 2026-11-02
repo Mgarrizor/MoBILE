@@ -48,6 +48,7 @@ Indices and tables
 
    requirements
    usage
+   gui
    model
    advanced
    references

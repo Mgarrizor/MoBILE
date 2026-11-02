@@ -25,4 +25,4 @@ build-backend = "setuptools.build_meta"
 packages = ["mobile"]
 
 [tool.setuptools.package-data]
-mobile = ["configs/*.yaml", "assets/*", "assets/funders/*", "assets/docs/**/*"]
+mobile = ["sliders.yaml", "default_params.txt", "configs/*.yaml", "assets/*", "assets/funders/*", "assets/docs/**/*"]
