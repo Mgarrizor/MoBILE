@@ -2,6 +2,7 @@ name: docs
 
 # Builds the FORD documentation and publishes it to GitHub Pages.
 # Requires Settings -> Pages -> Source: "GitHub Actions".
+# Also builds the Sphinx documentation, to catch errors: Read the Docs publishes it (.readthedocs.yaml).
 
 on:
   push:
@@ -10,6 +11,8 @@ on:
       - 'src/**'
       - 'utils/vectri/**'
       - 'FORDDocs/**'
+      - 'ReadTheDocs/**'
+      - '.readthedocs.yaml'
       - '.github/workflows/docs.yml'
   workflow_dispatch:
 
@@ -50,6 +53,22 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: FORDDocs/doc
+
+  sphinx:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Sphinx
+        run: pip install -r ReadTheDocs/docs/requirements.txt
+
+      # The same build as Read the Docs; it fails on errors, not on warnings
+      - name: Build documentation
+        run: sphinx-build -b html ReadTheDocs/docs/source ReadTheDocs/docs/build/html
 
   deploy:
     needs: build
