@@ -6,10 +6,26 @@
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
+import datetime
+import os
+import subprocess
+
+
+def _release():
+    """The version being documented: a tag on Read the Docs, 'latest' for its main branch, git describe otherwise."""
+    if os.environ.get('READTHEDOCS'):
+        return os.environ.get('READTHEDOCS_VERSION_NAME', 'latest')
+    try:
+        return subprocess.run(['git', 'describe', '--tags', '--always'], capture_output=True, text=True,
+                              check=True, cwd=os.path.dirname(__file__)).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return 'development'
+
+
 project = 'MoBILE'
-copyright = '2025, Miguel Garrido Zornoza'
+copyright = f'2025-{datetime.date.today().year}, Miguel Garrido Zornoza'
 author = 'Miguel Garrido Zornoza & Adrian M. Tompkins'
-release = '0.1'
+release = _release()
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
@@ -27,4 +43,3 @@ exclude_patterns = []
 #html_theme = 'alabaster'
 html_theme = 'sphinx_rtd_theme'
 #html_theme = 'furo'
-html_static_path = ['_static']
