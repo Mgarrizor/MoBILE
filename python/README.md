@@ -16,7 +16,8 @@ MoBILE needs `gfortran`, `make` and netCDF-Fortran (`nf-config`, `nc-config`), w
 
 ## Use
 
-From any folder outside the MoBILE repository:
+From a folder outside the MoBILE repository (never from inside it: the results folder cannot be in the repository,
+and its default, `runs/`, is in the folder you start from):
 
     mobile gui      # opens the GUI in your browser, with MoBILE's example; close it with its Close GUI button
     mobile help     # all commands, and how to use your own configuration
@@ -24,9 +25,9 @@ From any folder outside the MoBILE repository:
 Documentation: the model and its use at https://mobile-ictp.readthedocs.io, the source code at
 https://mgarrizor.github.io/MoBILE/.
 
-More on the GUI in [GUI.md](GUI.md). In the GUI, press Run, then click a cell on the map to see its time series. Earlier runs in the `runs/` folder of the
-current folder, including seed bands, can be loaded again from the list in the sidebar, which also sets the sliders to
-their values.
+More on the GUI in [GUI.md](GUI.md). In the GUI, press Run, then click a cell on the map to see its time series. Earlier runs in the results folder, including seed bands, can be loaded again from the list in
+the sidebar, which also sets the sliders to their values. The results folder is `runs/` in the current folder unless
+you choose another, or make a new one, in the Setup tab.
 
 The first time the GUI opens with a connection, it downloads the map background (land, lakes, rivers, borders) from
 [Natural Earth](https://www.naturalearthdata.com/) to `~/.cache/mobile`, and the relief from ETOPO 2022 when its Terrain

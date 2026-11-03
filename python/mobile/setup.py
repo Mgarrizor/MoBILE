@@ -3,6 +3,7 @@ fields of the panel, remembered between sessions, and restored from the record o
 
 import json
 import os
+import re
 from pathlib import Path
 
 from .config import OPTIONAL_DEFAULTS, Config, ConfigError
@@ -28,6 +29,7 @@ SUFFIXES = {
     "folder": (),
 }
 SETUP_FILE = "last_setup.json"
+FOLDER_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
 
 
 def settings_folder():
@@ -136,3 +138,21 @@ def start_folder(value):
             if candidate.is_dir():
                 return candidate
     return Path.home()
+
+
+def create_folder(parent, name):
+    """Make a folder in `parent` for the file browser: (its path, None), or (None, why it cannot be made)."""
+    name = name.strip()
+    if not FOLDER_NAME.match(name):
+        return None, (
+            "Use letters, digits, '.', '_' and '-' only, starting with a letter or a digit, at most 80 characters: "
+            "the run scripts do not allow spaces in paths."
+        )
+    path = Path(parent) / name
+    if path.exists():
+        return None, f"{name} already exists in {parent}."
+    try:
+        path.mkdir()
+    except OSError as error:
+        return None, f"Could not create {name}: {error.strerror}."
+    return path.resolve(), None

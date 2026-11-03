@@ -6,10 +6,17 @@ see [README.md](README.md).
 
 ## Start and stop
 
-From a folder outside the MoBILE repository (runs are written to `runs/` in the folder you start from):
+**Always start the GUI from a folder outside the MoBILE repository**, never from inside it:
 
     export MOBILE=/path/to/MoBILE
+    mkdir -p ~/mobile-work && cd ~/mobile-work
     mobile gui
+
+Why: each run compiles the model and writes its results into the results folder, and that folder cannot be
+inside the MoBILE repository (the model's scripts refuse it, and it would fill the repository with output).
+The folder you start from only sets the default, `runs/` in that folder. Started inside the repository,
+the GUI stops with "runs_dir cannot be inside the MoBILE repository". You can pick any other results
+folder in the Setup tab.
 
 - The page opens at http://127.0.0.1:8000. If that port is busy, the next free one is used and printed.
 - `mobile gui --port 8100` chooses the first port to try, `--no-browser` does not open a window.
@@ -28,7 +35,12 @@ The sidebar is always visible. The tabs are Setup, Runs, four analysis tabs that
 Everything a run needs that is not a parameter or an output.
 
 - **Run parameters**: project name, model (VECTRI-ABM malaria or cholera), days to simulate (0: all the
-  driving data), spin-up to equilibrium, threads, and the results folder.
+  driving data), spin-up to equilibrium and threads.
+- **Results folder**: where the runs are saved. It does not have to be the folder you started from. Type a path
+  or use **Browse**, and to make a new folder, type its name under *New folder in the folder shown* and press
+  **Create and open**. It then opens, and **Use this folder** selects it. Names use letters, digits, `.`, `_`
+  and `-` only (no spaces), and the folder cannot be inside the MoBILE repository. It takes effect with
+  **Apply setup**, and the *Previous runs* list then shows the runs in that folder.
 - **Driving files**: rainfall, temperature, population density, cell area, cumulative age structure and the
   parameter (`const`) file. Type a path or use **Browse**. Optional files (mortality, birth rate, immunity
   forcing, counterfactual demography) are under *Optional files*.
@@ -71,8 +83,8 @@ and the relief (ETOPO 2022) when Terrain is first turned on. Without a connectio
 
 ## What a run leaves behind
 
-`runs/<name or date-id>/` holds `output/output.nc` (the results), `run.log`, `run.json` (the record of the
-run), `params.txt` and the filled-in `run_MOBILE.sh`. A seed band is `runs/seed_band_<date-id>/seed_<seed>/`.
+`<results folder>/<name or date-id>/` (by default `runs/`) holds `output/output.nc` (the results), `run.log`, `run.json` (the record of the
+run), `params.txt` and the filled-in `run_MOBILE.sh`. A seed band is `<results folder>/seed_band_<date-id>/seed_<seed>/`.
 To repeat a run by hand, run `bash run_MOBILE.sh` in a copy of that folder.
 
 ## Good to know
@@ -86,7 +98,9 @@ To repeat a run by hand, run `bash run_MOBILE.sh` in a copy of that folder.
 
 - *Not found, but needed to compile MoBILE*: install `gfortran`, `make` and netCDF-Fortran (`nf-config`,
   `nc-config`).
+- *runs_dir cannot be inside the MoBILE repository*: you started the GUI inside the repository. Leave it
+  and start again from another folder, or choose a results folder outside it in the Setup tab.
 - *MoBILE location unknown*: `export MOBILE=/path/to/MoBILE` in the terminal you start `mobile gui` from.
-- *The run failed*: the end of its log is shown in the page, the whole log is `runs/<run>/run.log`.
+- *The run failed*: the end of its log is shown in the page, the whole log is `<results folder>/<run>/run.log`.
 - *Terrain could not be downloaded*: check the connection and turn the switch on again.
 - `mobile help` lists all commands, and the Python interface (`mobile.Runner`, `mobile.load_run`).
