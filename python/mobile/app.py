@@ -388,10 +388,28 @@ class Outcome:
         return label, info["units"]
 
 
-def run_model(config, seeds, state):
-    """Run one seed after another with the same parameters, threads and binary."""
+RUN_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$")
+
+
+def run_name_problem(name, runs_dir):
+    """Why a run name typed in the GUI cannot be used, or None. Empty means the date-based default."""
+    if not name:
+        return None
+    if not RUN_NAME.match(name):
+        return (
+            "Use letters, digits, '.', '_' and '-' only, starting with a letter or a digit, "
+            "at most 80 characters: the run scripts do not allow spaces in paths."
+        )
+    if (Path(runs_dir) / name).exists():
+        return f"A run named {name} already exists in {runs_dir}: choose another name."
+    return None
+
+
+def run_model(config, seeds, state, name=None):
+    """Run one seed after another with the same parameters, threads and binary, in runs_dir/<name>
+    (a date-based name by default)."""
     outcome = Outcome(status="finished", overrides=dict(config.params), nagent=config.run["nagent"])
-    band = f"seed_band_{new_run_id()}" if len(seeds) > 1 else None
+    band = (name or f"seed_band_{new_run_id()}") if len(seeds) > 1 else None
     if band:
         outcome.run_dir = str(config.runs_dir / band)
     for member, seed in enumerate(seeds, start=1):
@@ -405,7 +423,7 @@ def run_model(config, seeds, state):
             state.update(message=event.message, fraction=event.fraction)
 
         try:
-            result = runner.run(f"{band}/seed_{seed}" if band else None, on_progress=on_progress)
+            result = runner.run(f"{band}/seed_{seed}" if band else name, on_progress=on_progress)
         except RunnerBusy as error:
             outcome.status, outcome.log = "failed", str(error)
             break
@@ -495,7 +513,11 @@ def _run_label(folder, manifest):
     changed = ", ".join(f"{k}={v:.4g}" for k, v in manifest.get("param_overrides", {}).items()) or "no changes"
     run = manifest["run"]
     seeds = f"seed band of {len(manifest['seeds'])} from seed {run['seed']}" if "seeds" in manifest else f"seed {run['seed']}"
-    return f"{manifest.get('date', '?').replace('T', ' ')}: {run['nagent']:,} agents, {seeds}, {changed}"
+    date = manifest.get("date", "?").replace("T", " ")
+    # A run without a name has a folder named after its date, which says nothing more
+    named = not re.match(r"^(seed_band_)?\d{8}-\d{6}-[0-9a-f]{4}$", Path(folder).name)
+    when = f"{Path(folder).name} ({date})" if named else date
+    return f"{when}: {run['nagent']:,} agents, {seeds}, {changed}"
 
 
 def units_label(units):
@@ -923,6 +945,7 @@ def create_app(config):
     app_ui = ui.page_sidebar(
         ui.sidebar(
             ui.input_task_button("run", "Run", label_busy="Running…", class_="btn-primary"),
+            ui.input_text("run_name", "Run name (optional)", placeholder="e.g. kenya_e0_high"),
             ui.input_action_button("cancel", "Cancel"),
             ui.input_action_button("close", "Close GUI"),
             ui.input_numeric("nagent", "Number of agents", value=config.run["nagent"], min=1, step=100000),
@@ -1074,8 +1097,8 @@ def create_app(config):
 
         @ui.bind_task_button(button_id="run")
         @reactive.extended_task
-        async def run_task(run_config, seeds):
-            return await asyncio.to_thread(run_model, run_config, seeds, state)
+        async def run_task(run_config, seeds, name):
+            return await asyncio.to_thread(run_model, run_config, seeds, state, name)
 
         @reactive.effect
         @reactive.event(input.run)
@@ -1090,8 +1113,15 @@ def create_app(config):
             except ConfigError as error:
                 ui.notification_show(str(error), type="error")
                 return
+            name = input.run_name().strip()
+            problem = run_name_problem(name, config.runs_dir)
+            if problem:
+                ui.notification_show(problem, type="error")
+                return
             state.update(cancelled=False, message="Starting", fraction=None, runner=None)
-            run_task.invoke(run_config, [seed + i for i in range(n_seeds)])
+            run_task.invoke(run_config, [seed + i for i in range(n_seeds)], name or None)
+            # So that the next run does not take the same name
+            ui.update_text("run_name", value="")
 
         @reactive.effect
         @reactive.event(input.cancel)

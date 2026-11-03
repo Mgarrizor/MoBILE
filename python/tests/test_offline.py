@@ -24,6 +24,8 @@ from mobile.config import (
 from mobile.rundir import create_run_dir, fill_template
 from mobile.app import (
     OUTPUT_FLAGS,
+    _run_label,
+    run_name_problem,
     free_port,
     colour_values,
     grid_step,
@@ -182,6 +184,23 @@ class TestOutputs(unittest.TestCase):
         self.assertEqual(preferred_variable(variables, "rain"), "rain")
         self.assertEqual(preferred_variable(variables, "V"), "EIR")
         self.assertEqual(preferred_variable({"rain": variables["rain"]}, "V"), "rain")
+
+
+class TestRunName(unittest.TestCase):
+    def test_names(self):
+        with tempfile.TemporaryDirectory() as runs:
+            (Path(runs) / "taken").mkdir()
+            self.assertIsNone(run_name_problem("", runs))
+            self.assertIsNone(run_name_problem("kenya_e0-high.2", runs))
+            for bad in ("with space", "-dash", "a/b", "é", "x" * 81):
+                self.assertIsNotNone(run_name_problem(bad, runs), bad)
+            self.assertIn("already exists", run_name_problem("taken", runs))
+
+    def test_label_shows_a_chosen_name(self):
+        manifest = {"date": "2026-11-02T21:05:12", "run": {"nagent": 1000, "seed": 1}, "param_overrides": {}}
+        self.assertTrue(_run_label("runs/kenya_e0", manifest).startswith("kenya_e0 (2026-11-02 21:05:12): "))
+        self.assertTrue(_run_label("runs/20261102-210512-ab12", manifest).startswith("2026-11-02 21:05:12: "))
+        self.assertTrue(_run_label("runs/seed_band_20261102-210512-ab12", {**manifest, "seeds": [1, 2]}).startswith("2026-11-02 21:05:12: "))
 
 
 class TestPort(unittest.TestCase):
