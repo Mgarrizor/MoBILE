@@ -19,8 +19,9 @@ from shiny import App, reactive, render, run_app, ui
 
 from .basemap import PADDING_DEGREES, load_basemap, load_terrain
 from .config import SLIDER_GROUPS, ConfigError, default_params, default_sliders, read_params
+from .driving import LAT_NAMES, LON_NAMES, POP_NAMES, field_limits, first_name, mean_age, open_field, read_age
 from .results import list_runs, load_run, load_seed_band, write_seed_band
-from .setup import OPTIONAL_FILES, REQUIRED_FILES, from_fields, from_manifest, list_folder, save_setup, start_folder
+from .setup import OPTIONAL_FILES, REQUIRED_FILES, from_fields, from_manifest, list_folder, save_setup, start_folder, typed_path
 from .rundir import new_run_id
 from .runner import Runner, RunnerBusy
 
@@ -86,6 +87,7 @@ OUTPUT_FLAGS = {
 SEQUENTIAL = ["#fee5d9", "#fcbba1", "#fc9272", "#fb6a4a", "#ef3b2c", "#cb181d", "#99000d"]
 COLOUR_MAPS = {
     "Reds": SEQUENTIAL,
+    "Blues": ["#eff3ff", "#c6dbef", "#9ecae1", "#6baed6", "#4292c6", "#2171b5", "#084594"],
     # matplotlib's coolwarm, at 11 points
     "Coolwarm": ["#3b4cc0", "#5977e3", "#7b9ff9", "#9ebeff", "#c0d4f5", "#dddcdc", "#f2cbb7", "#f7ac8e", "#ee8468", "#d65244", "#b40426"],
 }
@@ -107,14 +109,14 @@ BORDER = "#52514e"
 TEXT = "#52514e"
 GRID = "#e6e5e0"
 
-POP_NAMES = ["pop", "population", "population density", "Band1"]  # As pop_names in mo_control.f90
-LAT_NAMES = ["lat", "latitude", "Y"]
-LON_NAMES = ["lon", "longitude", "X"]
-
-# Plays the days at a chosen rate. Each day is sent once the previous map is drawn, so that
+# Plays the days of a map at a chosen rate. Each day is sent once the previous map is drawn, so that
 # asking for more than the machine can draw slows the playback rather than skipping days.
 PLAYER = """
-const player = {
+function makePlayer(prefix, sliderId, dateId) {
+  const element = (name) => document.getElementById(`${prefix}_${name}`);
+  return {
+  prefix: prefix,
+  dateId: dateId,
   rates: [0.5, 1, 2, 3, 4, 5, 6, 8, 10, 15, 20],
   rate: 2,
   playing: false,
@@ -124,19 +126,19 @@ const player = {
   timer: null,
   watchdog: null,
   show() {
-    document.getElementById('player_play').textContent = this.playing ? '⏸' : '▶';
-    document.getElementById('player_play').title = this.playing ? 'Pause' : 'Play';
+    element('play').textContent = this.playing ? '⏸' : '▶';
+    element('play').title = this.playing ? 'Pause' : 'Play';
     const rate = this.rates[this.rate];
     const measured = this.playing && this.actual !== null ? ` (actual ${this.actual.toFixed(1)})` : '';
-    document.getElementById('player_rate').textContent = `${rate} fps${measured}`;
-    document.getElementById('player_slower').disabled = document.getElementById('player_much_slower').disabled = this.rate === 0;
-    document.getElementById('player_faster').disabled = document.getElementById('player_much_faster').disabled = this.rate === this.rates.length - 1;
+    element('rate').textContent = `${rate} fps${measured}`;
+    element('slower').disabled = element('much_slower').disabled = this.rate === 0;
+    element('faster').disabled = element('much_faster').disabled = this.rate === this.rates.length - 1;
   },
   next() {
-    const slider = $('#day').data('ionRangeSlider');
+    const slider = $('#' + sliderId).data('ionRangeSlider');
     const day = slider.result.from >= slider.result.max ? slider.result.min : slider.result.from + 1;
     slider.update({from: day});
-    Shiny.setInputValue('day', day, {priority: 'event'});
+    Shiny.setInputValue(sliderId, day, {priority: 'event'});
     this.sentAt = performance.now();
     clearTimeout(this.watchdog);
     // Nothing is drawn before the first run, or if a map is lost
@@ -157,9 +159,9 @@ const player = {
     this.timer = setTimeout(() => this.next(), wait);
   },
   first() {
-    const slider = $('#day').data('ionRangeSlider');
+    const slider = $('#' + sliderId).data('ionRangeSlider');
     slider.update({from: slider.result.min});
-    Shiny.setInputValue('day', slider.result.min, {priority: 'event'});
+    Shiny.setInputValue(sliderId, slider.result.min, {priority: 'event'});
   },
   toggle() {
     this.playing ? this.pause() : this.play();
@@ -183,29 +185,38 @@ const player = {
     this.lastDrawn = 0;
     this.show();
   },
-};
-$(document).on('click', '#player_first', () => player.first());
-$(document).on('click', '#player_play', () => player.toggle());
-$(document).on('click', '#player_much_slower', () => player.change(-3));
-$(document).on('click', '#player_slower', () => player.change(-1));
-$(document).on('click', '#player_faster', () => player.change(1));
-$(document).on('click', '#player_much_faster', () => player.change(3));
+  };
+}
+// By the plot each plays
+const players = {map: makePlayer('player', 'day', 'day_date'), preview_map: makePlayer('preview_player', 'preview_day', 'preview_day_date')};
+for (const player of Object.values(players)) {
+  $(document).on('click', `#${player.prefix}_first`, () => player.first());
+  $(document).on('click', `#${player.prefix}_play`, () => player.toggle());
+  $(document).on('click', `#${player.prefix}_much_slower`, () => player.change(-3));
+  $(document).on('click', `#${player.prefix}_slower`, () => player.change(-1));
+  $(document).on('click', `#${player.prefix}_faster`, () => player.change(1));
+  $(document).on('click', `#${player.prefix}_much_faster`, () => player.change(3));
+}
 // In the capture phase, as the Run button does not pass its clicks on
-document.addEventListener('click', (event) => { if (event.target.closest('#run')) player.pause(); }, true);
-$(document).on('shiny:sessioninitialized', () => player.show());
+document.addEventListener('click', (event) => { if (event.target.closest('#run')) players.map.pause(); }, true);
+// Another file in the preview has other days, or none
+$(document).on('shiny:inputchanged', (event) => { if (event.name === 'preview_file') players.preview_map.pause(); });
+$(document).on('shiny:sessioninitialized', () => Object.values(players).forEach(player => player.show()));
 """
 
 PLOT_HANDLER = """
 // Gaps between cells, showing as a grid, once the cells are large enough on screen
 const GRID_MIN_PIXELS = 10;
-const mapZoom = {};
-function rememberZoom(event) {
+const mapZoom = {map: {}, preview_map: {}};
+// The input a click on each map sets
+const cellInputs = {map: 'cell', preview_map: 'preview_cell'};
+function rememberZoom(zoom, event) {
   if (event['xaxis.autorange'] || event['yaxis.autorange']) {
-    delete mapZoom.x;
-    delete mapZoom.y;
+    delete zoom.x;
+    delete zoom.y;
   }
-  if ('xaxis.range[0]' in event) mapZoom.x = [event['xaxis.range[0]'], event['xaxis.range[1]']];
-  if ('yaxis.range[0]' in event) mapZoom.y = [event['yaxis.range[0]'], event['yaxis.range[1]']];
+  if ('xaxis.range[0]' in event) zoom.x = [event['xaxis.range[0]'], event['xaxis.range[1]']];
+  if ('yaxis.range[0]' in event) zoom.y = [event['yaxis.range[0]'], event['yaxis.range[1]']];
 }
 function updateCellGrid(plot) {
   const index = plot._fullData.findIndex(trace => trace.type === 'heatmap');
@@ -227,32 +238,45 @@ function placeColourBar(plot) {
     Plotly.restyle(plot, {'colorbar.x': x, 'colorbar.y': bottom, 'colorbar.len': top - bottom}, [index]);
   }
 }
-// A plot drawn while its tab was hidden has no size: fit the plots when the Runs tab is shown again
+// A plot drawn while its tab was hidden has no size: fit the plots when their tab is shown again.
+// A map playing in a tab that is now hidden stops.
 $(document).on('shown.bs.tab', function() {
-  for (const id of ['map', 'cell_plot', 'envelope_plot']) {
+  for (const id of ['map', 'cell_plot', 'envelope_plot', 'preview_map', 'preview_cell_plot']) {
     const plot = document.getElementById(id);
     if (plot && plot.data && plot.offsetParent !== null) Plotly.Plots.resize(plot);
   }
+  for (const [id, player] of Object.entries(players)) {
+    if (player.playing && document.getElementById(id).offsetParent === null) player.pause();
+  }
 });
 Shiny.addCustomMessageHandler('plot', function(message) {
-  if (message.id === 'map') {
-    const before = document.getElementById('map');
+  const player = players[message.id];  // Only the maps have one
+  const layout = message.figure.layout;
+  if (player) {
+    const before = document.getElementById(message.id);
+    // Another grid, or another kind of plot, starts from its full view
+    const view = (layout.meta || {}).view;
+    if (before.view !== view) {
+      mapZoom[message.id] = {};
+      before.view = view;
+    }
     if (before.colourBar) message.figure.data.filter(t => t.type === 'heatmap').forEach(t => { t.colorbar = {...(t.colorbar || {}), ...before.colourBar}; });
+    // A new figure from the server keeps the zoom of the map
+    const zoom = mapZoom[message.id];
+    if (zoom.x) layout.xaxis.range = zoom.x;
+    if (zoom.y) layout.yaxis.range = zoom.y;
   }
-  // A new figure from the server keeps the zoom of the map
-  if (message.id === 'map' && mapZoom.x) message.figure.layout.xaxis.range = mapZoom.x;
-  if (message.id === 'map' && mapZoom.y) message.figure.layout.yaxis.range = mapZoom.y;
-  const drawing = Plotly.react(message.id, message.figure.data, message.figure.layout,
+  const drawing = Plotly.react(message.id, message.figure.data, layout,
                                {responsive: true, displaylogo: false, doubleClick: 'reset'});
-  if (message.id === 'map') {
-    document.getElementById('day_date').textContent = (message.figure.layout.meta || {}).date || '';
+  if (player) {
+    document.getElementById(player.dateId).textContent = (layout.meta || {}).date || '';
     drawing.then(() => player.drawn());
   }
   const plot = document.getElementById(message.id);
-  if (message.id === 'map') updateCellGrid(plot);
-  if (message.id === 'map' && !plot.clickReported) {
+  if (player) updateCellGrid(plot);
+  if (player && !plot.clickReported) {
     plot.clickReported = true;
-    plot.on('plotly_relayout', function(event) { rememberZoom(event); updateCellGrid(plot); });
+    plot.on('plotly_relayout', function(event) { rememberZoom(mapZoom[message.id], event); updateCellGrid(plot); });
     plot.on('plotly_afterplot', function() { placeColourBar(plot); });
     // A double click resets the view, and must not select the cell under it
     let pendingClick = null;
@@ -262,7 +286,7 @@ Shiny.addCustomMessageHandler('plot', function(message) {
       // The second click of a double click: the browser counts them
       if (event.event.detail > 1) return;
       pendingClick = setTimeout(function() {
-        Shiny.setInputValue('cell', {lon: point.x, lat: point.y}, {priority: 'event'});
+        Shiny.setInputValue(cellInputs[message.id], {lon: point.x, lat: point.y}, {priority: 'event'});
       }, 350);
     });
     plot.on('plotly_doubleclick', function() { clearTimeout(pendingClick); });
@@ -307,18 +331,19 @@ $(document).on('shiny:updateinput', function(event) {
 """
 
 
-def _first(names, available):
-    return next(name for name in names if name in available)
-
-
 def load_grid(config):
     """Coordinates, simulated cells and total population of the fixed grid."""
     with xr.open_dataset(config.inputs["pop_file"]) as pop_data, xr.open_dataset(config.inputs["area_file"]) as area:
-        pop = pop_data[_first(POP_NAMES, pop_data.variables)]
-        lat = pop_data[_first(LAT_NAMES, pop_data.variables)].values
-        lon = pop_data[_first(LON_NAMES, pop_data.variables)].values
+        pop = pop_data[first_name(POP_NAMES, pop_data.variables)]
+        lat = pop_data[first_name(LAT_NAMES, pop_data.variables)].values
+        lon = pop_data[first_name(LON_NAMES, pop_data.variables)].values
         people = float((pop.values * area["cell_area"].values).astype("float64")[np.isfinite(pop.values)].sum())
         return {"lat": lat, "lon": lon, "mask": np.isfinite(pop.values), "people": people}
+
+
+def extent_key(lon, lat):
+    """What a basemap is made for: the size and corners of a grid."""
+    return (len(lon), len(lat), float(lon[0]), float(lon[-1]), float(lat[0]), float(lat[-1]))
 
 
 def next_cells(cells, lon, lat):
@@ -664,13 +689,16 @@ def grid_figure(grid, basemap=None, terrain=None):
 
 
 def map_figure(data, grid, description, day, limits, cells=(), basemap=None, terrain=None, colour_map="Reds", log=False):
+    """A day of a field. With a grid, only its simulated cells; without, every cell of the field, as for a driving file."""
     label, units = description
     if "time" in data.dims:
         date = str(data["time"].values[day - 1])[:10]
         data_now = data.isel(time=day - 1)
     else:
         date, data_now = "", data
-    values = data_now.where(_mask_like(data, grid)).values.astype("float64")
+    if grid is not None:
+        data_now = data_now.where(_mask_like(data, grid))
+    values = data_now.values.astype("float64")
     z, zmin, zmax, ticks = colour_values(values, limits, log)
     colours = COLOUR_MAPS[colour_map]
     figure = go.Figure(
@@ -693,7 +721,7 @@ def map_figure(data, grid, description, day, limits, cells=(), basemap=None, ter
         ),
         layout=_base_layout(
             title=label
-            + ("" if basemap else ". Grey: not simulated")
+            + ("" if basemap else ". Grey: not simulated" if grid is not None else ". Grey: no data")
             + (". Terrain on: colours do not match the colour bar exactly" if terrain else "")
         ),
     )
@@ -724,21 +752,21 @@ def _cell_label(series):
     return f"{float(series['lat']):.2f}°N, {float(series['lon']):.2f}°E"
 
 
-def _time_series_layout(figure, units):
+def _time_series_layout(figure, units, from_zero=True):
     figure.update_layout(
         plot_bgcolor="white",
         hovermode="x unified",
         legend={"orientation": "h", "y": -0.3},
         xaxis={"title_text": "Date", "gridcolor": GRID},
-        yaxis={"title_text": units_label(units), "gridcolor": GRID, "rangemode": "tozero"},
+        yaxis={"title_text": units_label(units), "gridcolor": GRID, "rangemode": "tozero" if from_zero else "normal"},
     )
 
 
-def cell_figure(data, description, cells, day, seed=None):
+def cell_figure(data, description, cells, day, seed=None, from_zero=True):
     """Daily series of the selected cells for one seed, with the day shown on the map marked."""
     label, units = description
     figure = go.Figure(layout=_base_layout(title=label + (f", seed {seed}" if seed is not None else "")))
-    _time_series_layout(figure, units)
+    _time_series_layout(figure, units, from_zero)
     for cell in cells:
         series = _cell_series(data, cell)
         figure.add_trace(
@@ -768,6 +796,49 @@ def envelope_figure(fields, seeds, description, cells):
         figure.add_trace(go.Scatter(x=time, y=highest, mode="lines", line={"width": 0}, showlegend=False, legendgroup=group, name=f"{place}, highest", hovertemplate=template))
         figure.add_trace(go.Scatter(x=time, y=lowest, mode="lines", line={"width": 0}, fill="tonexty", fillcolor=CELL_BANDS[cell["colour"]], legendgroup=group, name=f"{place}, lowest to highest", hovertemplate=template))
         figure.add_trace(go.Scatter(x=time, y=median, mode="lines", line={"width": 2, "color": CELL_COLOURS[cell["colour"]]}, legendgroup=group, name=f"{place}, median", hovertemplate=template))
+    return figure
+
+
+AGE_FRACTION = "#4682b4"  # As in the figures of fetch_age.sh
+AGE_CUMULATIVE = "#e34948"
+
+
+def age_figure(ages, fraction, cumulative, name):
+    """The fraction of the population at each year of age, with its mean, and on the right axis the
+    cumulative fraction the model reads, on a log scale: the figures of fetch_age.sh in one."""
+    mean = mean_age(ages, fraction)
+    at_mean = float(np.interp(mean, ages, fraction))
+    figure = go.Figure(layout=_base_layout(title=f"Age structure: {name}"))
+    figure.add_trace(go.Scatter(
+        x=ages, y=fraction, mode="lines+markers", line={"color": AGE_FRACTION, "width": 2}, marker={"size": 5},
+        name="Fraction by year of age (left axis)", hovertemplate="Age %{x}: %{y:.4f}<extra></extra>",
+    ))
+    figure.add_trace(go.Scatter(
+        x=[mean, mean], y=[0, at_mean], mode="lines", line={"color": BOX, "width": 1}, opacity=0.3,
+        showlegend=False, hoverinfo="skip",
+    ))
+    figure.add_trace(go.Scatter(
+        x=[mean], y=[at_mean], mode="markers", marker={"color": BOX, "size": 10}, name=f"Mean age: {mean:.1f} years",
+        hovertemplate=f"Mean age: {mean:.1f} years<extra></extra>",
+    ))
+    figure.add_trace(go.Scatter(
+        x=ages, y=cumulative, yaxis="y2", mode="lines+markers", line={"color": AGE_CUMULATIVE, "width": 2, "dash": "dot"},
+        marker={"size": 4}, name="Cumulative fraction (right axis)", hovertemplate="Age %{x} or under: %{y:.4f}<extra></extra>",
+    ))
+    # Ticks at 1, 2 and 5 of each power of 10 covered: plotly labels a short log axis poorly
+    positive = cumulative[cumulative > 0]
+    ticks = [m * 10.0**p for p in range(int(np.floor(np.log10(positive.min()))), 1) for m in (1, 2, 5)]
+    ticks = [tick for tick in ticks if tick <= positive.max() * 1.5]  # Those outside the range are not drawn
+    figure.update_layout(
+        plot_bgcolor="white",
+        margin={"l": 70, "r": 70, "t": 44, "b": 50},
+        legend={"x": 0.98, "xanchor": "right", "y": 0.5, "yanchor": "middle", "bgcolor": "rgba(255,255,255,0.8)", "bordercolor": GRID, "borderwidth": 1},
+        xaxis={"title_text": "Age [year]", "gridcolor": GRID, "tickfont": {"size": AXIS_FONT}},
+        yaxis={"title_text": "Fraction of the population", "gridcolor": GRID, "rangemode": "tozero", "tickfont": {"size": AXIS_FONT}},
+        yaxis2={"title_text": "Cumulative fraction (log scale)", "overlaying": "y", "side": "right", "type": "log",
+                "showgrid": False, "tickfont": {"size": AXIS_FONT}, "tickvals": ticks, "ticktext": [f"{tick:g}" for tick in ticks]},
+        meta={"view": "age"},
+    )
     return figure
 
 
@@ -856,18 +927,18 @@ def _funders():
     )
 
 
-def _player_controls():
-    def button(id, symbol, title):
-        return ui.tags.button(symbol, id=id, type="button", title=title, class_="btn btn-sm btn-outline-secondary")
+def _player_controls(prefix="player"):
+    def button(name, symbol, title):
+        return ui.tags.button(symbol, id=f"{prefix}_{name}", type="button", title=title, class_="btn btn-sm btn-outline-secondary")
 
     return ui.div(
-        button("player_first", "⏮\ufe0e", "Back to day 1"),
-        button("player_much_slower", "«", "Much slower"),
-        button("player_slower", "‹", "Slower"),
-        button("player_play", "▶", "Play"),
-        button("player_faster", "›", "Faster"),
-        button("player_much_faster", "»", "Much faster"),
-        ui.tags.span(id="player_rate", class_="small ms-2"),
+        button("first", "⏮\ufe0e", "Back to day 1"),
+        button("much_slower", "«", "Much slower"),
+        button("slower", "‹", "Slower"),
+        button("play", "▶", "Play"),
+        button("faster", "›", "Faster"),
+        button("much_faster", "»", "Much faster"),
+        ui.tags.span(id=f"{prefix}_rate", class_="small ms-2"),
         style="display: flex; align-items: center; gap: 0.25rem;",
     )
 
@@ -943,6 +1014,50 @@ def _setup_tab(config):
             ui.output_ui("setup_status"),
             class_="mt-2",
         ),
+        _preview_box(),
+        class_="mt-3",
+    )
+
+
+PREVIEW_FILES = {"rain_file": "Rainfall", "temp_file": "Temperature", "pop_file": "Population density", "age_file": "Age structure"}
+DAILY_FILES = ("rain_file", "temp_file")
+# Colour map and scale each map starts with
+PREVIEW_STYLE = {"rain_file": ("Blues", "linear"), "temp_file": ("Coolwarm", "linear"), "pop_file": ("Reds", "log")}
+
+
+def _preview_box():
+    """A look at the driving files in the boxes above, before they are applied."""
+    daily = " || ".join(f"input.preview_file === '{key}'" for key in DAILY_FILES)
+    maps = " || ".join(f"input.preview_file === '{key}'" for key in PREVIEW_STYLE)
+    return ui.card(
+        ui.card_header("Preview driving files"),
+        ui.p(
+            "The files in the boxes above, as they are now, also before Apply. Each map is drawn on the grid of its "
+            "file: a file whose grid differs from that of the population shows so.",
+            class_="small text-muted mb-1",
+        ),
+        ui.layout_columns(
+            ui.input_select("preview_file", "File", PREVIEW_FILES),
+            ui.panel_conditional(
+                daily,
+                ui.input_slider("preview_day", ui.TagList("Day ", ui.tags.span(id="preview_day_date", class_="ms-1")), min=1, max=2, value=1, step=1, width="100%"),
+                _player_controls("preview_player"),
+            ),
+            col_widths=(3, 9),
+        ),
+        ui.panel_conditional(
+            maps,
+            ui.layout_columns(
+                ui.input_select("preview_colour_map", "Colour map", list(COLOUR_MAPS), selected=PREVIEW_STYLE["rain_file"][0]),
+                ui.input_radio_buttons("preview_scale", "Scale", {"linear": "Linear", "log": "Log"}, inline=True),
+                ui.input_numeric("preview_vmin", "Minimum", value=None, step="any"),
+                ui.input_numeric("preview_vmax", "Maximum", value=None, step="any"),
+                ui.div(ui.input_action_button("preview_auto_range", "Automatic range", class_="btn-sm"), class_="pt-4"),
+                col_widths=(2, 2, 2, 2, 3),
+            ),
+        ),
+        ui.div(id="preview_map", style="height: 600px;"),
+        ui.panel_conditional(daily, ui.div(id="preview_cell_plot", style="height: 300px;")),
         class_="mt-3",
     )
 
@@ -1152,8 +1267,7 @@ def create_app(config):
             return moved
 
         def grid_key():
-            g = grid()
-            return (len(g["lon"]), len(g["lat"]), float(g["lon"][0]), float(g["lon"][-1]), float(g["lat"][0]), float(g["lat"][-1]))
+            return extent_key(grid()["lon"], grid()["lat"])
 
         basemap_for = reactive.value(None)  # The grid the basemap and the terrain were asked for
         terrain_for = reactive.value(None)
@@ -1731,6 +1845,167 @@ def create_app(config):
             else:
                 name = shown_variable(outcome)
                 await _send_figure(session, "envelope_plot", envelope_figure(outcome.fields(name), outcome.seeds, outcome.describe(name), cells))
+
+        # Preview of the driving files, in the Setup panel
+        preview_cells = reactive.value([])
+        preview_ranges = reactive.value({})  # {(path, scale): (minimum, maximum)} set by hand
+
+        @reactive.calc
+        def preview_data():
+            """(file key, path, what was read, why nothing was) of the file chosen for the preview, as in its box."""
+            key = input.preview_file()
+            typed = input[f"setup_{key}"]().strip()
+            if not typed:
+                return key, None, None, f"No {PREVIEW_FILES[key].lower()} file in the box above."
+            path = typed_path(typed)
+            try:
+                data = read_age(path) if key == "age_file" else open_field(path, key)
+            except (OSError, ValueError, KeyError, StopIteration, TypeError, RuntimeError) as error:
+                return key, path, None, f"Cannot read {path}: {error or type(error).__name__}"
+            return key, path, data, None
+
+        def preview_map_data():
+            """The field on the preview map, or None for the age structure or a file that cannot be read."""
+            key, _, data, problem = preview_data()
+            return None if problem or key not in PREVIEW_STYLE else data
+
+        @reactive.effect
+        @reactive.event(input.preview_file)
+        def preview_style():
+            key = input.preview_file()
+            if key in PREVIEW_STYLE:
+                colour_map, scale = PREVIEW_STYLE[key]
+                ui.update_select("preview_colour_map", selected=colour_map)
+                ui.update_radio_buttons("preview_scale", selected=scale)
+
+        @reactive.effect
+        def preview_days():
+            data = preview_map_data()
+            if data is not None and "time" in data.dims:
+                days = data.sizes["time"]
+                with reactive.isolate():
+                    ui.update_slider("preview_day", max=max(days, 2), value=min(input.preview_day(), days))
+
+        @reactive.calc
+        def preview_auto_limits():
+            return field_limits(preview_map_data(), input.preview_scale() == "log")
+
+        def preview_range_key():
+            return str(preview_data()[1]), input.preview_scale()
+
+        def preview_limits():
+            return preview_ranges().get(preview_range_key()) or preview_auto_limits()
+
+        @reactive.effect
+        def show_preview_range():
+            if preview_map_data() is None:
+                return
+            lowest, highest = preview_limits()
+            ui.update_numeric("preview_vmin", value=_sig(lowest))
+            ui.update_numeric("preview_vmax", value=_sig(highest))
+
+        @reactive.effect
+        @reactive.event(input.preview_vmin, input.preview_vmax, ignore_init=True)
+        def set_preview_range():
+            lowest, highest = input.preview_vmin(), input.preview_vmax()
+            if preview_map_data() is None or lowest is None or highest is None:
+                return
+            with reactive.isolate():
+                shown = preview_limits()
+                key = preview_range_key()
+            # The boxes show the range rounded: that is not a change
+            if _sig(lowest) == _sig(shown[0]) and _sig(highest) == _sig(shown[1]):
+                return
+            if lowest >= highest or (key[1] == "log" and lowest <= 0):
+                ui.notification_show("Not applied: the minimum must be below the maximum, and above 0 on a log scale.", type="warning")
+                return
+            preview_ranges.set({**preview_ranges(), key: (float(lowest), float(highest))})
+
+        @reactive.effect
+        @reactive.event(input.preview_auto_range)
+        def preview_automatic_range():
+            ranges = dict(preview_ranges())
+            ranges.pop(preview_range_key(), None)
+            preview_ranges.set(ranges)
+
+        preview_basemap_for = reactive.value(None)
+
+        @reactive.extended_task
+        async def preview_basemap_task(lon, lat):
+            return await asyncio.to_thread(load_basemap, lon, lat)
+
+        def preview_extent():
+            data = preview_map_data()
+            return None if data is None else extent_key(data["lon"].values, data["lat"].values)
+
+        @reactive.effect
+        def fetch_preview_basemap():
+            key = preview_extent()
+            # The basemap of the Runs map serves a file on the same grid
+            if key is None or key == grid_key():
+                return
+            with reactive.isolate():
+                if preview_basemap_for() == key:
+                    return
+                preview_basemap_for.set(key)
+                data = preview_map_data()
+                preview_basemap_task.invoke(data["lon"].values, data["lat"].values)
+
+        def preview_basemap():
+            key = preview_extent()
+            if key == grid_key():
+                return basemap()
+            ready = preview_basemap_task.status() == "success" and preview_basemap_for() == key
+            return preview_basemap_task.result() if ready else None
+
+        def preview_description():
+            key, path, data, _ = preview_data()
+            return f"{PREVIEW_FILES[key]}: {path.name}", data.attrs.get("units", "")
+
+        @reactive.effect
+        async def draw_preview():
+            key, path, data, problem = preview_data()
+            if problem:
+                await _send_figure(session, "preview_map", _message_figure(problem))
+                return
+            if key == "age_file":
+                await _send_figure(session, "preview_map", age_figure(*data, path.name))
+                return
+            day = min(input.preview_day(), data.sizes.get("time", 1))
+            figure = map_figure(
+                data, None, preview_description(), day, preview_limits(), preview_cells(), preview_basemap(),
+                colour_map=input.preview_colour_map(), log=input.preview_scale() == "log",
+            )
+            # The zoom is kept while the grid is the same
+            figure.update_layout(meta={"date": figure.layout.meta["date"], "view": str(preview_extent())})
+            await _send_figure(session, "preview_map", figure)
+
+        @reactive.effect
+        @reactive.event(input.preview_cell)
+        def select_preview_cell():
+            with reactive.isolate():
+                if preview_map_data() is None:
+                    return
+                cell = input.preview_cell()
+                preview_cells.set(next_cells(preview_cells(), cell["lon"], cell["lat"]))
+
+        @reactive.effect
+        async def draw_preview_cells():
+            key, _, _, problem = preview_data()
+            data = preview_map_data()
+            if key not in DAILY_FILES or problem:
+                return
+            if "time" not in data.dims:
+                await _send_figure(session, "preview_cell_plot", _message_figure("This file has no days: see the map."))
+                return
+            if not preview_cells():
+                await _send_figure(session, "preview_cell_plot", _message_figure("Click a cell on the map to see its daily values, and a second one to compare."))
+                return
+            figure = cell_figure(
+                data, preview_description(), preview_cells(), min(input.preview_day(), data.sizes["time"]),
+                from_zero=key == "rain_file",
+            )
+            await _send_figure(session, "preview_cell_plot", figure)
 
     return App(app_ui, server, static_assets={"/assets": ASSETS})
 

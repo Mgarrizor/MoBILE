@@ -24,6 +24,8 @@ from mobile.config import (
 from mobile.rundir import create_run_dir, fill_template
 from mobile.app import (
     OUTPUT_FLAGS,
+    age_figure,
+    map_figure,
     setup_problems,
     _run_label,
     run_name_problem,
@@ -41,6 +43,7 @@ from mobile.app import (
     variable_choices,
 )
 from mobile.basemap import load_basemap
+from mobile.driving import field_limits, mean_age, open_field, read_age
 from mobile.results import list_runs, load_run, load_seed_band, write_seed_band
 from mobile.setup import from_fields, from_manifest, list_folder, load_setup, save_setup, start_folder
 from mobile.runner import ProgressParser
@@ -262,6 +265,71 @@ class TestSetup(unittest.TestCase):
         self.assertEqual(list_folder(self.folder, "folder")[1], [])
         self.assertEqual(start_folder(str(self.folder / "b.nc")), self.folder.resolve())
         self.assertEqual(start_folder(""), Path.home())
+
+
+class TestDrivingPreview(unittest.TestCase):
+    def setUp(self):
+        self.example = Path(MOBILE, "utils", "test_run")
+
+    def test_example_files(self):
+        rain = open_field(self.example / "rain.nc", "rain_file")
+        temp = open_field(self.example / "t2m.nc", "temp_file")
+        pop = open_field(self.example / "pop.nc", "pop_file")
+        self.assertEqual(rain.dims, ("time", "lat", "lon"))
+        self.assertEqual(rain.attrs["units"], "mm/day")
+        self.assertEqual(temp.sizes["time"], rain.sizes["time"])
+        self.assertEqual(pop.dims, ("lat", "lon"))
+        self.assertEqual((rain.sizes["lat"], rain.sizes["lon"]), (pop.sizes["lat"], pop.sizes["lon"]))
+
+    def test_names_order_and_one_step_of_time(self):
+        import numpy as np
+        import xarray as xr
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        path = Path(folder.name, "pop.nc")
+        values = np.arange(6, dtype="float32").reshape(1, 2, 3)
+        xr.Dataset(
+            {"Band1": (("valid_time", "Y", "X"), values)},
+            coords={"valid_time": [0], "Y": [1.0, 0.0], "X": [0.0, 1.0, 2.0]},
+        ).to_netcdf(path)
+        pop = open_field(path, "pop_file")
+        self.assertEqual(pop.dims, ("lat", "lon"))
+        self.assertEqual(pop["lat"].values.tolist(), [0.0, 1.0])
+        # The row of latitude 1 was first in the file
+        self.assertEqual(pop.values[1].tolist(), [0.0, 1.0, 2.0])
+        with self.assertRaises(ValueError):
+            open_field(path, "rain_file")
+
+    def test_colour_range(self):
+        import numpy as np
+        import xarray as xr
+        values = np.tile(np.arange(101.0), (300, 1))[:, :, None]  # 300 days, 101 x 1 cells
+        field = xr.DataArray(values, dims=("time", "lat", "lon"))
+        self.assertEqual(field_limits(field), (1.0, 99.0))
+        field[:, 0, 0] = np.nan
+        np.testing.assert_allclose(field_limits(field), (1.99, 99.01))
+        # On a log scale, from the positive values only
+        self.assertEqual(field_limits(xr.DataArray([-1.0, 0.0, 0.0, 10.0]), log=True), (10.0, 100.0))
+
+    def test_age_structure(self):
+        import numpy as np
+        ages, fraction, cumulative = read_age(self.example / "age_structure" / "cumm_age.txt")
+        self.assertEqual((ages[0], ages[-1]), (0, len(cumulative) - 1))
+        self.assertAlmostEqual(float(fraction.sum()), float(cumulative[-1]))
+        self.assertEqual(fraction[0], cumulative[0])
+        # As many people at each year of age from 0 to 9: a mean of 5 years
+        self.assertAlmostEqual(mean_age(np.arange(10), np.full(10, 0.1)), 5.0)
+        figure = age_figure(ages, fraction, cumulative, "cumm_age.txt")
+        self.assertEqual(figure.layout.yaxis2.type, "log")
+        self.assertEqual([trace.yaxis or "y" for trace in figure.data], ["y", "y", "y", "y2"])
+
+    def test_driving_maps_are_not_masked(self):
+        import numpy as np
+        rain = open_field(self.example / "rain.nc", "rain_file")
+        figure = map_figure(rain, None, ("Rainfall", "mm/day"), 1, (0.0, 20.0))
+        shown = np.asarray(figure.data[0].customdata, dtype="float64")
+        self.assertEqual(int(np.isnan(shown).sum()), int(np.isnan(rain.isel(time=0).values).sum()))
+        self.assertEqual(figure.layout.meta["date"], "2012-01-01")
 
 
 class TestPort(unittest.TestCase):
