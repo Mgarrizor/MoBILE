@@ -24,7 +24,7 @@ From any folder outside the MoBILE repository:
 Documentation: the model and its use at https://mobile-ictp.readthedocs.io, the source code at
 https://mgarrizor.github.io/MoBILE/.
 
-In the GUI, press Run, then click a cell on the map to see its time series. Earlier runs in the `runs/` folder of the
+More on the GUI in [GUI.md](GUI.md). In the GUI, press Run, then click a cell on the map to see its time series. Earlier runs in the `runs/` folder of the
 current folder, including seed bands, can be loaded again from the list in the sidebar, which also sets the sliders to
 their values.
 
