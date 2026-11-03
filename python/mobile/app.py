@@ -32,7 +32,8 @@ from .setup import (
     typed_path,
 )
 from .setup_ui import (
-    DAILY_FILES, PREVIEW_FILES, PREVIEW_STYLE, SUFFIX_NAMES, setup_problems, setup_tab, setup_value,
+    DAILY_FILES, EXAMPLE_FOLDER, PREVIEW_FILES, PREVIEW_STYLE, SUFFIX_NAMES, example_note_box, setup_problems, setup_tab,
+    setup_value,
 )
 from .variables import (
     AGE_KEY, age_choices, age_groups, preferred_variable, resolve_variable, variable_choices,
@@ -516,6 +517,14 @@ def create_app(config):
             adopt(new)
             ui.notification_show("Setup applied.", type="message", duration=3)
             ui.update_navs("tab", selected="parameters")
+
+        @render.ui
+        def example_note():
+            example = setup().mobile.joinpath(*EXAMPLE_FOLDER)
+            typed = [input[f"setup_{key}"]().strip() for key, _, kind in REQUIRED_FILES if kind == "netcdf"]
+            if any(value and typed_path(value).is_relative_to(example) for value in typed):
+                return example_note_box()
+            return None
 
         @render.ui
         def setup_status():

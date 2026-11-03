@@ -44,6 +44,7 @@ def setup_tab(config):
     )
     files_box = ui.card(
         ui.card_header("Driving files"),
+        ui.output_ui("example_note"),
         *[_path_input(f"setup_{key}", label, setup_value(config, key), kind) for key, label, kind in REQUIRED_FILES],
         ui.accordion(
             ui.accordion_panel(
@@ -108,6 +109,20 @@ def _preview_box():
         ui.div(id="preview_map", style="height: 600px;"),
         ui.panel_conditional(daily, ui.div(id="preview_cell_plot", style="height: 300px;")),
         class_="mt-3",
+    )
+
+
+EXAMPLE_FOLDER = ("utils", "test_run")  # In the MoBILE repository
+
+
+def example_note_box():
+    """Said while the boxes hold the example files bundled with MoBILE."""
+    return ui.div(
+        ui.tags.strong("Example data for Senegal. "),
+        "These files come with MoBILE, in utils/test_run of its GitHub repository: Senegal from 2012 to 2014 on a "
+        "0.05° grid, with rainfall from CHIRPS, temperature from CHIRTS and population from WorldPop (2020). "
+        "Choose your own files for another region or period.",
+        class_="alert alert-info small py-2 mb-3",
     )
 
 

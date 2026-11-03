@@ -49,7 +49,9 @@ Everything a run needs that is not a parameter or an output.
   **Apply setup**, and *Earlier runs* in the sidebar then lists the runs in that folder.
 - **Driving files**: rainfall, temperature, population density, cell area, cumulative age structure and the
   parameter (`const`) file. Type a path or use **Browse**. Optional files (mortality, birth rate, immunity
-  forcing, counterfactual demography) are under *Optional files*.
+  forcing, counterfactual demography) are under *Optional files*. The files filled in at first are the
+  example that comes with MoBILE (`utils/test_run` in the GitHub repository): Senegal, 2012 to 2014, on a 0.05°
+  grid (rainfall CHIRPS, temperature CHIRTS, population WorldPop 2020). A note says so while they are in use.
 - **Apply setup** checks the settings and switches to the Parameters tab. Problems are listed under the button.
   It cannot be used while a run is in progress.
 - **Preview driving files** draws a file as a map (rainfall and temperature by day, population density, age
