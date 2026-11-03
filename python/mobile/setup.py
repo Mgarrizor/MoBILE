@@ -34,7 +34,7 @@ def settings_folder():
     return Path(os.environ.get("MOBILE_CONFIG_DIR", Path.home() / ".config" / "mobile"))
 
 
-def _path(value):
+def typed_path(value):
     """A path as typed: `~` and environment variables expanded, relative to the current folder."""
     return Path(os.path.expandvars(os.path.expanduser(str(value).strip()))).resolve()
 
@@ -52,7 +52,7 @@ def from_fields(mobile, project, runs_dir, run, inputs):
             # A required file left empty is reported by validate(), as not found
             files[key] = "NONE" if key in {name for name, _, _ in OPTIONAL_FILES} else ""
         else:
-            files[key] = str(_path(value))
+            files[key] = str(typed_path(value))
     numbers = {}
     for key, value in run.items():
         # Number boxes give 365.0 for 365
@@ -61,7 +61,7 @@ def from_fields(mobile, project, runs_dir, run, inputs):
         raise ConfigError("MoBILE location unknown: run `export MOBILE=/path/to/MoBILE` before `mobile gui`")
     config = Config(
         mobile=Path(mobile).expanduser().resolve(),
-        runs_dir=_path(runs_dir or "runs"),
+        runs_dir=typed_path(runs_dir or "runs"),
         run=numbers,
         inputs=files,
         project=str(project or "").strip(),
@@ -131,7 +131,7 @@ def list_folder(folder, kind):
 def start_folder(value):
     """Where the file browser opens: the folder of the path in the box, or the home folder."""
     if value and str(value).strip():
-        path = _path(value)
+        path = typed_path(value)
         for candidate in (path, path.parent):
             if candidate.is_dir():
                 return candidate
