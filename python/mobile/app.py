@@ -15,8 +15,8 @@ from .config import ConfigError, default_params, default_sliders, read_params
 from .driving import field_limits, open_field, read_age
 from .grid import extent_key, load_grid, mask_like
 from .layout import (
-    ANALYSIS_TABS, ASSETS, GUI_OUTPUT, OUTPUT_FLAGS, docs, funders, output_groups, output_switch_id,
-    no_run_yet, page_header, parameter_legend, player_controls, slider_grid, slider_groups, with_tip,
+    ANALYSIS_TABS, ASSETS, GUI_OUTPUT, OUTPUT_FLAGS, funders, help_tab, no_run_yet, output_groups, output_switch_id,
+    page_header, page_title, parameter_legend, player_controls, slider_grid, slider_groups, with_tip,
 )
 from .outcome import RunState, load_outcome, run_label, run_model, run_name_problem
 from .plots import (
@@ -24,7 +24,9 @@ from .plots import (
     next_cells, send_figure, sig,
 )
 from .results import list_runs
-from .scripts import BROWSER_HANDLER, CLOSED_HANDLER, PARAMETER_STYLE, PLAYER, PLOT_HANDLER, SLIDER_FORMAT
+from .scripts import (
+    BROWSER_HANDLER, CLOSED_HANDLER, PARAMETER_STYLE, PLAYER, PLOT_HANDLER, SLIDER_FORMAT, THEME, THEME_STYLE,
+)
 from .setup import (
     OPTIONAL_FILES, REQUIRED_FILES, from_fields, from_manifest, create_folder, list_folder, save_setup, start_folder,
     typed_path,
@@ -49,12 +51,7 @@ def create_app(config):
 
     app_ui = ui.page_sidebar(
         ui.sidebar(
-            ui.div(
-                ui.input_task_button("run", "Run", label_busy="Running…", class_="btn-primary flex-fill"),
-                ui.input_action_button("cancel", "Cancel", class_="flex-fill", disabled=True),
-                class_="d-flex gap-2",
-            ),
-            ui.input_text("run_name", "Run name (optional)", placeholder="e.g. kenya_e0_high"),
+            ui.div("Run", class_="sidebar-heading"),
             ui.input_numeric(
                 "nagent",
                 with_tip("Number of agents", "Simulated people. More agents is slower but closer to the real population: "
@@ -71,26 +68,22 @@ def create_app(config):
                 value=False,
             ),
             ui.panel_conditional("input.seed_band", ui.input_numeric("n_seeds", "Number of seeds", value=5, min=2, step=1)),
-            ui.input_select("previous_run", f"Previous runs in {config.runs_dir}", {}),
-            ui.input_action_button("load", "Load run", class_="w-100"),
-            ui.accordion(
-                ui.accordion_panel(
-                    "Parameters",
-                    ui.input_action_button("reset", "Reset parameters", class_="mb-2 w-100"),
-                    ui.output_ui("parameter_sliders"),
-                ),
-                ui.accordion_panel(
-                    "Outputs",
-                    ui.p("What the next run writes. Rainfall and temperature are always written.", class_="small"),
-                    ui.accordion(*output_groups(initial_output), open=False, multiple=True),
-                ),
-                open=False,
-                multiple=True,
+            ui.input_text("run_name", "Run name (optional)", placeholder="e.g. kenya_e0_high"),
+            ui.div(
+                ui.input_task_button("run", "Run", label_busy="Running…", class_="btn-primary flex-fill"),
+                ui.input_action_button("cancel", "Cancel", class_="flex-fill", disabled=True),
+                class_="d-flex gap-2",
             ),
-            ui.input_action_button("close", "Close GUI", class_="btn-sm btn-outline-secondary w-100 mt-3"),
-            width=320,
+            ui.div("Earlier runs", class_="sidebar-heading mt-4"),
+            ui.input_select("previous_run", "Runs in the results folder", {}),
+            ui.div(ui.output_text("runs_folder"), class_="small text-muted text-break mb-2"),
+            ui.input_action_button("load", "Load run", class_="w-100"),
+            ui.input_action_button("close", "Close GUI", class_="btn-sm w-100 mt-5"),
+            width=300,
         ),
         ui.head_content(
+            ui.tags.script(ui.HTML(THEME)),
+            ui.tags.style(THEME_STYLE),
             ui.tags.script(ui.HTML(plotly.offline.get_plotlyjs())),
             ui.tags.script(ui.HTML(PLAYER)),
             ui.tags.script(ui.HTML(PLOT_HANDLER)),
@@ -102,39 +95,74 @@ def create_app(config):
         ),
         ui.output_ui("status"),
         ui.navset_tab(
-            ui.nav_panel("Setup", setup_tab(config)),
+            ui.nav_panel("1. Setup", setup_tab(config), value="setup"),
             ui.nav_panel(
-                "Runs",
+                "2. Parameters",
+                ui.layout_columns(
+                    ui.card(
+                        ui.card_header("Model parameters"),
+                        ui.p("Only the sliders you move are changed for the next run; the others keep their value.", class_="small text-muted mb-1"),
+                        ui.output_ui("parameter_sliders"),
+                        ui.div(ui.input_action_button("reset", "Reset parameters", class_="btn-sm"), class_="mt-2"),
+                    ),
+                    ui.card(
+                        ui.card_header("Outputs"),
+                        ui.p("What the next run writes. Rainfall and temperature are always written; fields by age give large files.",
+                             class_="small text-muted mb-1"),
+                        *output_groups(initial_output),
+                    ),
+                    col_widths=(7, 5),
+                    class_="mt-3",
+                ),
+                value="parameters",
+            ),
+            ui.nav_panel(
+                "3. Results",
+                ui.div(ui.output_ui("run_summary"), class_="mt-3"),
                 ui.card(
                     ui.layout_columns(
                         ui.div(ui.input_select("variable", "Variable", {}), ui.output_ui("age_choice")),
-                        ui.div(ui.output_ui("seed_choice"), ui.input_switch("terrain", with_tip("Terrain", "Shaded relief under the map. Downloaded the first time it is used."), value=False), ui.output_ui("terrain_status")),
+                        ui.output_ui("seed_choice"),
                         ui.div(
                             ui.input_slider("day", ui.TagList("Day ", ui.tags.span(id="day_date", class_="ms-1")), min=1, max=max(config.run["nstep"], 2), value=1, step=1, width="100%"),
                             player_controls(),
                         ),
                         col_widths=(3, 2, 7),
                     ),
-                    ui.layout_columns(
-                        ui.input_select("colour_map", "Colour map", list(COLOUR_MAPS)),
-                        ui.input_radio_buttons("scale", "Scale", {"linear": "Linear", "log": "Log"}, inline=True),
-                        ui.input_numeric("vmin", "Minimum", value=None, step="any"),
-                        ui.input_numeric("vmax", "Maximum", value=None, step="any"),
-                        ui.div(ui.input_action_button("auto_range", "Automatic range", class_="btn-sm"), class_="pt-4"),
-                        col_widths=(2, 2, 2, 2, 3),
+                    ui.accordion(
+                        ui.accordion_panel(
+                            "Map display: colours, range and terrain",
+                            ui.layout_columns(
+                                ui.input_select("colour_map", "Colour map", list(COLOUR_MAPS)),
+                                ui.input_radio_buttons("scale", "Scale", {"linear": "Linear", "log": "Log"}, inline=True),
+                                ui.input_numeric("vmin", "Minimum", value=None, step="any"),
+                                ui.input_numeric("vmax", "Maximum", value=None, step="any"),
+                                ui.div(ui.input_action_button("auto_range", "Automatic range", class_="btn-sm"), class_="pt-4"),
+                                col_widths=(2, 2, 2, 2, 3),
+                            ),
+                            ui.input_switch("terrain", with_tip("Terrain", "Shaded relief under the map. Downloaded the first time it is used."), value=False),
+                            ui.output_ui("terrain_status"),
+                        ),
+                        open=False,
                     ),
+                    ui.p("Click a cell on the map for its time series below, and a second cell to compare. "
+                         "Drag to zoom, double-click to see the whole grid again.", class_="small text-muted mb-0"),
                     ui.div(id="map", style="height: 680px;"),
                     ui.div(id="cell_plot", style="height: 300px;"),
                     ui.panel_conditional("input.seed_band", ui.div(id="envelope_plot", style="height: 340px;")),
                 ),
+                value="results",
             ),
-            *[ui.nav_panel(name, ui.p(text, class_="text-muted mt-3")) for name, text in ANALYSIS_TABS],
-            ui.nav_panel("Docs", docs()),
+            ui.nav_menu(
+                "Analysis (to come)",
+                *[ui.nav_panel(name, ui.p(text, class_="text-muted mt-3")) for name, text in ANALYSIS_TABS],
+            ),
+            ui.nav_panel("Help", help_tab(), value="help"),
             id="tab",
-            selected="Setup",
+            selected="setup",
         ),
         funders(),
-        title=ui.output_ui("header"),
+        title=page_title(ui.output_ui("header")),
     )
 
     def server(input, output, session):
@@ -165,12 +193,15 @@ def create_app(config):
             }
             return {"sliders": sliders, "defaults": defaults, "sources": sources, "const": Path(setup().inputs["const"]).name}
 
+        # Made also while their tab is hidden: a run takes the values of the sliders, and those of a loaded
+        # run are set on them, before the tab is ever opened
+        @output(suspend_when_hidden=False)
         @render.ui
         def parameter_sliders():
             sliders = slider_setup()
             return ui.TagList(
                 parameter_legend(sliders["const"]),
-                ui.accordion(*slider_groups(sliders["sliders"], sliders["defaults"], sliders["sources"]), open=False, multiple=True),
+                *slider_groups(sliders["sliders"], sliders["defaults"], sliders["sources"]),
             )
 
         @reactive.effect
@@ -301,6 +332,7 @@ def create_app(config):
             run_task.invoke(run_config, [seed + i for i in range(n_seeds)], name or None)
             # So that the next run does not take the same name
             ui.update_text("run_name", value="")
+            ui.update_navs("tab", selected="results")
 
         @reactive.effect
         def enable_cancel():
@@ -367,9 +399,12 @@ def create_app(config):
             runs_changed()
             ui.update_select(
                 "previous_run",
-                label=f"Previous runs in {setup().runs_dir}",
                 choices={folder: run_label(folder, manifest) for folder, manifest in available_runs().items()},
             )
+
+        @render.text
+        def runs_folder():
+            return f"In {setup().runs_dir}"
 
         @reactive.effect
         @reactive.event(input.load)
@@ -394,6 +429,7 @@ def create_app(config):
                 return
             adopt(restored, keep_outcome=True)
             show(outcome)
+            ui.update_navs("tab", selected="results")
             ui.update_numeric("nagent", value=outcome.nagent)
             ui.update_numeric("seed", value=outcome.seeds[0])
             ui.update_switch("seed_band", value=len(outcome.seeds) > 1)
@@ -479,7 +515,7 @@ def create_app(config):
                 return
             adopt(new)
             ui.notification_show("Setup applied.", type="message", duration=3)
-            ui.update_navs("tab", selected="Runs")
+            ui.update_navs("tab", selected="parameters")
 
         @render.ui
         def setup_status():
@@ -595,19 +631,27 @@ def create_app(config):
             if task == "error":
                 return ui.card(ui.p("The app failed while running or reading the results. The terminal you started the GUI from shows why."), class_="border-danger")
             outcome = current()
-            if outcome is None:
-                return no_run_yet()
-            if outcome.status == "finished":
-                changed = ", ".join(f"{k}={v:.4g}" for k, v in outcome.overrides.items()) or "none"
-                seeds = f"seed {outcome.seeds[0]}" if len(outcome.seeds) == 1 else f"seeds {outcome.seeds[0]} to {outcome.seeds[-1]}"
-                return ui.p(
-                    f"{'Loaded' if outcome.loaded else 'Showing'}: {outcome.nagent:,} agents, {seeds}, changed parameters: {changed}. "
-                    f"Folder: {outcome.run_dir}",
-                    class_="small mb-0",
-                )
+            if outcome is None or outcome.status == "finished":
+                return None
             if outcome.status == "cancelled":
                 return ui.p("Run cancelled.", class_="mb-0")
             return ui.card(ui.p("The run failed. End of its log:"), ui.tags.pre(outcome.log), class_="border-danger")
+
+        @render.ui
+        def run_summary():
+            """What the Results tab shows: guidance before the first results, then which run they are from."""
+            outcome = current()
+            if outcome is None:
+                return None if run_task.status() == "running" else no_run_yet()
+            if outcome.status != "finished":
+                return None
+            changed = ", ".join(f"{k}={v:.4g}" for k, v in outcome.overrides.items()) or "none"
+            seeds = f"seed {outcome.seeds[0]}" if len(outcome.seeds) == 1 else f"seeds {outcome.seeds[0]} to {outcome.seeds[-1]}"
+            return ui.p(
+                f"{'Loaded' if outcome.loaded else 'Showing'}: {outcome.nagent:,} agents, {seeds}, changed parameters: {changed}. "
+                f"Folder: {outcome.run_dir}",
+                class_="small mb-2",
+            )
 
         @render.ui
         def seed_choice():

@@ -9,7 +9,7 @@ from .config import SLIDER_GROUPS
 
 
 MODEL_NAMES = {0: "Cholera", 1: "VECTRI-ABM"}  # By disID
-# Tabs for each type of analysis, to be filled
+# Tabs for each type of analysis, under the Analysis menu, to be filled
 ANALYSIS_TABS = (
     ("Time series", "Time series analysis, such as spectrograms: to come."),
     ("Demography", "Age-related analysis: to come."),
@@ -68,18 +68,27 @@ def with_tip(label, text):
     return ui.TagList(label, ui.tooltip(icon, text, placement="right"))
 
 
+def quick_start():
+    """The steps from a setup to its results, as the tabs are numbered."""
+    strong = ui.tags.strong
+    return ui.tags.ol(
+        ui.tags.li(strong("Setup"), ": choose the model, the days to simulate and the driving files, then press ", strong("Apply setup"), "."),
+        ui.tags.li(strong("Parameters"), ": move the sliders to change, and choose the outputs. Sliders you do not move keep their value."),
+        ui.tags.li("In the sidebar, set the number of agents and the seed, and press ", strong("Run"),
+                   ". The model is compiled, then simulated: the example takes minutes."),
+        ui.tags.li(strong("Results"), ": choose a variable and a day, and click a cell on the map for its time series."),
+        class_="mb-2",
+    )
+
+
 def no_run_yet():
-    """Shown in the Runs tab until there are results: what to do first."""
+    """Shown in the Results tab until there are results."""
+    strong = ui.tags.strong
     return ui.card(
         ui.card_header("No results yet"),
-        ui.tags.ol(
-            ui.tags.li("Check the settings and driving files in the ", ui.tags.strong("Setup"), " tab, and press ", ui.tags.strong("Apply setup"), "."),
-            ui.tags.li("Optionally change parameters and outputs in the sidebar. Only sliders you move are changed."),
-            ui.tags.li("Press ", ui.tags.strong("Run"), ". The model is compiled first, then simulated: the example takes minutes."),
-            ui.tags.li("Or reload an earlier run with ", ui.tags.strong("Load run"), " in the sidebar."),
-            class_="mb-0",
-        ),
-        class_="border-info",
+        ui.p("Press ", strong("Run"), " in the sidebar to simulate with the current setup and parameters, or choose an earlier "
+             "run under ", strong("Earlier runs"), " and press ", strong("Load run"), ". The results then show here.", class_="mb-0"),
+        class_="border-info mb-3",
     )
 
 
@@ -114,28 +123,52 @@ def logo_files(folder, stem=None):
 def _logo_placeholder(text, **style):
     return ui.div(
         text,
-        style="display: flex; align-items: center; justify-content: center; border: 1px dashed #a9a8a2; "
-        "color: #52514e; font-size: 0.75rem; text-align: center; width: 140px; height: 56px;",
+        style="display: flex; align-items: center; justify-content: center; border: 1px dashed var(--bs-border-color); "
+        "color: var(--bs-secondary-color); font-size: 0.75rem; text-align: center; width: 140px; height: 56px;",
         class_="logo-placeholder",
         **style,
     )
 
 
 def _logo(path, folder, height):
-    return ui.img(src=f"/assets/{folder}{path.name}", alt=path.stem, style=f"height: {height}px; max-width: 220px; object-fit: contain;")
+    return ui.img(src=f"/assets/{folder}{path.name}", alt=path.stem, class_="logo",
+                  style=f"height: {height}px; max-width: 220px; object-fit: contain;")
 
 
 def page_header(config):
+    """The name of the model and the project, which follow the applied setup."""
     disease = config.run["disID"]
+    return ui.div(
+        ui.div("MoBILE", style="font-size: 1.4rem; font-weight: 600; line-height: 1.2;"),
+        ui.div(f"Model: {MODEL_NAMES.get(disease, f'disID {disease}')} · Project: {config.project or 'not set'}",
+               style="font-size: 0.95rem; font-weight: 400;"),
+    )
+
+
+# (value, symbol, label); scripts.THEME applies the choice and keeps it in the browser
+THEME_CHOICES = (("light", "☀\ufe0e", "Light"), ("system", "◐\ufe0e", "System"), ("dark", "☾\ufe0e", "Dark"))
+
+
+def theme_switch():
+    buttons = [
+        ui.tags.button(f"{symbol} {label}", type="button", class_="btn btn-outline-secondary", title=f"{label} colours",
+                       **{"data-theme-choice": value, "aria-pressed": "false"})
+        for value, symbol, label in THEME_CHOICES
+    ]
+    return ui.div(*buttons, class_="btn-group btn-group-sm", role="group", **{"aria-label": "Colour theme"})
+
+
+def page_title(header):
+    """The header, then the theme switch and the ICTP logo at the right."""
     ictp = logo_files(ASSETS, "ictp")
     return ui.div(
+        header,
         ui.div(
-            ui.div("MoBILE", style="font-size: 1.4rem; font-weight: 600; line-height: 1.2;"),
-            ui.div(f"Model: {MODEL_NAMES.get(disease, f'disID {disease}')}", style="font-size: 0.95rem; font-weight: 400;"),
-            ui.div(f"Project: {config.project or 'not set'}", style="font-size: 0.95rem; font-weight: 400;"),
+            theme_switch(),
+            _logo(ictp[0], "", 56) if ictp else _logo_placeholder("ICTP logo", id="ictp_logo"),
+            style="display: flex; align-items: center; gap: 1rem;",
         ),
-        _logo(ictp[0], "", 56) if ictp else _logo_placeholder("ICTP logo", id="ictp_logo"),
-        style="display: flex; align-items: center; justify-content: space-between; width: 100%;",
+        style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; width: 100%;",
     )
 
 
@@ -168,6 +201,16 @@ def player_controls(prefix="player"):
     )
 
 
+def help_tab():
+    return ui.div(
+        ui.card(ui.card_header("Getting started"), quick_start(),
+                ui.p("An earlier run, with its setup and parameters, is reloaded from ", ui.tags.strong("Earlier runs"),
+                     " in the sidebar. Hover over ⓘ for an explanation of a setting.", class_="small text-muted mb-0")),
+        docs(),
+        class_="mt-3",
+    )
+
+
 def docs():
     """The documentation built with the package, readable offline; a placeholder until there is one."""
     code_docs = ui.p("Documentation of the source code: ", ui.a(CODE_DOCS_URL, href=CODE_DOCS_URL, target="_blank"), class_="small")
@@ -176,7 +219,7 @@ def docs():
         return ui.div(ui.p("The user documentation is not included in this installation.", class_="text-muted mt-3"), online, code_docs)
     return ui.div(
         ui.p(ui.a("Open in a new window", href="/assets/docs/index.html", target="_blank"), class_="small mt-3 mb-2"),
-        ui.tags.iframe(src="/assets/docs/index.html", title="Documentation", style="width: 100%; height: 80vh; border: 1px solid #dee2e6;"),
+        ui.tags.iframe(src="/assets/docs/index.html", title="Documentation", style="width: 100%; height: 80vh; border: 1px solid var(--bs-border-color);"),
         online,
         code_docs,
     )
@@ -187,12 +230,17 @@ def output_switch_id(flag):
 
 
 def output_groups(selected):
-    """One collapsible panel per group of the output file, with a switch per flag."""
-    panels = [
-        ui.accordion_panel(group, *[ui.input_switch(output_switch_id(flag), label, value=flag in selected) for flag, label, _ in flags])
+    """A heading per group of the output file, with a switch per flag."""
+    return [
+        ui.div(
+            ui.h6(group, class_="mt-2"),
+            ui.layout_column_wrap(
+                *[ui.input_switch(output_switch_id(flag), label, value=flag in selected) for flag, label, _ in flags],
+                width="200px", gap="0 1rem",
+            ),
+        )
         for group, flags in OUTPUT_FLAGS.items()
     ]
-    return panels
 
 
 PARAMETER_SOURCES = {
@@ -211,13 +259,13 @@ def parameter_legend(const):
 
 
 def slider_groups(sliders, values, sources):
-    """One collapsible panel per group that has sliders."""
-    panels = []
+    """A heading per group that has sliders, with the sliders side by side."""
+    groups = []
     for group in SLIDER_GROUPS:
         group_sliders = [
             ui.div(_slider(name, spec, values[name], sources[name]), class_=f"param-{sources[name]}")
             for name, spec in sliders.items() if spec["group"] == group
         ]
         if group_sliders:
-            panels.append(ui.accordion_panel(group, *group_sliders))
-    return panels
+            groups.append(ui.div(ui.h6(group, class_="mt-2"), ui.layout_column_wrap(*group_sliders, width="240px", gap="0 1.5rem")))
+    return groups

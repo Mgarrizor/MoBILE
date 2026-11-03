@@ -55,6 +55,8 @@ def setup_tab(config):
         ),
     )
     return ui.div(
+        ui.p("Choose the model, the days to simulate and the driving data, then press ", ui.tags.strong("Apply setup"),
+             ". Next, set the parameters in the Parameters tab and press Run in the sidebar.", class_="text-muted"),
         ui.layout_columns(run_box, files_box, col_widths=(5, 7)),
         ui.div(
             ui.input_action_button("apply_setup", "Apply setup", class_="btn-primary"),
