@@ -41,7 +41,7 @@ def typed_path(value):
     return Path(os.path.expandvars(os.path.expanduser(str(value).strip()))).resolve()
 
 
-def from_fields(mobile, project, runs_dir, run, inputs):
+def from_fields(mobile, project, runs_dir, run, inputs, region=None):
     """The Config of the fields of the Setup panel. An empty optional file is not used.
 
     Raises ConfigError, listing every problem, as for a configuration file.
@@ -67,9 +67,29 @@ def from_fields(mobile, project, runs_dir, run, inputs):
         run=numbers,
         inputs=files,
         project=str(project or "").strip(),
+        region=region,
     )
     config.validate()
     return config
+
+
+REGION_MODES = {"all": "Whole grid", "box": "Subregion", "point": "Single point"}
+
+
+def region_from_fields(mode, north, west, south, east, lat, lon):
+    """The region of the Setup panel: None for the whole grid. A point is a box of no size, which gives
+    the cell it falls in."""
+    if mode == "box":
+        return {"north": north, "west": west, "south": south, "east": east}
+    if mode == "point":
+        return {"north": lat, "west": lon, "south": lat, "east": lon}
+    return None
+
+
+def region_mode(region):
+    if region is None:
+        return "all"
+    return "point" if region["north"] == region["south"] and region["west"] == region["east"] else "box"
 
 
 def to_dict(config):
@@ -79,6 +99,7 @@ def to_dict(config):
         "runs_dir": str(config.runs_dir),
         "run": dict(config.run),
         "inputs": dict(config.inputs),
+        "region": config.region,
     }
 
 
@@ -97,7 +118,8 @@ def load_setup(mobile=None):
     e.g. because a file was moved. `mobile` overrides the location of MoBILE saved with them."""
     try:
         saved = json.loads((settings_folder() / SETUP_FILE).read_text())
-        return from_fields(mobile or saved["mobile"], saved["project"], saved["runs_dir"], saved["run"], saved["inputs"])
+        return from_fields(mobile or saved["mobile"], saved["project"], saved["runs_dir"], saved["run"], saved["inputs"],
+                           saved.get("region"))
     except (OSError, ValueError, KeyError, TypeError, ConfigError):
         return None
 
@@ -105,7 +127,8 @@ def load_setup(mobile=None):
 def from_manifest(manifest, current):
     """The settings with which a run was made, from its run.json, in the project and results
     folder of the current settings."""
-    return from_fields(current.mobile, current.project, current.runs_dir, manifest["run"], manifest["inputs"])
+    return from_fields(current.mobile, current.project, current.runs_dir, manifest["run"], manifest["inputs"],
+                       manifest.get("region"))
 
 
 def list_folder(folder, kind):

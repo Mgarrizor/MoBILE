@@ -5,6 +5,9 @@ runs_dir: runs
 
 project: MoBILE example
 
+# Optional: run on part of the grid, in degrees; a point is a box with north = south and west = east
+# region: {north: 14.6, west: -17.2, south: 14.0, east: -16.4}
+
 run:
   disID: 1           # 0: cholera, 1: malaria
   mob: 0             # Mobility, not functional yet

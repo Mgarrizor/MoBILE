@@ -6,7 +6,12 @@ import secrets
 import shutil
 from pathlib import Path
 
+from .config import MAX_PATH_LENGTH, ConfigError
+from .grid import pop_coordinates
+from .region import cut_inputs
+
 OUTPUT_NAME = "output"
+INPUTS_NAME = "inputs"  # The driving files cut to the region of a run
 
 
 def fill_template(template, values, threads, mobile):
@@ -54,6 +59,11 @@ def create_run_dir(config, name=None):
         output_file = "'output.txt'"
 
     inputs = config.inputs
+    if config.region is not None:
+        inputs = {**inputs, **cut_inputs(inputs, config.region, run_dir / INPUTS_NAME, pop_coordinates(inputs["pop_file"]))}
+        too_long = [path for path in inputs.values() if len(str(path)) > MAX_PATH_LENGTH]
+        if too_long:
+            raise ConfigError(f"paths in the run folder longer than {MAX_PATH_LENGTH} characters: {too_long}")
     values = {
         "output_name": f"'{OUTPUT_NAME}'",
         "disID": config.run["disID"],
