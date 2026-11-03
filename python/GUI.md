@@ -53,7 +53,8 @@ The settings are remembered for the next session in `~/.config/mobile/last_setup
 
 ### Sidebar
 
-- **Run**, **Cancel**, **Close GUI**.
+- **Run** and **Cancel** (only active during a run), and **Close GUI** at the bottom. Hover the (i) beside a
+  setting for a short explanation. The Runs tab says what to do until there are results.
 - **Run name** (optional): the output folder name, letters, digits, `.`, `_`, `-` only.
   Without one, it is named after the date.
 - **Number of agents** and **Seed**. The line under the agents shows the mean humans per agent: results depend on
