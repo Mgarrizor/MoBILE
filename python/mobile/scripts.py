@@ -1,4 +1,42 @@
-"""JavaScript and CSS the page loads: the day player, the plot handlers and the slider format."""
+"""JavaScript and CSS the page loads: the theme, the day player, the plot handlers and the slider format."""
+
+
+# Light, dark, or as the system: the choice is kept in the browser. Loaded first, so that the page
+# is not drawn in the other theme before it.
+THEME = """
+const THEME_KEY = 'mobile-theme';
+const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');
+function themeChoice() {
+  try { return localStorage.getItem(THEME_KEY) || 'system'; } catch (error) { return 'system'; }
+}
+function shownTheme() {
+  const choice = themeChoice();
+  return choice === 'system' ? (darkQuery.matches ? 'dark' : 'light') : choice;
+}
+function applyTheme() {
+  const theme = shownTheme();
+  const changed = document.documentElement.getAttribute('data-bs-theme') !== theme;
+  document.documentElement.setAttribute('data-bs-theme', theme);
+  document.querySelectorAll('[data-theme-choice]').forEach(function(button) {
+    const active = button.dataset.themeChoice === themeChoice();
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', active);
+  });
+  if (changed && typeof themePlot === 'function') document.querySelectorAll('.js-plotly-plot').forEach(themePlot);
+}
+applyTheme();
+$(document).on('click', '[data-theme-choice]', function() {
+  try { localStorage.setItem(THEME_KEY, this.dataset.themeChoice); } catch (error) {}
+  applyTheme();
+});
+darkQuery.addEventListener('change', applyTheme);
+$(document).on('shiny:sessioninitialized', applyTheme);
+"""
+THEME_STYLE = """
+.logo { background: white; border-radius: 4px; padding: 2px; }
+.sidebar-heading { font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+                   color: var(--bs-secondary-color); margin: 0.5rem 0 0.25rem; }
+"""
 
 
 
@@ -98,6 +136,39 @@ $(document).on('shiny:inputchanged', (event) => { if (event.name === 'preview_fi
 $(document).on('shiny:sessioninitialized', () => Object.values(players).forEach(player => player.show()));
 """
 PLOT_HANDLER = """
+// The colours around the data follow the theme; those of the data and of the map do not.
+// The server sends the light ones; plain plots are those with a white plot area.
+const PLOT_COLOURS = {
+  light: {paper: 'white', text: '#52514e', grid: '#e6e5e0', legend: 'rgba(255,255,255,0.8)'},
+  dark: {paper: '#212529', text: '#c9c8c2', grid: '#3b3f44', legend: 'rgba(33,37,41,0.8)'},
+};
+function plotColours() {
+  return PLOT_COLOURS[document.documentElement.getAttribute('data-bs-theme') === 'dark' ? 'dark' : 'light'];
+}
+function isText(colour) {
+  return colour === PLOT_COLOURS.light.text || colour === PLOT_COLOURS.dark.text;
+}
+function themeLayout(layout, plain) {
+  const colours = plotColours();
+  layout.paper_bgcolor = colours.paper;
+  layout.font = {...(layout.font || {}), color: colours.text};
+  if (plain) layout.plot_bgcolor = colours.paper;
+  for (const axis of ['xaxis', 'yaxis']) if (layout[axis]) layout[axis].gridcolor = colours.grid;
+  if (layout.legend) layout.legend.bgcolor = colours.legend;
+  (layout.shapes || []).forEach(function(shape) { if (shape.line && isText(shape.line.color)) shape.line.color = colours.text; });
+  return layout;
+}
+// A plot already drawn, when the theme changes
+function themePlot(plot) {
+  if (!plot.layout) return;
+  const update = themeLayout({font: plot.layout.font, legend: plot.layout.legend ? {} : undefined,
+                              xaxis: {}, yaxis: {}, shapes: JSON.parse(JSON.stringify(plot.layout.shapes || []))}, plot.plain);
+  const flat = {paper_bgcolor: update.paper_bgcolor, font: update.font, 'xaxis.gridcolor': update.xaxis.gridcolor,
+                'yaxis.gridcolor': update.yaxis.gridcolor, shapes: update.shapes};
+  if (plot.plain) flat.plot_bgcolor = update.plot_bgcolor;
+  if (update.legend) flat['legend.bgcolor'] = update.legend.bgcolor;
+  Plotly.relayout(plot, flat);
+}
 // Gaps between cells, showing as a grid, once the cells are large enough on screen
 const GRID_MIN_PIXELS = 10;
 const mapZoom = {map: {}, preview_map: {}};
@@ -145,6 +216,8 @@ $(document).on('shown.bs.tab', function() {
 Shiny.addCustomMessageHandler('plot', function(message) {
   const player = players[message.id];  // Only the maps have one
   const layout = message.figure.layout;
+  const plain = layout.plot_bgcolor === 'white';
+  themeLayout(layout, plain);
   if (player) {
     const before = document.getElementById(message.id);
     // Another grid, or another kind of plot, starts from its full view
@@ -166,6 +239,7 @@ Shiny.addCustomMessageHandler('plot', function(message) {
     drawing.then(() => player.drawn());
   }
   const plot = document.getElementById(message.id);
+  plot.plain = plain;
   if (player) updateCellGrid(plot);
   if (player && !plot.clickReported) {
     plot.clickReported = true;
@@ -235,6 +309,6 @@ PARAMETER_STYLE = """
 .param-default .irs--shiny .irs-bar, .param-default .irs--shiny .irs-single,
 .param-default .irs--shiny .irs-handle { background: #8a8984; border-color: #8a8984; }
 .param-default .irs--shiny .irs-single:before { border-top-color: #8a8984; }
-.param-default label { color: #52514e; }
+.param-default label { color: var(--bs-secondary-color); }
 .param-swatch { display: inline-block; width: 0.8em; height: 0.8em; border-radius: 2px; margin-right: 0.3em; }
 """
