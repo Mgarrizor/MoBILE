@@ -334,4 +334,7 @@ PARAMETER_STYLE = """
 .param-default .irs--shiny .irs-single:before { border-top-color: #8a8984; }
 .param-default label { color: var(--bs-secondary-color); }
 .param-swatch { display: inline-block; width: 0.8em; height: 0.8em; border-radius: 2px; margin-right: 0.3em; }
+.param-label { cursor: help; }
+.tooltip-inner:has(.param-info) { max-width: 360px; text-align: left; }
+.param-source { margin-top: 0.4em; font-size: 0.85em; font-style: italic; }
 """

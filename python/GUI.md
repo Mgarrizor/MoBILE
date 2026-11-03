@@ -72,6 +72,8 @@ The settings are remembered for the next session in `~/.config/mobile/last_setup
 - **Model parameters**: sliders by group (Human, Vector, Hydro, Climate). A blue slider starts at its value in
   the parameter file, a grey one (marked *default*) at the model default. Only sliders you move are changed for
   the run. **Reset parameters** puts them all back. Slider ranges are placeholders (the example value ±50%).
+  Hover over the name of a parameter (or move to it with Tab) for what it does, the formula it enters and
+  where it comes from. The descriptions are in `info` and `source` of each slider in `sliders.yaml`.
 - **Outputs**: which fields the next run writes. Age-resolved fields give large files.
 
 ### Sidebar

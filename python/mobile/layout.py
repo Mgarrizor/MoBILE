@@ -104,9 +104,19 @@ def slider_grid(spec):
     )
 
 
+def parameter_label(text, spec):
+    """The label of a slider, which explains its parameter on hover or focus, from `info` and `source` in sliders.yaml."""
+    if "info" not in spec:
+        return text
+    source = ui.div(f"Source: {spec['source']}", class_="param-source") if "source" in spec else None
+    explanation = ui.div(ui.tags.strong(spec.get("label", "")), ui.div(spec["info"]), source, class_="param-info")
+    trigger = ui.span(text, ui.span("ⓘ", class_="text-muted ms-1", **{"aria-hidden": "true"}), tabindex="0", class_="param-label")
+    return ui.tooltip(trigger, explanation, placement="right")
+
+
 def _slider(name, spec, value, source="const"):
     low, high, step, _ = slider_grid(spec)
-    label = spec.get("label", name) + (" (default)" if source == "default" else "")
+    label = parameter_label(spec.get("label", name) + (" (default)" if source == "default" else ""), spec)
     return ui.input_slider(f"param_{name}", label, min=low, max=high, value=value, step=step)
 
 

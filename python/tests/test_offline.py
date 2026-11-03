@@ -100,6 +100,8 @@ class TestConfig(unittest.TestCase):
         self.assertTrue(set(sliders) <= namelist_names(MOBILE, "CONST"))
         self.assertTrue(all(spec["group"] in SLIDER_GROUPS for spec in sliders.values()))
         self.assertTrue(all(spec["min"] < spec["max"] for spec in sliders.values()))
+        # Each is explained on hovering over it
+        self.assertTrue(all(spec.get("info") and spec.get("source") for spec in sliders.values()))
 
     def test_default_params_match_the_source(self):
         self.assertEqual(set(default_params()), set(default_sliders()))

@@ -2,16 +2,117 @@
 # parameter in the `const` file of the configuration; one whose parameter is not there is left out.
 # group: the tab of the slider, one of the groups of the netCDF output (Human, Vector, Hydro, Climate).
 # Ranges are placeholders: the value of the example +/- 50%, capped at 1 for fractions.
+# info: what the parameter does, shown on hovering over the slider; source: where it is used or comes from.
 sliders:
-  e_0: {group: Human, label: e_0, min: 0.0985, max: 0.296}
-  e1: {group: Human, label: e1, min: 0.12, max: 0.359}
-  e2: {group: Human, label: e2, min: 0.864, max: 2.59}
-  A1: {group: Human, label: A1, min: 0.495, max: 1}
-  i_star_c: {group: Human, label: i_star_c, min: 0.493, max: 1}
-  k_star: {group: Human, label: k_star, min: 7.94, max: 23.8}
-  alph_min: {group: Human, label: alph_min, min: 0.213, max: 0.639}
-  k_alph: {group: Human, label: k_alph, min: 3.62, max: 10.9}
-  P_v0: {group: Human, label: P_v0, min: 0.173, max: 0.518}
-  P_max: {group: Vector, label: P_max, min: 0.123, max: 0.37}
-  dsporo: {group: Vector, label: dsporo, min: 61.2, max: 184}
-  dgono: {group: Vector, label: dgono, min: 22.1, max: 66.3}
+  e_0:
+    group: Human
+    label: e_0
+    min: 0.0985
+    max: 0.296
+    info: >-
+      Largest immunity gained from one infection, when an agent has no immunity yet. Immunity runs from 0 to 1,
+      and the gain shrinks as it builds up: gain = e_0 (A1 exp(-imm/e1) + (1 - A1) exp(-imm/e2)).
+    source: dimmunity in mo_agents.f90
+  e1:
+    group: Human
+    label: e1
+    min: 0.12
+    max: 0.359
+    info: >-
+      Immunity level over which the fast part of the immunity gain per infection falls by a factor e. Smaller
+      values make the gain stop sooner as immunity builds up.
+    source: dimmunity in mo_agents.f90
+  e2:
+    group: Human
+    label: e2
+    min: 0.864
+    max: 2.59
+    info: >-
+      Immunity level over which the slow part of the immunity gain per infection falls by a factor e. Larger
+      values keep the gain going at high immunity.
+    source: dimmunity in mo_agents.f90
+  A1:
+    group: Human
+    label: A1
+    min: 0.495
+    max: 1
+    info: >-
+      Weight of the fast part in the immunity gain per infection, from 0 to 1; the slow part has the weight 1 - A1.
+    source: dimmunity in mo_agents.f90
+  i_star_c:
+    group: Human
+    label: i_star_c
+    min: 0.493
+    max: 1
+    info: >-
+      Immunity level for young children at which the probability that an infection is symptomatic falls
+      fastest (the middle of its S-shaped curve). With age it moves to the adult value i_star_a:
+      i* = i_star_a + (i_star_c - i_star_a) exp(-age/k_star).
+    source: age_i_star and prob_symp_sig in mo_agents.f90
+  k_star:
+    group: Human
+    label: k_star
+    min: 7.94
+    max: 23.8
+    info: >-
+      Age, in years, over which the immunity level at the middle of the symptomatic curve moves from its child
+      value (i_star_c) to its adult value: the difference falls by a factor e every k_star years.
+    source: age_i_star in mo_agents.f90
+  alph_min:
+    group: Human
+    label: alph_min
+    min: 0.213
+    max: 0.639
+    info: >-
+      Lowest probability that an infection is symptomatic, reached at high immunity, for a newborn. It falls
+      with age as alph_min exp(-age/k_alph), so that older agents with high immunity are mostly asymptomatic.
+    source: age_alph_min and prob_symp_sig in mo_agents.f90
+  k_alph:
+    group: Human
+    label: k_alph
+    min: 3.62
+    max: 10.9
+    info: >-
+      Age, in years, over which the lowest symptomatic probability (alph_min) falls by a factor e.
+    source: age_alph_min in mo_agents.f90
+  P_v0:
+    group: Human
+    label: P_v0
+    min: 0.173
+    max: 0.518
+    info: >-
+      Probability that a bite of an infective mosquito infects a human (mosquito to human). The daily infection
+      probability of an agent is 1 - exp(-w EIR P_v0), with w its exposure to bites and EIR the daily
+      entomological inoculation rate. Model default 0.3.
+    source: Ermert et al. (2011); mo_agents.f90
+  P_max:
+    group: Vector
+    label: P_max
+    min: 0.123
+    max: 0.37
+    info: >-
+      Highest probability that a mosquito becomes infected when it bites an infectious human (human to
+      mosquito): P = P_max (1 - exp(-w b P_h0)), with w the exposure of the agent to bites, b the daily bites
+      of uninfected mosquitoes on it and P_h0 a probability per bite. Model default 0.2.
+    source: Churcher et al. (2013), about 0.2 +/- 0.15; mo_agents.f90
+  dsporo:
+    group: Vector
+    label: dsporo
+    min: 61.2
+    max: 184
+    info: >-
+      Degree-days the malaria parasite needs to develop in the mosquito (sporogonic cycle) before the mosquito
+      is infective. Each day adds (T - 16 °C) / dsporo of the cycle, T being the temperature. Larger values
+      give a longer cycle, so fewer mosquitoes live to be infective. Detinova (1962) gives 111.
+    source: Detinova (1962), as in VECTRI (sporo in utils/vectri/mo_methods.f90)
+  dgono:
+    group: Vector
+    label: dgono
+    min: 22.1
+    max: 66.3
+    info: >-
+      Degree-days a mosquito needs from a blood meal to laying eggs (gonotrophic cycle). Each day adds
+      (T - T_gono) / dgono of the cycle, T_gono being about 7.7 °C. Mosquitoes bite once per cycle, so larger
+      values give fewer bites and fewer eggs.
+      Detinova (1962) gives 37.1 at high humidity.
+    source: Detinova (1962), as in VECTRI (gono in utils/vectri/mo_methods.f90)
