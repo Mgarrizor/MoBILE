@@ -31,7 +31,7 @@ from mobile.variables import age_choices, age_groups, preferred_variable, resolv
 from mobile.basemap import load_basemap
 from mobile.driving import field_limits, mean_age, open_field, read_age
 from mobile.results import list_runs, load_run, load_seed_band, write_seed_band
-from mobile.setup import from_fields, from_manifest, list_folder, load_setup, save_setup, start_folder
+from mobile.setup import create_folder, from_fields, from_manifest, list_folder, load_setup, save_setup, start_folder
 from mobile.runner import ProgressParser
 
 CONFIG = example_config()
@@ -251,6 +251,21 @@ class TestSetup(unittest.TestCase):
         self.assertEqual(list_folder(self.folder, "folder")[1], [])
         self.assertEqual(start_folder(str(self.folder / "b.nc")), self.folder.resolve())
         self.assertEqual(start_folder(""), Path.home())
+
+    def test_new_folder(self):
+        path, problem = create_folder(self.folder, " kenya_2025 ")
+        self.assertEqual((path, problem), ((self.folder / "kenya_2025").resolve(), None))
+        self.assertTrue(path.is_dir())
+        self.assertIsNone(create_folder(self.folder, "kenya_2025")[0])
+        for name in ("", "two words", "../up", ".hidden", "a/b"):
+            path, problem = create_folder(self.folder, name)
+            self.assertIsNone(path)
+            self.assertTrue(problem)
+        self.assertIsNone(create_folder(self.folder / "missing", "x")[0])
+
+    def test_results_folder_inside_the_repository(self):
+        with self.assertRaises(ConfigError):
+            from_fields(MOBILE, "Study", str(Path(MOBILE) / "runs"), self.run, self.files)
 
 
 class TestDrivingPreview(unittest.TestCase):

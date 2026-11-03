@@ -25,8 +25,10 @@ IN A TERMINAL
                              outputs are then set in the GUI.
   mobile help                This text.
 
-  Run these from any folder outside the MoBILE repository. Each run creates a
-  folder runs/<date>-<id>/ under the current folder, with the output in
+  Run these from a folder OUTSIDE the MoBILE repository, never inside it: the
+  results folder cannot be in the repository. Each run creates a
+  folder runs/<date>-<id>/ under the current folder (in the GUI, another results
+  folder can be chosen or made in the Setup tab), with the output in
   output/output.nc, the log in run.log and the record of the run in run.json.
   A seed band from the app is one folder runs/seed_band_<date>-<id>/ with a
   folder seed_<seed>/ like that for each seed.

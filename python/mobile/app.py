@@ -26,7 +26,7 @@ from .plots import (
 from .results import list_runs
 from .scripts import BROWSER_HANDLER, CLOSED_HANDLER, PARAMETER_STYLE, PLAYER, PLOT_HANDLER, SLIDER_FORMAT
 from .setup import (
-    OPTIONAL_FILES, REQUIRED_FILES, from_fields, from_manifest, list_folder, save_setup, start_folder,
+    OPTIONAL_FILES, REQUIRED_FILES, from_fields, from_manifest, create_folder, list_folder, save_setup, start_folder,
     typed_path,
 )
 from .setup_ui import (
@@ -479,7 +479,14 @@ def create_app(config):
             footer = [ui.modal_button("Cancel")]
             if kind == "folder":
                 footer.insert(0, ui.input_action_button("browser_use_folder", "Use this folder", class_="btn-primary"))
-            ui.modal_show(ui.modal(ui.output_ui("browser"), title="Choose a folder" if kind == "folder" else "Choose a file",
+            body = [ui.output_ui("browser")]
+            if kind == "folder":
+                body.append(ui.div(
+                    ui.input_text("browser_new_name", "New folder in the folder shown", placeholder="e.g. kenya_2025", width="100%"),
+                    ui.input_action_button("browser_new_folder", "Create and open", class_="mb-3"),
+                    class_="d-flex gap-2 align-items-end border-top pt-3",
+                ))
+            ui.modal_show(ui.modal(*body, title="Choose a folder" if kind == "folder" else "Choose a file",
                                    footer=ui.TagList(*footer), size="l", easy_close=True))
 
         def browse_button(field, kind):
@@ -526,6 +533,19 @@ def create_app(config):
                 return
             ui.update_text(state_["field"], value=str(state_["folder"] / pick["name"]))
             ui.modal_remove()
+
+        @reactive.effect
+        @reactive.event(input.browser_new_folder)
+        def browser_new_folder():
+            state_ = browse()
+            if state_ is None or state_["kind"] != "folder":
+                return
+            path, problem = create_folder(state_["folder"], input.browser_new_name())
+            if problem:
+                ui.notification_show(problem, type="error")
+                return
+            browse.set({**state_, "folder": path})
+            ui.update_text("browser_new_name", value="")
 
         @reactive.effect
         @reactive.event(input.browser_use_folder)
