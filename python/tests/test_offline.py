@@ -24,6 +24,7 @@ from mobile.config import (
 from mobile.rundir import create_run_dir, fill_template
 from mobile.app import (
     OUTPUT_FLAGS,
+    setup_problems,
     _run_label,
     run_name_problem,
     free_port,
@@ -41,6 +42,7 @@ from mobile.app import (
 )
 from mobile.basemap import load_basemap
 from mobile.results import list_runs, load_run, load_seed_band, write_seed_band
+from mobile.setup import from_fields, from_manifest, list_folder, load_setup, save_setup, start_folder
 from mobile.runner import ProgressParser
 
 CONFIG = example_config()
@@ -201,6 +203,65 @@ class TestRunName(unittest.TestCase):
         self.assertTrue(_run_label("runs/kenya_e0", manifest).startswith("kenya_e0 (2026-11-02 21:05:12): "))
         self.assertTrue(_run_label("runs/20261102-210512-ab12", manifest).startswith("2026-11-02 21:05:12: "))
         self.assertTrue(_run_label("runs/seed_band_20261102-210512-ab12", {**manifest, "seeds": [1, 2]}).startswith("2026-11-02 21:05:12: "))
+
+
+class TestSetup(unittest.TestCase):
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.folder = Path(folder.name)
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(self.folder)
+        patch = mock.patch.dict(os.environ, {"MOBILE_CONFIG_DIR": str(self.folder / "settings")})
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.example = Config.load(CONFIG)
+        self.run = dict(self.example.run)
+        self.files = {key: value for key, value in self.example.inputs.items()}
+
+    def test_fields_give_a_config(self):
+        files = {**self.files, "mortality_file": "", "imm_forcing": "  "}
+        config = from_fields(MOBILE, " Study ", "results", self.run, files)
+        self.assertEqual(config.project, "Study")
+        self.assertEqual(config.runs_dir, (self.folder / "results").resolve())
+        self.assertEqual((config.inputs["mortality_file"], config.inputs["imm_forcing"]), ("NONE", "NONE"))
+        # Number boxes give floats
+        self.assertEqual(from_fields(MOBILE, "", "runs", {**self.run, "nstep": 365.0}, self.files).run["nstep"], 365)
+
+    def test_problems_are_listed_with_the_labels_of_the_panel(self):
+        with self.assertRaises(ConfigError) as caught:
+            from_fields(MOBILE, "", "runs", self.run, {**self.files, "rain_file": "missing.nc", "pop_file": ""})
+        problems = setup_problems(caught.exception)
+        self.assertTrue(any(line.startswith("Rainfall: not found") for line in problems), problems)
+        self.assertTrue(any(line.startswith("Population density: not found") for line in problems), problems)
+
+    def test_remembered_between_sessions(self):
+        self.assertIsNone(load_setup(MOBILE))
+        config = from_fields(MOBILE, "Study", "runs", self.run, self.files)
+        save_setup(config)
+        self.assertEqual(load_setup(MOBILE), config)
+        # Not valid any more, e.g. a file moved: as if there were none
+        saved = self.folder / "settings" / "last_setup.json"
+        saved.write_text(saved.read_text().replace("rain.nc", "moved.nc"))
+        self.assertIsNone(load_setup(MOBILE))
+
+    def test_restored_from_a_run(self):
+        current = from_fields(MOBILE, "Study", "elsewhere", self.run, self.files)
+        manifest = {"run": {**self.run, "nagent": 5000}, "inputs": self.files}
+        restored = from_manifest(manifest, current)
+        self.assertEqual(restored.run["nagent"], 5000)
+        self.assertEqual((restored.project, restored.runs_dir), (current.project, current.runs_dir))
+
+    def test_file_browser(self):
+        (self.folder / "sub").mkdir()
+        (self.folder / ".hidden").mkdir()
+        for name in ("b.nc", "a.NC", "notes.txt", "data.csv"):
+            (self.folder / name).touch()
+        self.assertEqual(list_folder(self.folder, "netcdf"), (["settings", "sub"] if (self.folder / "settings").exists() else ["sub"], ["a.NC", "b.nc"]))
+        self.assertEqual(list_folder(self.folder, "text")[1], ["data.csv", "notes.txt"])
+        self.assertEqual(list_folder(self.folder, "folder")[1], [])
+        self.assertEqual(start_folder(str(self.folder / "b.nc")), self.folder.resolve())
+        self.assertEqual(start_folder(""), Path.home())
 
 
 class TestPort(unittest.TestCase):
