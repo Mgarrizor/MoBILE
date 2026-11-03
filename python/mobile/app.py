@@ -20,6 +20,7 @@ from shiny import App, reactive, render, run_app, ui
 from .basemap import PADDING_DEGREES, load_basemap, load_terrain
 from .config import SLIDER_GROUPS, ConfigError, default_params, default_sliders, read_params
 from .results import list_runs, load_run, load_seed_band, write_seed_band
+from .setup import OPTIONAL_FILES, REQUIRED_FILES, from_fields, from_manifest, list_folder, save_setup, start_folder
 from .rundir import new_run_id
 from .runner import Runner, RunnerBusy
 
@@ -42,6 +43,7 @@ GUI_OUTPUT = ("out_EIR", "out_vect")  # What a run writes unless changed in the 
 AGE_FIELD = re.compile(r"^.+_(bulk|\d+-\d+|\d+\+)$")
 ALL_AGES = "bulk"
 AGE_KEY = "age:"  # In the Variable menu: one entry for all the fields of a group
+SUFFIX_NAMES = {"netcdf": ("netCDF (.nc)",), "text": ("text (.txt, .csv)",), "folder": ()}
 STATIC_MESSAGE = "This variable does not change over time: see the map."
 
 # The flags of &OUTPUT: (flag, label, compiled-in default), by the group of the output file they write to
@@ -225,7 +227,7 @@ function placeColourBar(plot) {
     Plotly.restyle(plot, {'colorbar.x': x, 'colorbar.y': bottom, 'colorbar.len': top - bottom}, [index]);
   }
 }
-// A plot drawn while its tab was hidden has no size: fit the plots when the Main tab is shown again
+// A plot drawn while its tab was hidden has no size: fit the plots when the Runs tab is shown again
 $(document).on('shown.bs.tab', function() {
   for (const id of ['map', 'cell_plot', 'envelope_plot']) {
     const plot = document.getElementById(id);
@@ -278,7 +280,15 @@ Shiny.addCustomMessageHandler('closed', function(message) {
 
 # Labels only: the value of a slider stays as it is until the slider is moved
 SLIDER_FORMAT = """
-const sliderDecimals = %s;
+// Decimals of each parameter slider, sent by the server whenever the sliders are made
+const sliderDecimals = {};
+Shiny.addCustomMessageHandler('slider_decimals', function(decimals) {
+  Object.assign(sliderDecimals, decimals);
+  Object.keys(decimals).forEach(function(id) { if ($('#' + id).data('ionRangeSlider')) formatSlider(id); });
+});
+$(document).on('shiny:bound', function(event) {
+  if (event.target.id in sliderDecimals) setTimeout(function() { formatSlider(event.target.id); }, 0);
+});
 function formatSlider(id) {
   $('#' + id).data('ionRangeSlider').update({
     prettify_enabled: true,
@@ -876,6 +886,77 @@ def _docs():
     )
 
 
+BROWSER_HANDLER = """
+$(document).on('click', '.browse-entry', function(event) {
+  event.preventDefault();
+  Shiny.setInputValue('browser_pick', {name: this.dataset.name, folder: this.dataset.folder === '1'}, {priority: 'event'});
+});
+"""
+FILE_LABELS = {key: label for key, label, _ in (*REQUIRED_FILES, *OPTIONAL_FILES)}
+MODEL_CHOICES = {"1": "VECTRI-ABM (malaria)", "0": "Cholera"}
+
+
+def _path_input(id, label, value, kind):
+    """A box for a path, typed or chosen with the file browser of the GUI."""
+    return ui.div(
+        ui.input_text(id, label, value=value, width="100%"),
+        ui.input_action_button(f"browse_{id}", "Browse", class_="btn-sm mb-3"),
+        **{"data-kind": kind},
+    )
+
+
+def _setup_value(config, key):
+    value = config.inputs.get(key, "")
+    return "" if value == "NONE" else str(value)
+
+
+def _setup_tab(config):
+    """Everything a run needs that is not a parameter or an output: how to run, and where the data and
+    results are. Applied, and checked, with its button."""
+    run = config.run
+    run_box = ui.card(
+        ui.card_header("Run parameters"),
+        ui.input_text("setup_project", "Project", value=config.project, width="100%"),
+        ui.input_select("setup_disID", "Model", MODEL_CHOICES, selected=str(run["disID"])),
+        ui.input_numeric("setup_nstep", "Days to simulate (0: all the driving data)", value=run["nstep"], min=0, step=1),
+        ui.input_switch("setup_spin_up", "Spin-up to equilibrium", value=run["spin_up"] == 1),
+        ui.input_numeric("setup_threads", "Threads (results depend on them)", value=run["threads"], min=1, step=1),
+        _path_input("setup_runs_dir", "Results folder", str(config.runs_dir), "folder"),
+        ui.p("The number of agents and the seed are set in the sidebar, as they often change between runs.", class_="small text-muted"),
+    )
+    files_box = ui.card(
+        ui.card_header("Driving files"),
+        *[_path_input(f"setup_{key}", label, _setup_value(config, key), kind) for key, label, kind in REQUIRED_FILES],
+        ui.accordion(
+            ui.accordion_panel(
+                "Optional files",
+                *[_path_input(f"setup_{key}", label, _setup_value(config, key), kind) for key, label, kind in OPTIONAL_FILES],
+                ui.input_switch("setup_counterfactual", "Counterfactual demography", value=config.inputs.get("counterfactual") == 1),
+            ),
+            open=False,
+        ),
+    )
+    return ui.div(
+        ui.layout_columns(run_box, files_box, col_widths=(5, 7)),
+        ui.div(
+            ui.input_action_button("apply_setup", "Apply setup", class_="btn-primary"),
+            ui.output_ui("setup_status"),
+            class_="mt-2",
+        ),
+        class_="mt-3",
+    )
+
+
+def setup_problems(error):
+    """The problems of a setup, from a ConfigError, with the labels of the Setup panel."""
+    lines = []
+    for line in str(error).splitlines():
+        for key, label in FILE_LABELS.items():
+            line = line.replace(f"inputs: {key} ", f"{label}: ")
+        lines.append(line.replace("inputs: ", "").replace("run: ", ""))
+    return lines
+
+
 def _output_switch_id(flag):
     return f"output_{flag}"
 
@@ -925,22 +1006,11 @@ def _slider_groups(sliders, values, sources):
 
 
 def create_app(config):
-    grid = load_grid(config)
     default_output = {flag for flags in OUTPUT_FLAGS.values() for flag, _, on in flags if on}
     initial_output = set(config.output) if config.output is not None else set(GUI_OUTPUT)
-    # A slider starts at the value in the `const` file, or else at the value compiled into the model
-    in_const = read_params(config.inputs["const"])
-    compiled = default_params()
-    missing = set(default_sliders()) - set(in_const) - set(compiled)
+    missing = set(default_sliders()) - set(default_params())
     if missing:
         raise ConfigError(f"default_params.txt in the package has no value for the sliders {sorted(missing)}")
-    slider_defaults = {name: float(in_const.get(name, compiled.get(name))) for name in default_sliders()}
-    slider_sources = {name: "const" if name in in_const else "default" for name in default_sliders()}
-    # The range includes the starting value: a slider cannot start outside it
-    sliders = {
-        name: {**spec, "min": min(spec["min"], slider_defaults[name]), "max": max(spec["max"], slider_defaults[name])}
-        for name, spec in default_sliders().items()
-    }
 
     app_ui = ui.page_sidebar(
         ui.sidebar(
@@ -959,8 +1029,7 @@ def create_app(config):
                 ui.accordion_panel(
                     "Parameters",
                     ui.input_action_button("reset", "Reset parameters", class_="mb-2 w-100"),
-                    _parameter_legend(Path(config.inputs["const"]).name),
-                    ui.accordion(*_slider_groups(sliders, slider_defaults, slider_sources), open=False, multiple=True),
+                    ui.output_ui("parameter_sliders"),
                 ),
                 ui.accordion_panel(
                     "Outputs",
@@ -979,12 +1048,14 @@ def create_app(config):
             ui.tags.script(ui.HTML(CLOSED_HANDLER)),
             ui.tags.style("#shiny-disconnected-overlay { display: none; }"),
             ui.tags.style(PARAMETER_STYLE),
-            ui.tags.script(ui.HTML(SLIDER_FORMAT % json.dumps({f"param_{n}": _slider_grid(s)[3] for n, s in sliders.items()}))),
+            ui.tags.script(ui.HTML(SLIDER_FORMAT)),
+            ui.tags.script(ui.HTML(BROWSER_HANDLER)),
         ),
         ui.output_ui("status"),
         ui.navset_tab(
+            ui.nav_panel("Setup", _setup_tab(config)),
             ui.nav_panel(
-                "Main",
+                "Runs",
                 ui.card(
                     ui.layout_columns(
                         ui.div(ui.input_select("variable", "Variable", {}), ui.output_ui("age_choice")),
@@ -1011,9 +1082,10 @@ def create_app(config):
             *[ui.nav_panel(name, ui.p(text, class_="text-muted mt-3")) for name, text in ANALYSIS_TABS],
             ui.nav_panel("Docs", _docs()),
             id="tab",
+            selected="Runs",
         ),
         _funders(),
-        title=_header(config),
+        title=ui.output_ui("header"),
     )
 
     def server(input, output, session):
@@ -1022,6 +1094,44 @@ def create_app(config):
         runs_changed = reactive.value(0)
         range_overrides = reactive.value({})  # {(menu entry, scale): (minimum, maximum)} set by hand
         state = RunState()
+        setup = reactive.value(config)  # The applied settings of the Setup panel
+        setup_problem = reactive.value(None)
+        browse = reactive.value(None)  # {"field", "kind", "folder"} of the open file browser
+
+        @reactive.calc
+        def grid():
+            return load_grid(setup())
+
+        @reactive.calc
+        def slider_setup():
+            """A slider starts at the value in the `const` file, or else at the value compiled into the model.
+            Its range includes that value: a slider cannot start outside it."""
+            in_const = read_params(setup().inputs["const"])
+            compiled = default_params()
+            defaults = {name: float(in_const.get(name, compiled.get(name))) for name in default_sliders()}
+            sources = {name: "const" if name in in_const else "default" for name in default_sliders()}
+            sliders = {
+                name: {**spec, "min": min(spec["min"], defaults[name]), "max": max(spec["max"], defaults[name])}
+                for name, spec in default_sliders().items()
+            }
+            return {"sliders": sliders, "defaults": defaults, "sources": sources, "const": Path(setup().inputs["const"]).name}
+
+        @render.ui
+        def parameter_sliders():
+            sliders = slider_setup()
+            return ui.TagList(
+                _parameter_legend(sliders["const"]),
+                ui.accordion(*_slider_groups(sliders["sliders"], sliders["defaults"], sliders["sources"]), open=False, multiple=True),
+            )
+
+        @reactive.effect
+        async def send_slider_decimals():
+            sliders = slider_setup()["sliders"]
+            await session.send_custom_message("slider_decimals", {f"param_{n}": _slider_grid(s)[3] for n, s in sliders.items()})
+
+        @render.ui
+        def header():
+            return _header(setup())
 
         def selected_output():
             flags = [flag for group in OUTPUT_FLAGS.values() for flag, _, _ in group]
@@ -1030,32 +1140,52 @@ def create_app(config):
         def overrides():
             """Sliders moved from their value in the `const` file; the others keep it as written there."""
             moved = {}
-            for name, spec in sliders.items():
+            sliders = slider_setup()
+            for name, spec in sliders["sliders"].items():
+                if f"param_{name}" not in input:
+                    continue
                 value = input[f"param_{name}"]()
                 _, _, step, decimals = _slider_grid(spec)
                 # A slider starts at the value of the `const` file snapped to its step
-                if abs(value - round(slider_defaults[name], decimals)) >= step / 2:
+                if abs(value - round(sliders["defaults"][name], decimals)) >= step / 2:
                     moved[name] = round(float(value), decimals)
             return moved
 
-        @reactive.extended_task
-        async def basemap_task():
-            return await asyncio.to_thread(load_basemap, grid["lon"], grid["lat"])
+        def grid_key():
+            g = grid()
+            return (len(g["lon"]), len(g["lat"]), float(g["lon"][0]), float(g["lon"][-1]), float(g["lat"][0]), float(g["lat"][-1]))
 
-        basemap_task.invoke()
+        basemap_for = reactive.value(None)  # The grid the basemap and the terrain were asked for
+        terrain_for = reactive.value(None)
 
         @reactive.extended_task
-        async def terrain_task():
-            return await asyncio.to_thread(load_terrain, grid["lon"], grid["lat"], LAND)
+        async def basemap_task(lon, lat):
+            return await asyncio.to_thread(load_basemap, lon, lat)
+
+        @reactive.effect
+        def fetch_basemap():
+            key = grid_key()
+            with reactive.isolate():
+                if basemap_for() == key:
+                    return
+                basemap_for.set(key)
+                basemap_task.invoke(grid()["lon"], grid()["lat"])
+
+        @reactive.extended_task
+        async def terrain_task(lon, lat):
+            return await asyncio.to_thread(load_terrain, lon, lat, LAND)
 
         @reactive.effect
         def fetch_terrain():
             if not input.terrain() or basemap() is None:
                 return
+            key = grid_key()
             with reactive.isolate():
-                # A failed download is tried again the next time the switch is turned on
-                if terrain_task.status() == "initial" or (terrain_task.status() == "success" and terrain_task.result() is None):
-                    terrain_task.invoke()
+                # Again for another grid, or when the last download failed
+                failed = terrain_task.status() == "success" and terrain_task.result() is None
+                if terrain_for() != key or failed:
+                    terrain_for.set(key)
+                    terrain_task.invoke(grid()["lon"], grid()["lat"])
 
         @reactive.effect
         def report_terrain():
@@ -1087,13 +1217,13 @@ def create_app(config):
 
         def terrain():
             """Shaded relief when the switch is on and it is ready, otherwise None."""
-            if input.terrain() and terrain_task.status() == "success":
+            if input.terrain() and terrain_task.status() == "success" and terrain_for() == grid_key():
                 return terrain_task.result()
             return None
 
         def basemap():
             """None until it is ready, and if it cannot be obtained: the map is then plain."""
-            return basemap_task.result() if basemap_task.status() == "success" else None
+            return basemap_task.result() if basemap_task.status() == "success" and basemap_for() == grid_key() else None
 
         @ui.bind_task_button(button_id="run")
         @reactive.extended_task
@@ -1109,15 +1239,16 @@ def create_app(config):
                 ui.notification_show("Agents, seed and number of seeds must be positive integers.", type="error")
                 return
             try:
-                run_config = replace(config, params={**config.params, **overrides()}, output=selected_output()).with_run(nagent=nagent)
+                run_config = replace(setup(), params={**setup().params, **overrides()}, output=selected_output()).with_run(nagent=nagent, seed=seed)
             except ConfigError as error:
                 ui.notification_show(str(error), type="error")
                 return
             name = input.run_name().strip()
-            problem = run_name_problem(name, config.runs_dir)
+            problem = run_name_problem(name, setup().runs_dir)
             if problem:
                 ui.notification_show(problem, type="error")
                 return
+            save_setup(run_config)
             state.update(cancelled=False, message="Starting", fraction=None, runner=None)
             run_task.invoke(run_config, [seed + i for i in range(n_seeds)], name or None)
             # So that the next run does not take the same name
@@ -1176,12 +1307,17 @@ def create_app(config):
                 )
 
         def available_runs():
-            return list_runs(config.runs_dir, config.inputs["pop_file"])
+            # Runs on any grid: loading one also restores the setup it was made with
+            return list_runs(setup().runs_dir)
 
         @reactive.effect
         def refresh_previous_runs():
             runs_changed()
-            ui.update_select("previous_run", choices={folder: _run_label(folder, manifest) for folder, manifest in available_runs().items()})
+            ui.update_select(
+                "previous_run",
+                label=f"Previous runs in {setup().runs_dir}",
+                choices={folder: _run_label(folder, manifest) for folder, manifest in available_runs().items()},
+            )
 
         @reactive.effect
         @reactive.event(input.load)
@@ -1195,18 +1331,24 @@ def create_app(config):
                 ui.notification_show("No run selected, or its output is no longer there.", type="warning")
                 return
             try:
+                restored = from_manifest(manifest, setup())
+            except ConfigError as error:
+                ui.notification_show("Could not restore the setup of this run: " + "; ".join(setup_problems(error)), type="error")
+                return
+            try:
                 outcome = load_outcome(folder, manifest)
             except (KeyError, OSError, RuntimeError) as error:
                 ui.notification_show(f"Could not load this run: {error}", type="error")
                 return
+            adopt(restored, keep_outcome=True)
             show(outcome)
             ui.update_numeric("nagent", value=outcome.nagent)
             ui.update_numeric("seed", value=outcome.seeds[0])
             ui.update_switch("seed_band", value=len(outcome.seeds) > 1)
             if len(outcome.seeds) > 1:
                 ui.update_numeric("n_seeds", value=len(outcome.seeds))
-            for name, value in slider_defaults.items():
-                ui.update_slider(f"param_{name}", value=outcome.overrides.get(name, value))
+            # After the sliders of the restored setup are made
+            pending_sliders.set(dict(outcome.overrides))
             written = manifest.get("output")
             written = default_output if written is None else set(written)
             for group in OUTPUT_FLAGS.values():
@@ -1216,15 +1358,155 @@ def create_app(config):
         @reactive.effect
         @reactive.event(input.reset)
         def reset_sliders():
-            for name, value in slider_defaults.items():
+            for name, value in slider_setup()["defaults"].items():
                 ui.update_slider(f"param_{name}", value=value)
+
+        pending_sliders = reactive.value(None)  # Values of a loaded run, set once its sliders exist
+
+        @reactive.effect
+        def restore_sliders():
+            moved = pending_sliders()
+            if moved is None:
+                return
+            sliders = slider_setup()
+            if not all(f"param_{name}" in input for name in sliders["sliders"]):
+                reactive.invalidate_later(0.2)
+                return
+            with reactive.isolate():
+                pending_sliders.set(None)
+            for name, value in sliders["defaults"].items():
+                ui.update_slider(f"param_{name}", value=moved.get(name, value))
+
+        def adopt(new, keep_outcome=False):
+            """Apply a setup: the grid, map, sliders and runs follow it, and it is remembered."""
+            old = setup()
+            setup_problem.set(None)
+            if new == old:
+                return
+            grid_changed = (old.inputs["pop_file"], old.inputs["area_file"]) != (new.inputs["pop_file"], new.inputs["area_file"])
+            setup.set(new)
+            save_setup(replace(new, run={**new.run, "nagent": input.nagent() or new.run["nagent"], "seed": input.seed() or new.run["seed"]}))
+            show_setup_fields(new)
+            if grid_changed and not keep_outcome:
+                current.set(None)
+                selected_cells.set([])
+                range_overrides.set({})
+
+        def show_setup_fields(config):
+            ui.update_text("setup_project", value=config.project)
+            ui.update_text("setup_runs_dir", value=str(config.runs_dir))
+            for key, _, _ in (*REQUIRED_FILES, *OPTIONAL_FILES):
+                ui.update_text(f"setup_{key}", value=_setup_value(config, key))
+            ui.update_select("setup_disID", selected=str(config.run["disID"]))
+            ui.update_numeric("setup_nstep", value=config.run["nstep"])
+            ui.update_switch("setup_spin_up", value=config.run["spin_up"] == 1)
+            ui.update_numeric("setup_threads", value=config.run["threads"])
+            ui.update_switch("setup_counterfactual", value=config.inputs.get("counterfactual") == 1)
+
+        @reactive.effect
+        @reactive.event(input.apply_setup)
+        def apply_setup():
+            if run_task.status() == "running":
+                ui.notification_show("Wait for the run to finish, or cancel it, before changing the setup.", type="warning")
+                return
+            run = {
+                "disID": int(input.setup_disID()),
+                "mob": setup().run["mob"],
+                "nstep": input.setup_nstep(),
+                "spin_up": 1 if input.setup_spin_up() else 0,
+                "nagent": input.nagent(),
+                "seed": input.seed(),
+                "threads": input.setup_threads(),
+            }
+            files = {key: input[f"setup_{key}"]() for key, _, _ in (*REQUIRED_FILES, *OPTIONAL_FILES)}
+            files["counterfactual"] = 1 if input.setup_counterfactual() else 0
+            try:
+                new = from_fields(setup().mobile, input.setup_project(), input.setup_runs_dir(), run, files)
+            except ConfigError as error:
+                setup_problem.set(setup_problems(error))
+                return
+            adopt(new)
+            ui.notification_show("Setup applied.", type="message", duration=3)
+            ui.update_navs("tab", selected="Runs")
+
+        @render.ui
+        def setup_status():
+            problems = setup_problem()
+            if not problems:
+                return None
+            return ui.div(
+                ui.p("Not applied:", class_="mb-1 fw-semibold"),
+                ui.tags.ul(*[ui.tags.li(problem) for problem in problems], class_="ps-3 mb-0"),
+                class_="small text-danger mt-2",
+            )
+
+        def open_browser(field, kind):
+            browse.set({"field": field, "kind": kind, "folder": start_folder(input[field]())})
+            footer = [ui.modal_button("Cancel")]
+            if kind == "folder":
+                footer.insert(0, ui.input_action_button("browser_use_folder", "Use this folder", class_="btn-primary"))
+            ui.modal_show(ui.modal(ui.output_ui("browser"), title="Choose a folder" if kind == "folder" else "Choose a file",
+                                   footer=ui.TagList(*footer), size="l", easy_close=True))
+
+        def browse_button(field, kind):
+            @reactive.effect
+            @reactive.event(input[f"browse_{field}"], ignore_init=True)
+            def _():
+                open_browser(field, kind)
+
+        browse_button("setup_runs_dir", "folder")
+        for key, _, kind in (*REQUIRED_FILES, *OPTIONAL_FILES):
+            browse_button(f"setup_{key}", kind)
+
+        @render.ui
+        def browser():
+            state_ = browse()
+            if state_ is None:
+                return None
+            folder = state_["folder"]
+            folders, files = list_folder(folder, state_["kind"])
+
+            def entry(name, is_folder):
+                return ui.tags.li(ui.tags.a(("📁 " if is_folder else "") + name, href="#", class_="browse-entry",
+                                            **{"data-name": name, "data-folder": "1" if is_folder else "0"}))
+
+            items = [entry("..", True)] if folder.parent != folder else []
+            items += [entry(name, True) for name in folders] + [entry(name, False) for name in files]
+            note = "" if state_["kind"] == "folder" else f"Showing {', '.join(SUFFIX_NAMES[state_['kind']])} files."
+            return ui.div(
+                ui.p(ui.tags.code(str(folder)), class_="mb-1"),
+                ui.p(note, class_="small text-muted mb-2") if note else None,
+                ui.tags.ul(*items, class_="list-unstyled", style="max-height: 50vh; overflow-y: auto;"),
+            )
+
+        @reactive.effect
+        @reactive.event(input.browser_pick)
+        def browser_pick():
+            state_ = browse()
+            pick = input.browser_pick()
+            if state_ is None:
+                return
+            if pick["folder"]:
+                folder = state_["folder"].parent if pick["name"] == ".." else state_["folder"] / pick["name"]
+                browse.set({**state_, "folder": folder.resolve()})
+                return
+            ui.update_text(state_["field"], value=str(state_["folder"] / pick["name"]))
+            ui.modal_remove()
+
+        @reactive.effect
+        @reactive.event(input.browser_use_folder)
+        def browser_use_folder():
+            state_ = browse()
+            if state_ is not None:
+                ui.update_text(state_["field"], value=str(state_["folder"]))
+                ui.modal_remove()
 
         @render.text
         def humans_per_agent():
             nagent = input.nagent()
             if not nagent or nagent < 1:
                 return ""
-            return f"Mean humans per agent: {grid['people'] / nagent:.2f} ({grid['people']:,.0f} people)"
+            return f"Mean humans per agent: {grid()['people'] / nagent:.2f} ({grid()['people']:,.0f} people)"
 
         @render.ui
         def status():
@@ -1302,7 +1584,7 @@ def create_app(config):
                 for name in names:
                     for result in outcome.results:
                         data = result.open(name)
-                        data = data.where(_mask_like(data, grid))
+                        data = data.where(_mask_like(data, grid()))
                         if log:
                             simulated += int(data.notnull().sum())
                             nonpositive += int((data <= 0).sum())
@@ -1395,7 +1677,7 @@ def create_app(config):
         async def draw_map():
             outcome = current()
             if outcome is None or not outcome.seeds:
-                await _send_figure(session, "map", grid_figure(grid, basemap(), terrain()))
+                await _send_figure(session, "map", grid_figure(grid(), basemap(), terrain()))
                 return
             name = shown_variable(outcome)
             data = outcome.fields(name)[shown_member(outcome)]
@@ -1403,7 +1685,7 @@ def create_app(config):
             await _send_figure(
                 session, "map",
                 map_figure(
-                    data, grid, outcome.describe(name), day, shown_limits(), selected_cells(), basemap(), terrain(),
+                    data, grid(), outcome.describe(name), day, shown_limits(), selected_cells(), basemap(), terrain(),
                     input.colour_map(), input.scale() == "log",
                 ),
             )
