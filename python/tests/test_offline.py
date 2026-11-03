@@ -22,26 +22,12 @@ from mobile.config import (
     read_params,
 )
 from mobile.rundir import create_run_dir, fill_template
-from mobile.app import (
-    OUTPUT_FLAGS,
-    age_figure,
-    map_figure,
-    setup_problems,
-    _run_label,
-    run_name_problem,
-    free_port,
-    colour_values,
-    grid_step,
-    units_label,
-    logo_files,
-    age_choices,
-    age_groups,
-    cell_envelope,
-    next_cells,
-    preferred_variable,
-    resolve_variable,
-    variable_choices,
-)
+from mobile.app import free_port
+from mobile.layout import OUTPUT_FLAGS, logo_files
+from mobile.outcome import run_label, run_name_problem
+from mobile.plots import age_figure, cell_envelope, colour_values, grid_step, map_figure, next_cells, units_label
+from mobile.setup_ui import setup_problems
+from mobile.variables import age_choices, age_groups, preferred_variable, resolve_variable, variable_choices
 from mobile.basemap import load_basemap
 from mobile.driving import field_limits, mean_age, open_field, read_age
 from mobile.results import list_runs, load_run, load_seed_band, write_seed_band
@@ -203,9 +189,9 @@ class TestRunName(unittest.TestCase):
 
     def test_label_shows_a_chosen_name(self):
         manifest = {"date": "2026-11-02T21:05:12", "run": {"nagent": 1000, "seed": 1}, "param_overrides": {}}
-        self.assertTrue(_run_label("runs/kenya_e0", manifest).startswith("kenya_e0 (2026-11-02 21:05:12): "))
-        self.assertTrue(_run_label("runs/20261102-210512-ab12", manifest).startswith("2026-11-02 21:05:12: "))
-        self.assertTrue(_run_label("runs/seed_band_20261102-210512-ab12", {**manifest, "seeds": [1, 2]}).startswith("2026-11-02 21:05:12: "))
+        self.assertTrue(run_label("runs/kenya_e0", manifest).startswith("kenya_e0 (2026-11-02 21:05:12): "))
+        self.assertTrue(run_label("runs/20261102-210512-ab12", manifest).startswith("2026-11-02 21:05:12: "))
+        self.assertTrue(run_label("runs/seed_band_20261102-210512-ab12", {**manifest, "seeds": [1, 2]}).startswith("2026-11-02 21:05:12: "))
 
 
 class TestSetup(unittest.TestCase):

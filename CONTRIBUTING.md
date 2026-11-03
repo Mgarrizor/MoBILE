@@ -45,7 +45,7 @@ and the example data, so some fail on purpose when the model changes:
 - a model default of a slider parameter changed: update `python/mobile/default_params.txt`;
 - a slider added or removed in `python/mobile/sliders.yaml`: add its default to `default_params.txt`
   and update the count in the test;
-- an `&OUTPUT` flag added or removed: update the Outputs table in `python/mobile/app.py` and the
+- an `&OUTPUT` flag added or removed: update the Outputs table in `python/mobile/layout.py` and the
   count in the test.
 
 They do not test the GUI in a browser, nor run the model: check those by hand.
