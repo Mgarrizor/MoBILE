@@ -8,8 +8,10 @@ from pathlib import Path
 
 import yaml
 
+from .region import region_problems
+
 # The keys of a configuration file. Parameters, outputs and sliders are set in the GUI.
-CONFIG_KEYS = {"mobile", "runs_dir", "project", "run", "inputs"}
+CONFIG_KEYS = {"mobile", "runs_dir", "project", "run", "inputs", "region"}
 RUN_KEYS = {"disID", "mob", "nstep", "spin_up", "nagent", "seed", "threads"}
 REQUIRED_INPUTS = {"rain_file", "temp_file", "pop_file", "area_file", "age_file", "const"}
 OPTIONAL_INPUTS = {"mortality_file", "birthrate_file", "mortality_time_file", "imm_forcing"}
@@ -74,6 +76,7 @@ class Config:
     params: dict = field(default_factory=dict)
     output: tuple | None = None
     project: str = ""  # Name shown in the app
+    region: dict | None = None  # {north, west, south, east} to simulate; None for the whole grid
 
     @classmethod
     def load(cls, path=None, mobile=None):
@@ -106,6 +109,7 @@ class Config:
             run=dict(raw.get("run", {})),
             inputs=inputs,
             project=str(raw.get("project") or ""),
+            region=raw.get("region"),
         )
         config.validate()
         return config
@@ -144,6 +148,8 @@ class Config:
         for key, value in self.run.items():
             if not isinstance(value, int) or isinstance(value, bool):
                 errors.append(f"run: {key} must be an integer, got {value!r}")
+
+        errors += region_problems(self.region)
 
         allowed = REQUIRED_INPUTS | OPTIONAL_INPUTS | set(OPTIONAL_DEFAULTS)
         unknown = set(self.inputs) - allowed

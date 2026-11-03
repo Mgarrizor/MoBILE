@@ -167,6 +167,7 @@ def write_manifest(config, result):
         "binary_md5": _md5(result.run_dir / "output" / "mobile.out"),
         "run": config.run,
         "inputs": config.inputs,
+        "region": config.region,
         "param_overrides": config.params,
         "params": config.final_params(),
         "output": list(config.output) if config.output is not None else None,

@@ -32,10 +32,16 @@ $(document).on('click', '[data-theme-choice]', function() {
 darkQuery.addEventListener('change', applyTheme);
 $(document).on('shiny:sessioninitialized', applyTheme);
 """
-THEME_STYLE = """
+PAGE_STYLE = """
 .logo { background: white; border-radius: 4px; padding: 2px; }
 .sidebar-heading { font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
                    color: var(--bs-secondary-color); margin: 0.5rem 0 0.25rem; }
+.apply-bar { position: sticky; bottom: 0; z-index: 10; background: var(--bs-body-bg); margin-top: 1rem;
+             padding: 0.75rem 0; border-top: 1px solid var(--bs-border-color); }
+/* North over West and East, South under them, as in the Copernicus data store */
+.region-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 9rem)); column-gap: 0.75rem; }
+.region-north { grid-area: 1 / 2; } .region-west { grid-area: 2 / 1; }
+.region-east { grid-area: 2 / 3; } .region-south { grid-area: 3 / 2; }
 """
 
 
@@ -258,7 +264,24 @@ Shiny.addCustomMessageHandler('plot', function(message) {
     });
     plot.on('plotly_doubleclick', function() { clearTimeout(pendingClick); });
   }
+  if (message.id === 'preview_map' && !plot.regionReported) {
+    plot.regionReported = true;
+    plot.on('plotly_relayout', function(event) { reportRegion(plot, event); });
+  }
 });
+// The region to simulate, drawn on the preview map after its Draw button: the rectangle drawn last.
+// The outline the server draws is named 'region'.
+$(document).on('click', '#region_draw', function() {
+  const plot = document.getElementById('preview_map');
+  if (plot && plot.data) Plotly.relayout(plot, {dragmode: 'drawrect', newshape: {line: {color: '#0b0b0b', width: 2, dash: 'dot'}}});
+});
+function reportRegion(plot, event) {
+  if (plot._fullLayout.dragmode !== 'drawrect' || !event.shapes) return;
+  const shape = event.shapes[event.shapes.length - 1];
+  if (!shape || shape.type !== 'rect' || shape.name === 'region') return;
+  Plotly.relayout(plot, {dragmode: 'zoom'});
+  Shiny.setInputValue('region_drawn', {x0: shape.x0, x1: shape.x1, y0: shape.y0, y1: shape.y1}, {priority: 'event'});
+}
 """
 
 

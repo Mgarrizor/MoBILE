@@ -13,27 +13,28 @@ from shiny import App, reactive, render, run_app, ui
 from .basemap import load_basemap, load_terrain
 from .config import ConfigError, default_params, default_sliders, read_params
 from .driving import field_limits, open_field, read_age
-from .grid import extent_key, load_grid, mask_like
+from .grid import extent_key, load_grid, mask_like, read_grid
 from .layout import (
     ANALYSIS_TABS, ASSETS, GUI_OUTPUT, OUTPUT_FLAGS, funders, help_tab, no_run_yet, output_groups, output_switch_id,
     page_header, page_title, parameter_legend, player_controls, slider_grid, slider_groups, with_tip,
 )
 from .outcome import RunState, load_outcome, run_label, run_model, run_name_problem
 from .plots import (
-    COLOUR_MAPS, LAND, age_figure, cell_figure, envelope_figure, grid_figure, map_figure, message_figure,
+    BOX, COLOUR_MAPS, LAND, age_figure, cell_figure, envelope_figure, grid_figure, map_figure, message_figure,
     next_cells, send_figure, sig,
 )
+from .region import region_problems
 from .results import list_runs
 from .scripts import (
-    BROWSER_HANDLER, CLOSED_HANDLER, PARAMETER_STYLE, PLAYER, PLOT_HANDLER, SLIDER_FORMAT, THEME, THEME_STYLE,
+    BROWSER_HANDLER, CLOSED_HANDLER, PARAMETER_STYLE, PLAYER, PLOT_HANDLER, SLIDER_FORMAT, THEME, PAGE_STYLE,
 )
 from .setup import (
-    OPTIONAL_FILES, REQUIRED_FILES, from_fields, from_manifest, create_folder, list_folder, save_setup, start_folder,
-    typed_path,
+    OPTIONAL_FILES, REQUIRED_FILES, from_fields, from_manifest, create_folder, list_folder, region_from_fields, region_mode,
+    save_setup, start_folder, typed_path,
 )
 from .setup_ui import (
-    DAILY_FILES, EXAMPLE_FOLDER, PREVIEW_FILES, PREVIEW_STYLE, SUFFIX_NAMES, example_note_box, setup_problems, setup_tab,
-    setup_value,
+    DAILY_FILES, EXAMPLE_FOLDER, PREVIEW_FILES, PREVIEW_STYLE, REGION_BOXES, SUFFIX_NAMES, example_note_box, region_values,
+    setup_problems, setup_tab, setup_value,
 )
 from .variables import (
     AGE_KEY, age_choices, age_groups, preferred_variable, resolve_variable, variable_choices,
@@ -84,7 +85,7 @@ def create_app(config):
         ),
         ui.head_content(
             ui.tags.script(ui.HTML(THEME)),
-            ui.tags.style(THEME_STYLE),
+            ui.tags.style(PAGE_STYLE),
             ui.tags.script(ui.HTML(plotly.offline.get_plotlyjs())),
             ui.tags.script(ui.HTML(PLAYER)),
             ui.tags.script(ui.HTML(PLOT_HANDLER)),
@@ -472,7 +473,7 @@ def create_app(config):
             setup_problem.set(None)
             if new == old:
                 return
-            grid_changed = (old.inputs["pop_file"], old.inputs["area_file"]) != (new.inputs["pop_file"], new.inputs["area_file"])
+            grid_changed = (old.inputs["pop_file"], old.inputs["area_file"], old.region) != (new.inputs["pop_file"], new.inputs["area_file"], new.region)
             setup.set(new)
             save_setup(replace(new, run={**new.run, "nagent": input.nagent() or new.run["nagent"], "seed": input.seed() or new.run["seed"]}))
             show_setup_fields(new)
@@ -490,6 +491,10 @@ def create_app(config):
             ui.update_numeric("setup_nstep", value=config.run["nstep"])
             ui.update_switch("setup_spin_up", value=config.run["spin_up"] == 1)
             ui.update_numeric("setup_threads", value=config.run["threads"])
+            mode, values = region_values(config)
+            ui.update_radio_buttons("setup_region", selected=mode)
+            for key, value in values.items():
+                ui.update_numeric(f"setup_{key}", value=value)
             ui.update_switch("setup_counterfactual", value=config.inputs.get("counterfactual") == 1)
 
         @reactive.effect
@@ -510,9 +515,13 @@ def create_app(config):
             files = {key: input[f"setup_{key}"]() for key, _, _ in (*REQUIRED_FILES, *OPTIONAL_FILES)}
             files["counterfactual"] = 1 if input.setup_counterfactual() else 0
             try:
-                new = from_fields(setup().mobile, input.setup_project(), input.setup_runs_dir(), run, files)
+                new = from_fields(setup().mobile, input.setup_project(), input.setup_runs_dir(), run, files, typed_region())
             except ConfigError as error:
                 setup_problem.set(setup_problems(error))
+                return
+            problem = typed_region_grid()[2]
+            if new.region is not None and problem:
+                setup_problem.set([f"Region: {problem}"])
                 return
             adopt(new)
             ui.notification_show("Setup applied.", type="message", duration=3)
@@ -525,6 +534,79 @@ def create_app(config):
             if any(value and typed_path(value).is_relative_to(example) for value in typed):
                 return example_note_box()
             return None
+
+        def typed_region():
+            """The region in the boxes of the Setup tab, before Apply."""
+            return region_from_fields(input.setup_region(), *[input[f"setup_{key}"]() for key in ("north", "west", "south", "east")],
+                                      input.setup_point_lat(), input.setup_point_lon())
+
+        @reactive.calc
+        def typed_region_grid():
+            """(region, its grid, what is wrong with it) as in the boxes of the Setup tab."""
+            region = typed_region()
+            problems = region_problems(region)
+            if problems:
+                return region, None, problems[0].removeprefix("region: ").capitalize() + "."
+            try:
+                region_grid = read_grid(typed_path(input.setup_pop_file()), typed_path(input.setup_area_file()), region)
+            except (OSError, ValueError, KeyError, StopIteration, RuntimeError):
+                return region, None, "The population or cell area file cannot be read."
+            if region_grid is None:
+                return region, None, "It is outside the grid of the population file."
+            if not region_grid["populated"]:
+                return region, region_grid, "It has no populated cell."
+            return region, region_grid, None
+
+        def degrees(value, positive, negative):
+            return f"{abs(value):.3f}°{positive if value >= 0 else negative}"
+
+        @render.ui
+        def region_summary():
+            region, region_grid, problem = typed_region_grid()
+            if problem:
+                return ui.p(problem, class_="small text-danger mb-0")
+            rows, columns = region_grid["mask"].shape
+            people = f"{region_grid['people']:,.0f} people"
+            if region_mode(region) == "point":
+                place = f"The cell at {degrees(region_grid['lat'][0], 'N', 'S')}, {degrees(region_grid['lon'][0], 'E', 'W')}"
+                text = f": {people}."
+            else:
+                place = "Whole grid" if region is None else "Subregion"
+                text = f": {columns} × {rows} cells, {region_grid['populated']:,} of them populated, {people}."
+            applied = region == setup().region
+            return ui.div(
+                ui.p(ui.tags.strong(place), text, class_="small mb-1"),
+                None if applied else ui.p("Not applied yet: press Apply setup.", class_="small text-warning-emphasis mb-0"),
+            )
+
+        def region_outline():
+            """The edges of the cells of the region in the boxes, for the preview map; None for the whole grid."""
+            region, region_grid, _ = typed_region_grid()
+            if region is None or region_grid is None:
+                return None
+            lon, lat = region_grid["full"]
+            half_lon = abs(lon[1] - lon[0]) / 2 if len(lon) > 1 else 0.025
+            half_lat = abs(lat[1] - lat[0]) / 2 if len(lat) > 1 else 0.025
+            return (float(min(region_grid["lon"])) - half_lon, float(max(region_grid["lon"])) + half_lon,
+                    float(min(region_grid["lat"])) - half_lat, float(max(region_grid["lat"])) + half_lat)
+
+        @reactive.effect
+        @reactive.event(input.region_drawn)
+        def region_drawn():
+            box = input.region_drawn()
+            values = {"north": max(box["y0"], box["y1"]), "west": min(box["x0"], box["x1"]),
+                      "south": min(box["y0"], box["y1"]), "east": max(box["x0"], box["x1"])}
+            for key, _ in REGION_BOXES:
+                ui.update_numeric(f"setup_{key}", value=round(values[key], 3))
+            ui.update_radio_buttons("setup_region", selected="box")
+
+        @reactive.effect
+        @reactive.event(input.preview_cell)
+        def pick_point():
+            if input.setup_region() == "point":
+                cell = input.preview_cell()
+                ui.update_numeric("setup_point_lat", value=round(cell["lat"], 3))
+                ui.update_numeric("setup_point_lon", value=round(cell["lon"], 3))
 
         @render.ui
         def setup_status():
@@ -989,6 +1071,11 @@ def create_app(config):
             )
             # The zoom is kept while the grid is the same
             figure.update_layout(meta={"date": figure.layout.meta["date"], "view": str(preview_extent())})
+            outline = region_outline()
+            if outline is not None:
+                west, east, south, north = outline
+                figure.add_shape(type="rect", name="region", x0=west, x1=east, y0=south, y1=north, layer="above",
+                                 line={"color": BOX, "width": 2}, fillcolor="rgba(0, 0, 0, 0)")
             await send_figure(session, "preview_map", figure)
 
         @reactive.effect

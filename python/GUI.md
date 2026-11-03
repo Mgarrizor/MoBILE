@@ -52,10 +52,18 @@ Everything a run needs that is not a parameter or an output.
   forcing, counterfactual demography) are under *Optional files*. The files filled in at first are the
   example that comes with MoBILE (`utils/test_run` in the GitHub repository): Senegal, 2012 to 2014, on a 0.05°
   grid (rainfall CHIRPS, temperature CHIRTS, population WorldPop 2020). A note says so while they are in use.
-- **Apply setup** checks the settings and switches to the Parameters tab. Problems are listed under the button.
-  It cannot be used while a run is in progress.
+- **Apply setup**, at the bottom of the window, checks the settings and switches to the Parameters tab.
+  Problems are listed under the button. It cannot be used while a run is in progress.
 - **Preview driving files** draws a file as a map (rainfall and temperature by day, population density, age
   structure) before you apply it, so mismatched grids show up early. Click a cell for its daily values.
+- **Region to simulate** (optional, in the preview): the model runs on the **Whole grid** by default. For a
+  **Subregion**, type its North, West, South and East edges in degrees (as in the Copernicus data store), or
+  press **Draw on the map** and drag a rectangle on the preview map. For a **Single point**, type its latitude
+  and longitude, or click a cell on the map. The cells of the region are those with their centre inside it; a
+  point, or a box narrower than a cell, gives the cell it falls in. The map outlines these cells, and the line
+  beside the choice gives their number and their people. The region is part of the setup, applied with **Apply
+  setup**, and the humans per agent in the sidebar are then those of the region. A smaller region has fewer
+  people, so it needs fewer agents.
 
 The settings are remembered for the next session in `~/.config/mobile/last_setup.json`.
 
@@ -97,7 +105,8 @@ and the relief (ETOPO 2022) when Terrain is first turned on. Without a connectio
 ## What a run leaves behind
 
 `<results folder>/<name or date-id>/` (by default `runs/`) holds `output/output.nc` (the results), `run.log`, `run.json` (the record of the
-run), `params.txt` and the filled-in `run_MOBILE.sh`. A seed band is `<results folder>/seed_band_<date-id>/seed_<seed>/`.
+run), `params.txt` and the filled-in `run_MOBILE.sh`. A run on a region also holds `inputs/`, the gridded driving
+files cut to it, which `run_MOBILE.sh` reads. A seed band is `<results folder>/seed_band_<date-id>/seed_<seed>/`.
 To repeat a run by hand, run `bash run_MOBILE.sh` in a copy of that folder.
 
 ## Good to know

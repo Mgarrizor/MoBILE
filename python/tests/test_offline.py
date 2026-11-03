@@ -31,7 +31,11 @@ from mobile.variables import age_choices, age_groups, preferred_variable, resolv
 from mobile.basemap import load_basemap
 from mobile.driving import field_limits, mean_age, open_field, read_age
 from mobile.results import list_runs, load_run, load_seed_band, write_seed_band
-from mobile.setup import create_folder, from_fields, from_manifest, list_folder, load_setup, save_setup, start_folder
+from mobile.setup import (
+    create_folder, from_fields, from_manifest, list_folder, load_setup, region_from_fields, region_mode, save_setup, start_folder,
+)
+from mobile.grid import pop_coordinates, read_grid
+from mobile.region import axis_range, cut_inputs, region_problems
 from mobile.runner import ProgressParser
 
 CONFIG = example_config()
@@ -495,6 +499,99 @@ class TestProgress(unittest.TestCase):
         self.assertEqual(event.stage, "integrating")
         self.assertAlmostEqual(event.fraction, 0.501)
         self.assertIsNone(parser.parse("Pi = 3.1416"))
+
+
+class TestRegion(unittest.TestCase):
+    """A part of the grid to simulate, on the example: Senegal on a 0.05 degree grid."""
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory(dir=os.path.expanduser("~"))
+        self.addCleanup(folder.cleanup)
+        self.folder = Path(folder.name)
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(self.folder)
+        self.config = Config.load(CONFIG)
+        self.box = {"north": 14.6, "west": -17.2, "south": 14.0, "east": -16.4}
+
+    def test_cells_of_an_axis(self):
+        coords = [0.0, 1.0, 2.0, 3.0]
+        self.assertEqual(axis_range(coords, 0.5, 2.5), (1, 3))
+        # A point, or a range narrower than a cell, gives the nearest cell
+        self.assertEqual(axis_range(coords, 1.2, 1.2), (1, 2))
+        self.assertEqual(axis_range(coords, 3.4, 3.4), (3, 4))
+        self.assertIsNone(axis_range(coords, 5.0, 6.0))
+
+    def test_problems(self):
+        self.assertEqual(region_problems(None), [])
+        self.assertEqual(region_problems(self.box), [])
+        self.assertTrue(region_problems({**self.box, "south": 15.0}))
+        self.assertTrue(region_problems({**self.box, "east": None}))
+        self.assertTrue(region_problems({"north": 1}))
+        with self.assertRaises(ConfigError):
+            replace(self.config, region={**self.box, "west": -10.0}).validate()
+
+    def test_fields(self):
+        self.assertIsNone(region_from_fields("all", 1, 2, 3, 4, 5, 6))
+        point = region_from_fields("point", None, None, None, None, 14.7, -17.4)
+        self.assertEqual(point, {"north": 14.7, "west": -17.4, "south": 14.7, "east": -17.4})
+        self.assertEqual([region_mode(region) for region in (None, self.box, point)], ["all", "box", "point"])
+
+    def test_grid_of_a_region(self):
+        whole = read_grid(self.config.inputs["pop_file"], self.config.inputs["area_file"])
+        part = read_grid(self.config.inputs["pop_file"], self.config.inputs["area_file"], self.box)
+        self.assertEqual(part["mask"].shape, (12, 16))
+        self.assertTrue(0 < part["people"] < whole["people"])
+        point = read_grid(self.config.inputs["pop_file"], self.config.inputs["area_file"],
+                          {"north": 14.69, "west": -17.44, "south": 14.69, "east": -17.44})
+        self.assertEqual(point["mask"].shape, (1, 1))
+        self.assertIsNone(read_grid(self.config.inputs["pop_file"], self.config.inputs["area_file"],
+                                    {"north": 5.0, "west": 0.0, "south": 4.0, "east": 1.0}))
+
+    def test_files_cut_to_a_region(self):
+        import netCDF4
+        import numpy as np
+        import xarray as xr
+
+        paths = cut_inputs(self.config.inputs, self.box, self.folder / "inputs", pop_coordinates(self.config.inputs["pop_file"]))
+        self.assertEqual(set(paths), {"rain_file", "temp_file", "pop_file", "area_file"})
+        for key, path in paths.items():
+            with xr.open_dataset(self.config.inputs[key]) as whole, xr.open_dataset(path) as part:
+                name = next(iter(whole.data_vars))
+                self.assertEqual((part.sizes["longitude"], part.sizes["latitude"]), (16, 12))
+                same = whole[name].sel(latitude=part["latitude"], longitude=part["longitude"], method="nearest")
+                self.assertTrue(np.array_equal(same.values, part[name].values, equal_nan=True), key)
+                self.assertEqual(whole[name].attrs, part[name].attrs)
+            with netCDF4.Dataset(self.config.inputs[key]) as whole, netCDF4.Dataset(path) as part:
+                self.assertEqual(whole.data_model, part.data_model)
+                self.assertEqual(getattr(whole.variables[name], "_FillValue", None), getattr(part.variables[name], "_FillValue", None))
+        with netCDF4.Dataset(paths["rain_file"]) as rain:
+            self.assertTrue(rain.dimensions["time"].isunlimited())
+            self.assertEqual(len(rain.dimensions["time"]), 1096)
+
+    def test_run_dir_of_a_region(self):
+        config = replace(self.config, runs_dir=self.folder, region=self.box)
+        run_dir = create_run_dir(config, "x")
+        script = (run_dir / "run_MOBILE.sh").read_text()
+        self.assertRegex(script, rf"(?m)^\s*pop_file='{re.escape(str(run_dir / 'inputs' / 'pop_file.nc'))}'$")
+        self.assertRegex(script, rf"(?m)^\s*rain_file='{re.escape(str(run_dir / 'inputs' / 'rain_file.nc'))}'$")
+        # Text files are used as they are
+        self.assertRegex(script, r"(?m)^\s*mortality_file='NONE'$")
+
+    def test_kept_with_the_setup_and_the_run(self):
+        settings = mock.patch.dict(os.environ, {"MOBILE_CONFIG_DIR": str(self.folder / "settings")})
+        settings.start()
+        self.addCleanup(settings.stop)
+        files = dict(self.config.inputs)
+        config = from_fields(MOBILE, "Study", "runs", dict(self.config.run), files, self.box)
+        save_setup(config)
+        self.assertEqual(load_setup(MOBILE).region, self.box)
+        manifest = {"run": dict(config.run), "inputs": files, "region": self.box}
+        self.assertEqual(from_manifest(manifest, replace(config, region=None)).region, self.box)
+        # Runs from before regions have none
+        self.assertIsNone(from_manifest({"run": dict(config.run), "inputs": files}, config).region)
+        written = self.folder / "with_region.yaml"
+        written.write_text(CONFIG.read_text().replace("$MOBILE", MOBILE).replace("runs_dir: runs", "runs_dir: runs\nregion: {north: 14.6, west: -17.2, south: 14.0, east: -16.4}"))
+        self.assertEqual(Config.load(written).region, self.box)
 
 
 if __name__ == "__main__":
