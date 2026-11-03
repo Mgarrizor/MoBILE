@@ -193,6 +193,9 @@ def create_app(config):
             }
             return {"sliders": sliders, "defaults": defaults, "sources": sources, "const": Path(setup().inputs["const"]).name}
 
+        # Made also while their tab is hidden: a run takes the values of the sliders, and those of a loaded
+        # run are set on them, before the tab is ever opened
+        @output(suspend_when_hidden=False)
         @render.ui
         def parameter_sliders():
             sliders = slider_setup()
