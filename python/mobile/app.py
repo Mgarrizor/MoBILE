@@ -16,7 +16,7 @@ from .driving import field_limits, open_field, read_age
 from .grid import extent_key, load_grid, mask_like
 from .layout import (
     ANALYSIS_TABS, ASSETS, GUI_OUTPUT, OUTPUT_FLAGS, docs, funders, output_groups, output_switch_id,
-    page_header, parameter_legend, player_controls, slider_grid, slider_groups,
+    no_run_yet, page_header, parameter_legend, player_controls, slider_grid, slider_groups, with_tip,
 )
 from .outcome import RunState, load_outcome, run_label, run_model, run_name_problem
 from .plots import (
@@ -49,17 +49,30 @@ def create_app(config):
 
     app_ui = ui.page_sidebar(
         ui.sidebar(
-            ui.input_task_button("run", "Run", label_busy="Running…", class_="btn-primary"),
+            ui.div(
+                ui.input_task_button("run", "Run", label_busy="Running…", class_="btn-primary flex-fill"),
+                ui.input_action_button("cancel", "Cancel", class_="flex-fill", disabled=True),
+                class_="d-flex gap-2",
+            ),
             ui.input_text("run_name", "Run name (optional)", placeholder="e.g. kenya_e0_high"),
-            ui.input_action_button("cancel", "Cancel"),
-            ui.input_action_button("close", "Close GUI"),
-            ui.input_numeric("nagent", "Number of agents", value=config.run["nagent"], min=1, step=100000),
-            ui.output_text("humans_per_agent"),
-            ui.input_numeric("seed", "Seed", value=config.run["seed"], min=1, step=1),
-            ui.input_switch("seed_band", "Seed band", value=False),
+            ui.input_numeric(
+                "nagent",
+                with_tip("Number of agents", "Simulated people. More agents is slower but closer to the real population: "
+                         "keep the mean humans per agent close to 1 for reliable results."),
+                value=config.run["nagent"], min=1, step=100000,
+            ),
+            ui.div(ui.output_text("humans_per_agent"), class_="small text-muted mb-3"),
+            ui.input_numeric(
+                "seed", with_tip("Seed", "Starting point of the random numbers. The same seed and threads give the same results."),
+                value=config.run["seed"], min=1, step=1,
+            ),
+            ui.input_switch(
+                "seed_band", with_tip("Seed band", "Run several consecutive seeds with the same parameters, to see how much the results vary by chance."),
+                value=False,
+            ),
             ui.panel_conditional("input.seed_band", ui.input_numeric("n_seeds", "Number of seeds", value=5, min=2, step=1)),
             ui.input_select("previous_run", f"Previous runs in {config.runs_dir}", {}),
-            ui.input_action_button("load", "Load run"),
+            ui.input_action_button("load", "Load run", class_="w-100"),
             ui.accordion(
                 ui.accordion_panel(
                     "Parameters",
@@ -74,6 +87,7 @@ def create_app(config):
                 open=False,
                 multiple=True,
             ),
+            ui.input_action_button("close", "Close GUI", class_="btn-sm btn-outline-secondary w-100 mt-3"),
             width=320,
         ),
         ui.head_content(
@@ -94,7 +108,7 @@ def create_app(config):
                 ui.card(
                     ui.layout_columns(
                         ui.div(ui.input_select("variable", "Variable", {}), ui.output_ui("age_choice")),
-                        ui.div(ui.output_ui("seed_choice"), ui.input_switch("terrain", "Terrain", value=False), ui.output_ui("terrain_status")),
+                        ui.div(ui.output_ui("seed_choice"), ui.input_switch("terrain", with_tip("Terrain", "Shaded relief under the map. Downloaded the first time it is used."), value=False), ui.output_ui("terrain_status")),
                         ui.div(
                             ui.input_slider("day", ui.TagList("Day ", ui.tags.span(id="day_date", class_="ms-1")), min=1, max=max(config.run["nstep"], 2), value=1, step=1, width="100%"),
                             player_controls(),
@@ -117,7 +131,7 @@ def create_app(config):
             *[ui.nav_panel(name, ui.p(text, class_="text-muted mt-3")) for name, text in ANALYSIS_TABS],
             ui.nav_panel("Docs", docs()),
             id="tab",
-            selected="Runs",
+            selected="Setup",
         ),
         funders(),
         title=ui.output_ui("header"),
@@ -287,6 +301,10 @@ def create_app(config):
             run_task.invoke(run_config, [seed + i for i in range(n_seeds)], name or None)
             # So that the next run does not take the same name
             ui.update_text("run_name", value="")
+
+        @reactive.effect
+        def enable_cancel():
+            ui.update_action_button("cancel", disabled=run_task.status() != "running")
 
         @reactive.effect
         @reactive.event(input.cancel)
@@ -575,10 +593,10 @@ def create_app(config):
                     bar = ui.div(class_="progress-bar", style=f"width: {fraction * 100:.0f}%;")
                 return ui.card(ui.p(prefix + message, class_="mb-1"), ui.div(bar, class_="progress"))
             if task == "error":
-                return ui.card(ui.p("The app failed while reading the results; see the terminal."), class_="border-danger")
+                return ui.card(ui.p("The app failed while running or reading the results. The terminal you started the GUI from shows why."), class_="border-danger")
             outcome = current()
             if outcome is None:
-                return None
+                return no_run_yet()
             if outcome.status == "finished":
                 changed = ", ".join(f"{k}={v:.4g}" for k, v in outcome.overrides.items()) or "none"
                 seeds = f"seed {outcome.seeds[0]}" if len(outcome.seeds) == 1 else f"seeds {outcome.seeds[0]} to {outcome.seeds[-1]}"

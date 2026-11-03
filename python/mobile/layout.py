@@ -62,6 +62,27 @@ OUTPUT_FLAGS = {
 }
 
 
+def with_tip(label, text):
+    """A label followed by an (i) that explains the control on hover or focus."""
+    icon = ui.tags.span("ⓘ", class_="text-muted ms-1", tabindex="0", role="img", **{"aria-label": "More information"})
+    return ui.TagList(label, ui.tooltip(icon, text, placement="right"))
+
+
+def no_run_yet():
+    """Shown in the Runs tab until there are results: what to do first."""
+    return ui.card(
+        ui.card_header("No results yet"),
+        ui.tags.ol(
+            ui.tags.li("Check the settings and driving files in the ", ui.tags.strong("Setup"), " tab, and press ", ui.tags.strong("Apply setup"), "."),
+            ui.tags.li("Optionally change parameters and outputs in the sidebar. Only sliders you move are changed."),
+            ui.tags.li("Press ", ui.tags.strong("Run"), ". The model is compiled first, then simulated: the example takes minutes."),
+            ui.tags.li("Or reload an earlier run with ", ui.tags.strong("Load run"), " in the sidebar."),
+            class_="mb-0",
+        ),
+        class_="border-info",
+    )
+
+
 def slider_grid(spec):
     """(min, max, step, decimals) of a slider: 3 decimals, more if the range would have under 100 steps."""
     decimals = max(3, math.ceil(-math.log10((spec["max"] - spec["min"]) / 100)))
