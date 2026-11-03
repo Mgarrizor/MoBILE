@@ -131,7 +131,7 @@ def create_app(config):
             *[ui.nav_panel(name, ui.p(text, class_="text-muted mt-3")) for name, text in ANALYSIS_TABS],
             ui.nav_panel("Docs", docs()),
             id="tab",
-            selected="Runs",
+            selected="Setup",
         ),
         funders(),
         title=ui.output_ui("header"),

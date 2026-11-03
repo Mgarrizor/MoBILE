@@ -27,7 +27,7 @@ folder in the Setup tab.
 
 ## The page
 
-The sidebar is always visible. The tabs are Setup, Runs, four analysis tabs that are not implemented yet
+The sidebar is always visible, and the GUI opens on the Setup tab. The tabs are Setup, Runs, four analysis tabs that are not implemented yet
 (Time series, Demography, Mobility, Sensitivity analysis) and Docs.
 
 ### Setup tab
