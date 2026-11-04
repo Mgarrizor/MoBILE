@@ -71,7 +71,7 @@ def quick_start():
     """The steps from a setup to its results, as the tabs are numbered."""
     strong = ui.tags.strong
     return ui.tags.ol(
-        ui.tags.li(strong("Setup"), ": choose the model, the days to simulate and the driving files, then press ", strong("Apply setup"), "."),
+        ui.tags.li(strong("Setup"), ": choose the model, the period to simulate and the driving files, then press ", strong("Apply setup"), "."),
         ui.tags.li(strong("Parameters"), ": move the sliders to change, and choose the outputs. Sliders you do not move keep their value."),
         ui.tags.li("In the sidebar, set the number of agents and the seed, and press ", strong("Run"),
                    ". The model is compiled, then simulated: the example takes minutes."),

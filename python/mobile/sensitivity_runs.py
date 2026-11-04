@@ -2,7 +2,7 @@
 
   sa.json      what was sampled, how, with which setup, and how far the runs got
   samples.txt  the parameter values, one row per sample, in the order SALib expects their outputs back
-  inputs/      the driving files cut to the region of the setup, once for all the runs, if it has one
+  inputs/      the driving files cut to the region and period of the setup, once for all the runs, if it has either
   runs/seed_<seed>/sample_<index>/   one run folder per sample and seed, as made by run_MOBILE.sh
 
 The same samples are run for every seed. Finished runs are kept, so that a cancelled analysis resumes where it
@@ -23,7 +23,7 @@ import numpy as np
 from .config import MAX_PATH_LENGTH, Config, ConfigError
 from .grid import pop_coordinates
 from .region import cut_inputs
-from .rundir import OUTPUT_NAME, new_run_id
+from .rundir import OUTPUT_NAME, new_run_id, period_steps
 from .runner import RunCancelled, Runner
 from .sensitivity import DISTRIBUTIONS, SampledParameter, run_count, sample
 
@@ -66,9 +66,10 @@ def create_study(config, parameters, n, second_order, seeds, name=None, sample_s
     folder.mkdir(parents=True)
     np.savetxt(folder / SAMPLES, values, fmt="%.17g", header=" ".join(parameter.name for parameter in parameters))
     run_inputs = dict(config.inputs)
-    if config.region is not None:
+    steps = period_steps(config)
+    if config.region is not None or steps is not None:
         # Cut once here, not in each of the thousands of run folders
-        run_inputs.update(cut_inputs(config.inputs, config.region, folder / INPUTS, pop_coordinates(config.inputs["pop_file"])))
+        run_inputs.update(cut_inputs(config.inputs, config.region, folder / INPUTS, pop_coordinates(config.inputs["pop_file"]), steps))
         too_long = [path for path in run_inputs.values() if len(str(path)) > MAX_PATH_LENGTH]
         if too_long:
             shutil.rmtree(folder)
@@ -91,6 +92,7 @@ def create_study(config, parameters, n, second_order, seeds, name=None, sample_s
         "inputs": config.inputs,
         "run_inputs": run_inputs,
         "region": config.region,
+        "period": config.period,
         "params": {key: float(value) for key, value in config.params.items()},
         "output": list(config.output) if config.output is not None else None,
     }
@@ -103,7 +105,7 @@ def study_config(folder, record):
     return Config(
         mobile=Path(record["mobile"]), runs_dir=Path(folder) / RUNS, run=dict(record["run"]), inputs=dict(record["run_inputs"]),
         params=dict(record["params"]), output=tuple(record["output"]) if record["output"] is not None else None,
-        project=record["project"], region=None,
+        project=record["project"], region=None, period=record.get("period"),
     )
 
 

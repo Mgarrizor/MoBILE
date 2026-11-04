@@ -38,9 +38,11 @@ from mobile.basemap import load_basemap
 from mobile.driving import field_limits, mean_age, open_field, read_age
 from mobile.results import list_runs, load_run, load_seed_band, write_seed_band
 from mobile.setup import (
-    create_folder, days_to_ymd, from_fields, from_manifest, list_folder, load_setup, region_from_fields, region_mode, save_setup,
-    start_folder, ymd_to_days,
+    create_folder, from_fields, from_manifest, list_folder, load_setup, region_from_fields, region_mode, save_setup,
+    start_folder,
 )
+from mobile.checks import driving_days, driving_problems
+from mobile.period import day_range, length_text, period_days, period_problems
 from mobile.grid import pop_coordinates, read_grid
 from mobile.region import axis_range, cut_inputs, region_problems
 from mobile.runner import ProgressParser, RunCancelled, Runner, RunnerBusy, macos_sdk, run_environment
@@ -240,15 +242,97 @@ class TestOutputs(unittest.TestCase):
         self.assertEqual(preferred_variable({"rain": variables["rain"]}, "V"), "rain")
 
 
-class TestSimulatedTime(unittest.TestCase):
-    def test_days_and_years_months_days_agree(self):
-        self.assertEqual(days_to_ymd(0), (0, 0, 0))
-        self.assertEqual(days_to_ymd(730), (2, 0, 0))
-        self.assertEqual(ymd_to_days(1, 2, 3), 428)
-        self.assertEqual(ymd_to_days(None, None, 10), 10)
-        for days in (0, 1, 29, 30, 359, 360, 364, 365, 1000, 3650):
-            self.assertEqual(ymd_to_days(*days_to_ymd(days)), days)
-            self.assertLess(days_to_ymd(days)[1], 12)
+def work_in_a_scratch_folder(test):
+    """Run a test in an empty folder outside the repository, as the example config puts its runs in the current one."""
+    folder = tempfile.TemporaryDirectory()
+    test.addCleanup(folder.cleanup)
+    test.addCleanup(os.chdir, os.getcwd())
+    os.chdir(folder.name)
+    return Path(folder.name)
+
+
+class TestPeriod(unittest.TestCase):
+    def setUp(self):
+        work_in_a_scratch_folder(self)
+        self.rain = Config.load(CONFIG).inputs["rain_file"]
+
+    def test_problems_and_length(self):
+        self.assertEqual(period_problems(None), [])
+        self.assertEqual(period_problems({"start": "2013-01-01", "end": "2013-12-31"}), [])
+        self.assertTrue(period_problems({"start": "2013-02-01", "end": "2013-01-31"}))
+        self.assertTrue(period_problems({"start": "soon", "end": "2013-01-31"}))
+        self.assertTrue(period_problems({"start": "2013-01-01"}))
+        self.assertEqual(period_days({"start": "2013-01-01", "end": "2013-12-31"}), 365)
+        self.assertEqual(period_days({"start": "2013-01-01", "end": "2013-01-01"}), 1)
+        self.assertEqual(length_text(1), "1 day")
+        self.assertEqual(length_text(1096), "1,096 days (3.00 years)")
+
+    def test_days_of_the_example_data(self):
+        import numpy as np
+
+        days = driving_days(self.rain)
+        self.assertEqual((str(days[0]), str(days[-1]), len(days)), ("2012-01-01", "2014-12-31", 1096))
+        self.assertEqual(day_range(days, {"start": "2012-01-01", "end": "2014-12-31"}), (0, 1095))
+        self.assertEqual(day_range(days, {"start": "2013-01-01", "end": "2013-12-31"}), (366, 730))
+        self.assertTrue(np.all(np.diff(days).astype(int) == 1))
+        with self.assertRaises(ValueError):
+            day_range(days, {"start": "2011-12-31", "end": "2013-12-31"})
+        with self.assertRaises(ValueError):
+            day_range(days, {"start": "2013-01-01", "end": "2015-01-01"})
+        self.assertIsNone(driving_days("missing.nc"))
+
+    def test_kept_in_the_config_and_checked(self):
+        period = {"start": "2013-01-01", "end": "2013-12-31"}
+        self.assertEqual(replace(Config.load(CONFIG), period=period).period, period)
+        with self.assertRaises(ConfigError):
+            replace(Config.load(CONFIG), period={"start": "2013-03-01", "end": "2013-01-01"}).validate()
+
+
+class TestDrivingChecks(unittest.TestCase):
+    def setUp(self):
+        self.folder = work_in_a_scratch_folder(self)
+        self.inputs = dict(Config.load(CONFIG).inputs)
+
+    def changed(self, key, change):
+        """The example inputs with one file rewritten by `change(dataset) -> dataset`."""
+        import xarray as xr
+
+        path = self.folder / f"{key}.nc"
+        with xr.open_dataset(self.inputs[key]) as data:
+            change(data.load()).to_netcdf(path)
+        return {**self.inputs, key: str(path)}
+
+    def test_the_example_data_agree(self):
+        self.assertEqual(driving_problems(self.inputs), [])
+
+    def test_units(self):
+        flux = self.changed("rain_file", lambda d: d.assign(precip=(d.precip.dims, d.precip.values / 86400, {"units": "kg m-2 s-1"})))
+        self.assertTrue(any("kg m-2 s-1" in text and "86400" in text for text in driving_problems(flux)))
+        kelvin = self.changed("temp_file", lambda d: d.assign(temperature=(d.temperature.dims, d.temperature.values + 273.15, {"units": "K"})))
+        self.assertTrue(any("273.15" in text for text in driving_problems(kelvin)))
+        # Without units, the values tell
+        bare = self.changed("temp_file", lambda d: d.assign(temperature=(d.temperature.dims, d.temperature.values + 273.15)))
+        self.assertTrue(any("kelvin" in text for text in driving_problems(bare)))
+
+    def test_grid_and_days(self):
+        coarse = self.changed("temp_file", lambda d: d.isel(latitude=slice(0, 10)))
+        self.assertTrue(any(text.startswith("Temperature") and "grid" in text for text in driving_problems(coarse)))
+        short = self.changed("temp_file", lambda d: d.isel(time=slice(0, 1000)))
+        self.assertTrue(any(text.startswith("Temperature") and "1000 days" in text for text in driving_problems(short)))
+        later = self.changed("temp_file", lambda d: d.assign_coords(time=d.time.values + 86400 * 10**9))
+        self.assertTrue(any("differ" in text for text in driving_problems(later)))
+
+    def test_a_file_in_the_wrong_box(self):
+        swapped = {**self.inputs, "rain_file": self.inputs["temp_file"]}
+        problems = driving_problems(swapped)
+        self.assertTrue(any(text.startswith("Rainfall: no variable named rain") and "temperature" in text for text in problems), problems)
+        swapped = {**self.inputs, "temp_file": self.inputs["rain_file"]}
+        self.assertTrue(any(text.startswith("Temperature: no variable named") and "'precip'" in text for text in driving_problems(swapped)))
+
+    def test_unreadable_file(self):
+        (self.folder / "bad.nc").write_text("not netCDF")
+        problems = driving_problems({**self.inputs, "rain_file": str(self.folder / "bad.nc")})
+        self.assertTrue(any(text.startswith("Rainfall: cannot be read") for text in problems))
 
 
 class TestRunName(unittest.TestCase):
@@ -839,6 +923,20 @@ echo 'Program finished successfully'
         # Not among the single runs
         self.assertEqual(list_runs(self.config.runs_dir), {})
 
+    def test_period_is_cut_once_for_all_runs(self):
+        import xarray as xr
+
+        config = replace(self.config, period={"start": "2013-01-01", "end": "2013-12-31"})
+        folder = create_study(config, self.parameters, 2, False, [3], name="year", sample_seed=1)
+        self.assertEqual(read_study(folder)["period"], config.period)
+        with xr.open_dataset(folder / "inputs" / "rain_file.nc") as rain:
+            self.assertEqual(rain.sizes["time"], 365)
+        run_study(folder, StudyState(), parallel=2)
+        script = (folder / "runs" / run_name(3, 0) / "run_MOBILE.sh").read_text()
+        self.assertRegex(script, r"(?m)^\s*nstep=365$")
+        self.assertIn(str(folder / "inputs" / "rain_file.nc"), script)
+        self.assertFalse((folder / "runs" / run_name(3, 0) / "inputs").exists())
+
     def test_cancel_and_resume(self):
         import threading
         import time
@@ -1067,6 +1165,35 @@ class TestRegion(unittest.TestCase):
             self.assertTrue(rain.dimensions["time"].isunlimited())
             self.assertEqual(len(rain.dimensions["time"]), 1096)
 
+    def test_files_cut_to_a_period(self):
+        import numpy as np
+        import xarray as xr
+
+        paths = cut_inputs(self.config.inputs, None, self.folder / "inputs", pop_coordinates(self.config.inputs["pop_file"]), (366, 730))
+        self.assertEqual(set(paths), {"rain_file", "temp_file"})
+        with xr.open_dataset(self.config.inputs["rain_file"]) as whole, xr.open_dataset(paths["rain_file"]) as part:
+            self.assertEqual((part.sizes["time"], part.sizes["latitude"]), (365, whole.sizes["latitude"]))
+            self.assertEqual((str(part.time.values[0])[:10], str(part.time.values[-1])[:10]), ("2013-01-01", "2013-12-31"))
+            self.assertTrue(np.array_equal(part.precip.values[0], whole.precip.values[366], equal_nan=True))
+        with self.assertRaises(ValueError):
+            cut_inputs(self.config.inputs, None, self.folder / "more", pop_coordinates(self.config.inputs["pop_file"]), (366, 2000))
+
+    def test_run_dir_of_a_period(self):
+        config = replace(self.config, runs_dir=self.folder, period={"start": "2013-01-01", "end": "2013-12-31"})
+        run_dir = create_run_dir(config, "x")
+        script = (run_dir / "run_MOBILE.sh").read_text()
+        self.assertRegex(script, rf"(?m)^\s*rain_file='{re.escape(str(run_dir / 'inputs' / 'rain_file.nc'))}'$")
+        self.assertRegex(script, rf"(?m)^\s*pop_file='{re.escape(self.config.inputs['pop_file'])}'$")
+        self.assertRegex(script, r"(?m)^\s*nstep=365$")
+        # All the days of the data need no copy
+        whole = replace(self.config, runs_dir=self.folder, period={"start": "2012-01-01", "end": "2014-12-31"})
+        script = (create_run_dir(whole, "y") / "run_MOBILE.sh").read_text()
+        self.assertRegex(script, rf"(?m)^\s*rain_file='{re.escape(self.config.inputs['rain_file'])}'$")
+        self.assertRegex(script, r"(?m)^\s*nstep=1096$")
+        outside = replace(self.config, runs_dir=self.folder, period={"start": "2010-01-01", "end": "2013-12-31"})
+        with self.assertRaises(ConfigError):
+            create_run_dir(outside, "z")
+
     def test_run_dir_of_a_region(self):
         config = replace(self.config, runs_dir=self.folder, region=self.box)
         run_dir = create_run_dir(config, "x")
@@ -1086,7 +1213,8 @@ class TestRegion(unittest.TestCase):
         self.assertEqual(load_setup(MOBILE).region, self.box)
         manifest = {"run": dict(config.run), "inputs": files, "region": self.box}
         self.assertEqual(from_manifest(manifest, replace(config, region=None)).region, self.box)
-        # Runs from before regions have none
+        # Runs from before regions and periods have none
+        self.assertIsNone(from_manifest({"run": dict(config.run), "inputs": files}, config).period)
         self.assertIsNone(from_manifest({"run": dict(config.run), "inputs": files}, config).region)
         written = self.folder / "with_region.yaml"
         written.write_text(CONFIG.read_text().replace("$MOBILE", MOBILE).replace("runs_dir: runs", "runs_dir: runs\nregion: {north: 14.6, west: -17.2, south: 14.0, east: -16.4}"))

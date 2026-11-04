@@ -24,6 +24,8 @@ from .plots import (
     BOX, COLOUR_MAPS, LAND, age_figure, cell_figure, envelope_figure, grid_figure, map_figure, message_figure,
     MAX_DOTS, DOT_COLOURS, add_dot, default_dot, dot_label, move_dot, next_cells, remove_dot, send_figure, sig,
 )
+from .checks import driving_days, driving_problems
+from .period import length_text, parse_day, period_days
 from .region import region_problems
 from .results import list_runs
 from .sensitivity_ui import sensitivity_card, sensitivity_server
@@ -32,11 +34,11 @@ from .scripts import (
 )
 from .setup import (
     OPTIONAL_FILES, REQUIRED_FILES, from_fields, from_manifest, create_folder, list_folder, region_from_fields, region_mode,
-    save_setup, start_folder, typed_path, days_to_ymd, ymd_to_days,
+    save_setup, start_folder, typed_path,
 )
 from .setup_ui import (
     DAILY_FILES, EXAMPLE_FOLDER, PREVIEW_FILES, PREVIEW_STYLE, REGION_BOXES, SUFFIX_NAMES, example_note_box, region_values,
-    setup_problems, setup_tab, setup_value,
+    period_values, setup_problems, setup_tab, setup_value,
 )
 from .variables import (
     AGE_KEY, age_choices, age_groups, preferred_variable, resolve_variable, variable_choices,
@@ -511,8 +513,11 @@ def create_app(config):
             for key, _, _ in (*REQUIRED_FILES, *OPTIONAL_FILES):
                 ui.update_text(f"setup_{key}", value=setup_value(config, key))
             ui.update_select("setup_disID", selected=str(config.run["disID"]))
-            for key, value in zip(("years", "months", "days"), days_to_ymd(config.run["nstep"])):
-                ui.update_numeric(f"setup_{key}", value=value)
+            values = period_values(config)
+            if values is not None:
+                first, last, start, end = values
+                ui.update_date("setup_start", value=start, min=first, max=last)
+                ui.update_date("setup_end", value=end, min=first, max=last)
             ui.update_switch("setup_spin_up", value=config.run["spin_up"] == 1)
             ui.update_numeric("setup_threads", value=config.run["threads"])
             mode, values = region_values(config)
@@ -527,10 +532,17 @@ def create_app(config):
             if run_task.status() == "running" or analysis.running():
                 ui.notification_show("Wait for the run or analysis to finish, or cancel it, before changing the setup.", type="warning")
                 return
+            typed = typed_days()
+            if typed is not None and typed[2]:
+                setup_problem.set([f"Period: {typed[2]}"])
+                return
+            period = None
+            if typed is not None and (typed[0], typed[1]) != tuple(parse_day(day) for day in driving_span()):
+                period = {"start": typed[0].isoformat(), "end": typed[1].isoformat()}
             run = {
                 "disID": int(input.setup_disID()),
                 "mob": setup().run["mob"],
-                "nstep": ymd_to_days(input.setup_years(), input.setup_months(), input.setup_days()),
+                "nstep": 0 if period is None else period_days(period),
                 "spin_up": 1 if input.setup_spin_up() else 0,
                 "nagent": agents() or setup().run["nagent"],
                 "seed": input.seed(),
@@ -539,7 +551,7 @@ def create_app(config):
             files = {key: input[f"setup_{key}"]() for key, _, _ in (*REQUIRED_FILES, *OPTIONAL_FILES)}
             files["counterfactual"] = 1 if input.setup_counterfactual() else 0
             try:
-                new = from_fields(setup().mobile, input.setup_project(), input.setup_runs_dir(), run, files, typed_region())
+                new = from_fields(setup().mobile, input.setup_project(), input.setup_runs_dir(), run, files, typed_region(), period)
             except ConfigError as error:
                 setup_problem.set(setup_problems(error))
                 return
@@ -547,9 +559,85 @@ def create_app(config):
             if new.region is not None and problem:
                 setup_problem.set([f"Region: {problem}"])
                 return
+            problems = driving_problems(new.inputs)
+            if problems:
+                pending_setup.set(new)
+                ui.modal_show(ui.modal(
+                    ui.p("The driving files may not work together:"),
+                    ui.tags.ul(*[ui.tags.li(problem) for problem in problems]),
+                    ui.p("A run with these files may stop, or give results in the wrong units.", class_="mb-0"),
+                    title="Check the driving files",
+                    footer=[ui.input_action_button("apply_anyway", "Apply anyway", class_="btn-warning"),
+                            ui.modal_button("Go back and change the files")],
+                    easy_close=True,
+                ))
+                return
+            finish_apply(new)
+
+        pending_setup = reactive.value(None)  # The setup waiting for an answer to the warning on the driving files
+
+        @reactive.effect
+        @reactive.event(input.apply_anyway)
+        def apply_anyway():
+            new = pending_setup()
+            ui.modal_remove()
+            if new is not None:
+                pending_setup.set(None)
+                finish_apply(new)
+
+        def finish_apply(new):
             adopt(new)
             ui.notification_show("Setup applied.", type="message", duration=3)
             ui.update_navs("tab", selected="parameters")
+
+        @reactive.calc
+        def driving_span():
+            """(first, last) day, as ISO dates, of the rainfall file in the box of the Setup tab; None if it has no days."""
+            try:
+                days = driving_days(typed_path(input.setup_rain_file()))
+            except (OSError, ValueError, RuntimeError):
+                return None
+            return None if days is None or not len(days) else (str(days[0]), str(days[-1]))
+
+        @reactive.effect
+        def fit_period_to_driving():
+            """The period of a new rainfall file starts as all of its days; that of the applied setup is kept."""
+            span = driving_span()
+            if span is None:
+                return
+            start, end = span
+            with reactive.isolate():
+                config = setup()
+                if config.period is not None and str(typed_path(input.setup_rain_file())) == config.inputs["rain_file"]:
+                    if span[0] <= config.period["start"] and config.period["end"] <= span[1]:
+                        start, end = config.period["start"], config.period["end"]
+            ui.update_date("setup_start", value=start, min=span[0], max=span[1])
+            ui.update_date("setup_end", value=end, min=span[0], max=span[1])
+
+        @reactive.calc
+        def typed_days():
+            """(start, end, problem) as dates, of the period in the boxes of the Setup tab; None without driving days."""
+            span = driving_span()
+            if span is None:
+                return None
+            first, last = (parse_day(day) for day in span)
+            start, end = parse_day(input.setup_start()) or first, parse_day(input.setup_end()) or last
+            problem = None
+            if end < start:
+                problem = "the end is before the start."
+            elif start < first or end > last:
+                problem = f"the days must be within the driving data, {first} to {last}."
+            return start, end, problem
+
+        @render.ui
+        def period_summary():
+            typed = typed_days()
+            if typed is None:
+                return ui.p("The days of the rainfall file cannot be read: all of it is simulated.", class_="small text-muted mb-3")
+            start, end, problem = typed
+            if problem:
+                return ui.p(problem.capitalize(), class_="small text-danger mb-3")
+            return ui.p(ui.tags.strong("Total simulation time: "), length_text((end - start).days + 1), class_="small mb-3")
 
         @render.ui
         def example_note():

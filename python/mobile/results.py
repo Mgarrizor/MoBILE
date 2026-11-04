@@ -168,6 +168,7 @@ def write_manifest(config, result):
         "run": config.run,
         "inputs": config.inputs,
         "region": config.region,
+        "period": config.period,
         "param_overrides": config.params,
         "params": config.final_params(),
         "output": list(config.output) if config.output is not None else None,

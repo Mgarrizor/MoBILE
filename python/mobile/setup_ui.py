@@ -2,10 +2,11 @@
 
 from shiny import ui
 
+from .checks import driving_days
 from .grid import pop_coordinates
 from .layout import player_controls, with_tip
 from .plots import COLOUR_MAPS
-from .setup import OPTIONAL_FILES, REGION_MODES, REQUIRED_FILES, days_to_ymd, region_mode
+from .setup import OPTIONAL_FILES, REGION_MODES, REQUIRED_FILES, region_mode
 
 
 SUFFIX_NAMES = {"netcdf": ("netCDF (.nc)",), "text": ("text (.txt, .csv)",), "folder": ()}
@@ -29,20 +30,33 @@ def setup_value(config, key):
     return "" if value == "NONE" else str(value)
 
 
+def period_values(config):
+    """(first, last, start, end), as ISO dates, of the days in the rainfall file of a setup and its period,
+    all of them by default; None if the file has no days that can be read."""
+    days = driving_days(config.inputs.get("rain_file", ""))
+    if days is None or not len(days):
+        return None
+    first, last = str(days[0]), str(days[-1])
+    period = config.period or {"start": first, "end": last}
+    return first, last, str(period["start"]), str(period["end"])
+
+
 def setup_tab(config):
     """Everything a run needs that is not a parameter or an output: how to run, and where the data and
     results are. Applied, and checked, with its button."""
     run = config.run
+    first, last, start, end = period_values(config) or (None, None, None, None)
     run_box = ui.card(
         ui.card_header("Run parameters"),
         ui.input_text("setup_project", "Project", value=config.project, width="100%"),
         ui.input_select("setup_disID", "Model", MODEL_CHOICES, selected=str(run["disID"])),
-        ui.tags.label("Time to simulate (all zero: all the driving data)", class_="form-label mb-1"),
+        ui.tags.label("Period to simulate (default: all the driving data)", class_="form-label mb-1"),
         ui.layout_columns(
-            *(ui.input_numeric(f"setup_{key}", label, value=value, min=0, step=1)
-              for key, label, value in zip(("years", "months", "days"), ("Years", "Months", "Days"), days_to_ymd(run["nstep"]))),
-            col_widths=(4, 4, 4), fill=False,
+            ui.input_date("setup_start", "Start", value=start, min=first, max=last, format="yyyy-mm-dd"),
+            ui.input_date("setup_end", "End", value=end, min=first, max=last, format="yyyy-mm-dd"),
+            col_widths=(6, 6), fill=False,
         ),
+        ui.output_ui("period_summary"),
         ui.input_switch("setup_spin_up", with_tip("Spin-up to equilibrium", "Let the model settle to equilibrium before the simulated period starts."), value=run["spin_up"] == 1),
         ui.input_numeric("setup_threads", with_tip("Threads", "CPU threads used by the model. Results depend on the number: keep it fixed to compare runs."), value=run["threads"], min=1, step=1),
         _path_input("setup_runs_dir", "Results folder", str(config.runs_dir), "folder"),
@@ -62,7 +76,7 @@ def setup_tab(config):
         ),
     )
     return ui.div(
-        ui.p("Choose the model, the days to simulate, the driving data and, if not the whole grid, the region to simulate, then press ",
+        ui.p("Choose the model, the period to simulate, the driving data and, if not the whole grid, the region to simulate, then press ",
              ui.tags.strong("Apply setup"), ". Next, set the parameters in the Parameters tab and press Run in the sidebar.",
              class_="text-muted"),
         ui.layout_columns(run_box, files_box, col_widths=(5, 7)),

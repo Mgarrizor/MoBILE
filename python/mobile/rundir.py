@@ -6,8 +6,10 @@ import secrets
 import shutil
 from pathlib import Path
 
+from .checks import driving_days
 from .config import MAX_PATH_LENGTH, ConfigError
 from .grid import pop_coordinates
+from .period import day_range, period_days
 from .region import cut_inputs
 
 OUTPUT_NAME = "output"
@@ -42,6 +44,18 @@ def new_run_id():
     return f"{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(2)}"
 
 
+def period_steps(config):
+    """(first, last) step of the period of a config in its driving files; None if it has none or covers them all."""
+    if config.period is None:
+        return None
+    days = driving_days(config.inputs["rain_file"])
+    try:
+        steps = day_range(days, config.period)
+    except ValueError as error:
+        raise ConfigError(f"period: {error}") from None
+    return None if steps == (0, len(days) - 1) else steps
+
+
 def create_run_dir(config, name=None):
     """Create runs_dir/<name>/ and everything the scripts read from it."""
     run_dir = Path(config.runs_dir) / (name or new_run_id())
@@ -59,8 +73,9 @@ def create_run_dir(config, name=None):
         output_file = "'output.txt'"
 
     inputs = config.inputs
-    if config.region is not None:
-        inputs = {**inputs, **cut_inputs(inputs, config.region, run_dir / INPUTS_NAME, pop_coordinates(inputs["pop_file"]))}
+    steps = period_steps(config)
+    if config.region is not None or steps is not None:
+        inputs = {**inputs, **cut_inputs(inputs, config.region, run_dir / INPUTS_NAME, pop_coordinates(inputs["pop_file"]), steps)}
         too_long = [path for path in inputs.values() if len(str(path)) > MAX_PATH_LENGTH]
         if too_long:
             raise ConfigError(f"paths in the run folder longer than {MAX_PATH_LENGTH} characters: {too_long}")
@@ -70,7 +85,7 @@ def create_run_dir(config, name=None):
         "seed": config.run["seed"],
         "name_list": "'namelist.nml'",
         "mob": config.run["mob"],
-        "nstep": config.run["nstep"],
+        "nstep": config.run["nstep"] if config.period is None else period_days(config.period),
         "nagent": config.run["nagent"],
         "spin_up": config.run["spin_up"],
         "pop_file": f"'{inputs['pop_file']}'",

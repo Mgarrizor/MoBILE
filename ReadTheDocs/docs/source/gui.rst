@@ -114,7 +114,14 @@ What to fill in
    at the model's default, shown in grey. Optional: ``mortality_file``, ``birthrate_file``,
    ``mortality_time_file``, ``imm_forcing`` (``NONE`` when not used) and ``counterfactual`` (0 or 1).
 
+``period``
+   Optional: ``{start: 2013-01-01, end: 2013-12-31}``, the first and last day to simulate, within the days of
+   ``rain_file``. Without it the whole driving record is simulated. It replaces ``nstep``.
+
 Everything else, the parameters to change and the fields the model writes, is set in the GUI.
+
+When *Apply setup* is pressed in the GUI, the driving files are checked against each other: the grid, the
+days, and the units of rainfall (mm/day) and temperature (°C). Any difference is listed in a warning window.
 
 When the GUI starts, it checks the configuration and lists any problem: a missing file, an unknown
 setting, and so on.

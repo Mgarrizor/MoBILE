@@ -41,12 +41,17 @@ def open_field(path, key):
     return field
 
 
+def sample_days(field):
+    """At most SAMPLE_DAYS days of a field, spread over the file."""
+    if "time" in field.dims and field.sizes["time"] > SAMPLE_DAYS:
+        return field.isel(time=np.unique(np.linspace(0, field.sizes["time"] - 1, SAMPLE_DAYS).round().astype(int)))
+    return field
+
+
 def field_limits(field, log=False):
     """Colour range of a field, fixed over its days: its 1st and 99th percentiles, from at most SAMPLE_DAYS
     days spread over the file. On a log scale, from the positive values only."""
-    if "time" in field.dims and field.sizes["time"] > SAMPLE_DAYS:
-        field = field.isel(time=np.unique(np.linspace(0, field.sizes["time"] - 1, SAMPLE_DAYS).round().astype(int)))
-    values = np.asarray(field.values, dtype="float64")
+    values = np.asarray(sample_days(field).values, dtype="float64")
     values = values[np.isfinite(values)]
     if log:
         values = values[values > 0]
