@@ -86,7 +86,7 @@ def create_app(config):
             ui.div(
                 ui.input_task_button("run", "Run", label_busy="Running…", class_="btn-primary"),
                 ui.input_action_button("cancel", "Cancel", disabled=True),
-                class_="run-bar d-flex gap-2",
+                class_="run-bar d-flex flex-column gap-2",
             ),
             ui.div("Earlier runs", class_="sidebar-heading mt-4"),
             ui.input_select("previous_run", "Runs in the results folder", {}),
@@ -331,6 +331,11 @@ def create_app(config):
             n_seeds = input.n_seeds() if input.seed_band() else 1
             if not all(isinstance(value, int) and value >= 1 for value in (nagent, seed, n_seeds)):
                 ui.notification_show("Agents, seed and number of seeds must be positive integers.", type="error")
+                return
+            people = grid()["people"]
+            if nagent > people:
+                ui.notification_show(f"The simulated region has {people:,.0f} people, fewer than the {nagent:,} agents. "
+                                     f"Use at most {int(people):,} agents.", type="error")
                 return
             try:
                 run_config = replace(setup(), params={**setup().params, **overrides()}, output=selected_output()).with_run(nagent=nagent, seed=seed)

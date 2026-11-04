@@ -36,8 +36,11 @@ PAGE_STYLE = """
 .logo { background: white; border-radius: 4px; padding: 2px; }
 .sidebar-heading { font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
                    color: var(--bs-secondary-color); margin: 0.5rem 0 0.25rem; }
-/* Run and Cancel keep the same size whatever their label, as Run shows a spinner while busy */
-.run-bar > * { flex: 1 1 0; min-width: 0; white-space: nowrap; }
+/* Run and Cancel keep the same size whatever their label, as Run shows a spinner while busy.
+   Cancel is pastel red while it can be used, that is while a run is going. */
+.run-bar > * { width: 100%; white-space: nowrap; }
+#cancel:not(:disabled) { background-color: #f4a6a6; border-color: #f4a6a6; color: #5c1a1a; }
+#cancel:not(:disabled):hover { background-color: #ee8e8e; border-color: #ee8e8e; }
 /* Sidebar entries are typed, without up and down buttons */
 .bslib-sidebar-layout input[type=number] { -moz-appearance: textfield; appearance: textfield; }
 .bslib-sidebar-layout input[type=number]::-webkit-inner-spin-button,
