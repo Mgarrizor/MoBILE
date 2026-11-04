@@ -149,6 +149,15 @@ for (const player of Object.values(players)) {
 }
 // In the capture phase, as the Run button does not pass its clicks on
 document.addEventListener('click', (event) => { if (event.target.closest('#run')) players.map.pause(); }, true);
+// The dotted line of the preview's time series follows the day of the map in the browser, without a redraw
+$(document).on('shiny:inputchanged', (event) => {
+  if (event.name !== 'preview_day') return;
+  const plot = document.getElementById('preview_cell_plot');
+  const index = plot && plot.layout && plot.layout.shapes ? plot.layout.shapes.findIndex(s => s.type === 'line' && s.yref === 'paper') : -1;
+  const dates = plot && plot.data && plot.data.length ? plot.data[0].x : null;
+  if (index < 0 || !dates || !dates[event.value - 1]) return;
+  Plotly.relayout(plot, {[`shapes[${index}].x0`]: dates[event.value - 1], [`shapes[${index}].x1`]: dates[event.value - 1]});
+});
 // Another file in the preview has other days, or none
 $(document).on('shiny:inputchanged', (event) => { if (event.name === 'preview_file') players.preview_map.pause(); });
 $(document).on('shiny:sessioninitialized', () => Object.values(players).forEach(player => player.show()));

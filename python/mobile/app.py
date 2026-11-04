@@ -1283,10 +1283,10 @@ def create_app(config):
             if not preview_cells():
                 await send_figure(session, "preview_cell_plot", message_figure("Add a dot on the map to see the daily values of its cell."))
                 return
-            figure = cell_figure(
-                data, preview_description(), preview_cells(), min(input.preview_day(), data.sizes["time"]),
-                from_zero=key == "rain_file",
-            )
+            # The line of the day is moved by the browser as the day changes, so the day is not a dependency
+            with reactive.isolate():
+                day = min(input.preview_day(), data.sizes["time"])
+            figure = cell_figure(data, preview_description(), preview_cells(), day, from_zero=key == "rain_file")
             await send_figure(session, "preview_cell_plot", figure)
 
     return App(app_ui, server, static_assets={"/assets": ASSETS})
