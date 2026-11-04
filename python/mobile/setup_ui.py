@@ -57,11 +57,12 @@ def setup_tab(config):
         ),
     )
     return ui.div(
-        ui.p("Choose the model, the days to simulate, the driving data and, below, the region to simulate, then press ",
+        ui.p("Choose the model, the days to simulate, the driving data and, if not the whole grid, the region to simulate, then press ",
              ui.tags.strong("Apply setup"), ". Next, set the parameters in the Parameters tab and press Run in the sidebar.",
              class_="text-muted"),
         ui.layout_columns(run_box, files_box, col_widths=(5, 7)),
-        _preview_box(config),
+        _region_card(config),
+        _preview_box(),
         # Stays at the bottom of the window while the tab is scrolled
         ui.div(
             ui.input_action_button("apply_setup", "Apply setup", class_="btn-primary"),
@@ -93,42 +94,45 @@ def region_values(config):
 REGION_BOXES = (("north", "North [°N]"), ("west", "West [°E]"), ("east", "East [°E]"), ("south", "South [°N]"))
 
 
-def _region_box(config):
-    """The region to simulate: the whole grid, a box as in the Copernicus data store, or a point."""
+REGION_HINTS = {
+    "all": "The whole grid is simulated. To simulate part of it, choose Subregion or Single point.",
+    "box": "Type the edges, or drag a rectangle on the map. A new rectangle replaces the one before.",
+    "point": "Type the coordinates, or click a cell on the map.",
+}
+
+
+def _region_card(config):
+    """The region to simulate, with a map of its own: the whole grid, a box as in the Copernicus data store,
+    or a point. The map shows the population, and is used for the region only."""
     mode, values = region_values(config)
     boxes = [
         ui.div(ui.input_numeric(f"setup_{key}", label, value=values.get(key), step=0.05), class_=f"region-{key}")
         for key, label in REGION_BOXES
     ]
-    return ui.div(
-        ui.h6("Region to simulate", class_="mb-1"),
-        ui.p("Optional: the model can run on part of the grid. Each run then uses copies of the driving files cut "
-             "to it; the files themselves are not changed.", class_="small text-muted mb-2"),
+    hints = [
+        ui.panel_conditional(f"input.setup_region === '{key}'", ui.p(text, class_="small text-muted mb-2"))
+        for key, text in REGION_HINTS.items()
+    ]
+    return ui.card(
+        ui.card_header("Region to simulate (optional)"),
+        ui.p("The model runs on the whole grid of the driving files, or on part of it. A run on part of the grid uses "
+             "copies of the driving files cut to it; the files themselves are not changed.", class_="small text-muted mb-2"),
         ui.layout_columns(
             ui.div(
-                ui.input_radio_buttons("setup_region", None, REGION_MODES, selected=mode, inline=True),
-                ui.panel_conditional(
-                    "input.setup_region === 'box'",
-                    ui.div(*boxes, class_="region-grid"),
-                    ui.div(
-                        ui.tags.button("Draw on the map", id="region_draw", type="button", class_="btn btn-sm btn-outline-primary"),
-                        ui.span("then drag a rectangle on the map below.", class_="small text-muted ms-2"),
-                    ),
-                ),
+                ui.input_radio_buttons("setup_region", None, REGION_MODES, selected=mode),
+                *hints,
+                ui.panel_conditional("input.setup_region === 'box'", ui.div(*boxes, class_="region-grid")),
                 ui.panel_conditional(
                     "input.setup_region === 'point'",
-                    ui.layout_columns(
-                        ui.input_numeric("setup_point_lat", "Latitude [°N]", value=values.get("point_lat"), step=0.05),
-                        ui.input_numeric("setup_point_lon", "Longitude [°E]", value=values.get("point_lon"), step=0.05),
-                        col_widths=(6, 6),
-                    ),
-                    ui.p("Or click a cell on the map below. The model runs on the cell the point falls in.", class_="small text-muted mb-0"),
+                    ui.input_numeric("setup_point_lat", "Latitude [°N]", value=values.get("point_lat"), step=0.05),
+                    ui.input_numeric("setup_point_lon", "Longitude [°E]", value=values.get("point_lon"), step=0.05),
                 ),
+                ui.output_ui("region_summary"),
             ),
-            ui.output_ui("region_summary"),
-            col_widths=(7, 5),
+            ui.div(id="region_map", style="height: 480px;"),
+            col_widths=(4, 8),
         ),
-        class_="border rounded p-3 mb-3",
+        class_="mt-3",
     )
 
 
@@ -138,8 +142,8 @@ DAILY_FILES = ("rain_file", "temp_file")
 PREVIEW_STYLE = {"rain_file": ("Blues", "linear"), "temp_file": ("Coolwarm", "linear"), "pop_file": ("Reds", "log")}
 
 
-def _preview_box(config):
-    """A look at the driving files in the boxes above, before they are applied, and the region to simulate."""
+def _preview_box():
+    """A look at the driving files in the boxes above, before they are applied."""
     daily = " || ".join(f"input.preview_file === '{key}'" for key in DAILY_FILES)
     maps = " || ".join(f"input.preview_file === '{key}'" for key in PREVIEW_STYLE)
     return ui.card(
@@ -147,9 +151,8 @@ def _preview_box(config):
         ui.p(
             "The files in the boxes above, as they are now, also before Apply. Each map is drawn on the grid of its "
             "file: a file whose grid differs from that of the population shows so.",
-            class_="small text-muted mb-2",
+            class_="small text-muted mb-1",
         ),
-        _region_box(config),
         ui.layout_columns(
             ui.input_select("preview_file", "File", PREVIEW_FILES),
             ui.panel_conditional(
