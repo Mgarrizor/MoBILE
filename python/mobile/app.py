@@ -22,12 +22,12 @@ from .layout import (
 from .outcome import RunState, load_outcome, run_label, run_model, run_name_problem
 from .plots import (
     BOX, COLOUR_MAPS, LAND, age_figure, cell_figure, envelope_figure, grid_figure, map_figure, message_figure,
-    next_cells, send_figure, sig,
+    MAX_DOTS, DOT_COLOURS, add_dot, default_dot, dot_label, move_dot, next_cells, remove_dot, send_figure, sig,
 )
 from .region import region_problems
 from .results import list_runs
 from .scripts import (
-    BROWSER_HANDLER, CLOSED_HANDLER, PARAMETER_STYLE, PLAYER, PLOT_HANDLER, SLIDER_FORMAT, THEME, PAGE_STYLE,
+    BROWSER_HANDLER, CLOSED_HANDLER, DOTS_HANDLER, PARAMETER_STYLE, PLAYER, PLOT_HANDLER, SLIDER_FORMAT, THEME, PAGE_STYLE,
 )
 from .setup import (
     OPTIONAL_FILES, REQUIRED_FILES, from_fields, from_manifest, create_folder, list_folder, region_from_fields, region_mode,
@@ -101,6 +101,7 @@ def create_app(config):
             ui.tags.style(PARAMETER_STYLE),
             ui.tags.script(ui.HTML(SLIDER_FORMAT)),
             ui.tags.script(ui.HTML(BROWSER_HANDLER)),
+            ui.tags.script(ui.HTML(DOTS_HANDLER)),
         ),
         ui.output_ui("status"),
         ui.navset_tab(
@@ -1020,7 +1021,10 @@ def create_app(config):
                 await send_figure(session, "envelope_plot", envelope_figure(outcome.fields(name), outcome.seeds, outcome.describe(name), cells))
 
         # Preview of the driving files, in the Setup panel
-        preview_cells = reactive.value([])
+        preview_cells = reactive.value([])  # The dots on the map: {lon, lat, colour}
+        preview_selected = reactive.value(0)  # Index of the dot that a click on the map moves
+        preview_adding = reactive.value(False)  # The next click on the map adds a dot
+        preview_dots_for = reactive.value(None)  # The grid the dots are on
         preview_ranges = reactive.value({})  # {(path, scale): (minimum, maximum)} set by hand
 
         @reactive.calc
@@ -1147,12 +1151,44 @@ def create_app(config):
             day = min(input.preview_day(), data.sizes.get("time", 1))
             figure = map_figure(
                 data, None, preview_description(), day, preview_limits(), preview_cells(), preview_basemap(),
-                colour_map=input.preview_colour_map(), log=input.preview_scale() == "log",
+                colour_map=input.preview_colour_map(), log=input.preview_scale() == "log", selected=preview_selected(),
             )
             # The zoom is kept while the grid is the same
             figure.update_layout(meta={"date": figure.layout.meta["date"], "view": str(preview_extent())})
             figure.update_xaxes(constraintoward="center")
             await send_figure(session, "preview_map", figure)
+
+        @reactive.effect
+        def start_preview_dots():
+            """One dot, in the middle of the data, for each grid: the dots are kept while the file changes to another on the same grid."""
+            extent = preview_extent()
+            if extent is None:
+                return
+            # The files of a grid can differ in the last digits of their coordinates
+            key = tuple(round(value, 3) for value in extent)
+            with reactive.isolate():
+                if preview_dots_for() == key:
+                    return
+                preview_dots_for.set(key)
+                dot = default_dot(preview_map_data())
+                preview_cells.set([dot] if dot else [])
+                preview_selected.set(0)
+                preview_adding.set(False)
+
+        @reactive.effect
+        @reactive.event(input.preview_add)
+        def add_preview_dot():
+            if preview_map_data() is None:
+                return
+            if len(preview_cells()) >= MAX_DOTS:
+                ui.notification_show(f"At most {MAX_DOTS} dots: remove one to add another.", type="warning")
+                return
+            preview_adding.set(not preview_adding())
+
+        @reactive.effect
+        def show_preview_adding():
+            adding = preview_adding()
+            ui.update_action_button("preview_add", label="Click a cell on the map…" if adding else "Add dot")
 
         @reactive.effect
         @reactive.event(input.preview_cell)
@@ -1161,7 +1197,52 @@ def create_app(config):
                 if preview_map_data() is None:
                     return
                 cell = input.preview_cell()
-                preview_cells.set(next_cells(preview_cells(), cell["lon"], cell["lat"]))
+                dots = preview_cells()
+                if preview_adding() or not dots:
+                    added = add_dot(dots, cell["lon"], cell["lat"])
+                    preview_cells.set(added)
+                    preview_selected.set(len(added) - 1)
+                    preview_adding.set(False)
+                else:
+                    preview_cells.set(move_dot(dots, preview_selected(), cell["lon"], cell["lat"]))
+
+        @reactive.effect
+        @reactive.event(input.preview_dot_select)
+        def select_preview_dot():
+            preview_selected.set(input.preview_dot_select()["index"])
+
+        @reactive.effect
+        @reactive.event(input.preview_dot_remove)
+        def remove_preview_dot():
+            index = input.preview_dot_remove()["index"]
+            dots = preview_cells()
+            preview_cells.set(remove_dot(dots, index))
+            selected = preview_selected()
+            preview_selected.set(max(0, selected - 1) if index <= selected else selected)
+
+        @render.ui
+        def preview_dots():
+            dots, selected = preview_cells(), preview_selected()
+            if preview_adding():
+                hint = "Click a cell on the map to place the new dot."
+            elif not dots:
+                hint = "No dots: press Add dot, then click a cell on the map."
+            elif len(dots) == 1:
+                hint = "Click a cell on the map to move the dot, or press Add dot to compare another cell."
+            else:
+                hint = "Click a cell on the map to move the highlighted dot. Click a row to highlight another."
+            rows = [
+                ui.div(
+                    ui.span(class_="dot-swatch", style=f"background: {DOT_COLOURS[dot['colour']]};"),
+                    ui.span(f"{index + 1}. {dot_label(dot)}"),
+                    ui.tags.button("✕", type="button", class_="dot-remove btn btn-sm btn-link text-danger", title="Remove this dot",
+                                   **{"data-index": index, "aria-label": f"Remove dot {index + 1}"}),
+                    class_="dot-row" + (" selected" if index == selected else ""), tabindex="0", role="button",
+                    **{"data-index": index, "aria-pressed": str(index == selected).lower()},
+                )
+                for index, dot in enumerate(dots)
+            ]
+            return ui.div(*rows, ui.p(hint, class_="small text-muted mt-1 mb-0"))
 
         @reactive.effect
         async def draw_preview_cells():
@@ -1173,7 +1254,7 @@ def create_app(config):
                 await send_figure(session, "preview_cell_plot", message_figure("This file has no days: see the map."))
                 return
             if not preview_cells():
-                await send_figure(session, "preview_cell_plot", message_figure("Click a cell on the map to see its daily values, and a second one to compare."))
+                await send_figure(session, "preview_cell_plot", message_figure("Add a dot on the map to see the daily values of its cell."))
                 return
             figure = cell_figure(
                 data, preview_description(), preview_cells(), min(input.preview_day(), data.sizes["time"]),

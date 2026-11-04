@@ -173,6 +173,15 @@ def _preview_box():
             ),
         ),
         ui.div(id="preview_map", style="height: 600px;"),
+        ui.panel_conditional(
+            maps,
+            ui.div(
+                ui.div(ui.tags.strong("Dots on the map"), ui.input_action_button("preview_add", "Add dot", class_="btn-sm btn-outline-primary ms-3"),
+                       class_="d-flex align-items-center mb-2"),
+                ui.output_ui("preview_dots"),
+                class_="dots",
+            ),
+        ),
         ui.panel_conditional(daily, ui.div(id="preview_cell_plot", style="height: 300px;")),
         class_="mt-3",
     )
