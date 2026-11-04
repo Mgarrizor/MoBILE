@@ -40,8 +40,10 @@ are the same in both.
 
 Everything a run needs that is not a parameter or an output.
 
-- **Run parameters**: project name, model (VECTRI-ABM malaria or cholera), days to simulate (0: all the
-  driving data), spin-up to equilibrium and threads.
+- **Run parameters**: project name, model (VECTRI-ABM malaria or cholera), the period to simulate (a start and
+  an end date, by default the first and last day of the rainfall file; the total time is printed below them),
+  spin-up to equilibrium and threads. A period shorter than the driving data is run on copies of the
+  rainfall, temperature and immunity forcing files cut to it, kept in the run folder.
 - **Results folder**: where the runs are saved. It does not have to be the folder you started from. Type a path
   or use **Browse**, and to make a new folder, type its name under *New folder in the folder shown* and press
   **Create and open**. It then opens, and **Use this folder** selects it. Names use letters, digits, `.`, `_`
@@ -52,7 +54,9 @@ Everything a run needs that is not a parameter or an output.
   forcing, counterfactual demography) are under *Optional files*. The files filled in at first are the
   example that comes with MoBILE (`utils/test_run` in the GitHub repository): Senegal, 2012 to 2014, on a 0.05°
   grid (rainfall CHIRPS, temperature CHIRTS, population WorldPop 2020). A note says so while they are in use.
-- **Apply setup**, centred above the region card, checks the settings and switches to the Parameters tab.
+- **Apply setup**, centred above the region card, checks the settings and switches to the Parameters tab. It also
+  checks the driving files against each other (grid, days) and for the units of rainfall (mm/day) and temperature
+  (°C); any difference opens a warning window, from which the setup can still be applied.
   Problems are listed under the button. It cannot be used while a run is in progress.
 - **Region to simulate** (optional, its own card with its own map of the population density): the model runs on
   the **Whole grid** by default, and the map then only shows the population. For a **Subregion**, type its North,

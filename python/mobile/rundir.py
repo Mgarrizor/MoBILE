@@ -6,8 +6,10 @@ import secrets
 import shutil
 from pathlib import Path
 
+from .checks import driving_days
 from .config import MAX_PATH_LENGTH, ConfigError
 from .grid import pop_coordinates
+from .period import day_range, period_days
 from .region import cut_inputs
 
 OUTPUT_NAME = "output"
@@ -59,8 +61,17 @@ def create_run_dir(config, name=None):
         output_file = "'output.txt'"
 
     inputs = config.inputs
-    if config.region is not None:
-        inputs = {**inputs, **cut_inputs(inputs, config.region, run_dir / INPUTS_NAME, pop_coordinates(inputs["pop_file"]))}
+    steps = None
+    if config.period is not None:
+        days = driving_days(inputs["rain_file"])
+        try:
+            steps = day_range(days, config.period)
+        except ValueError as error:
+            raise ConfigError(f"period: {error}") from None
+        if steps == (0, len(days) - 1):
+            steps = None
+    if config.region is not None or steps is not None:
+        inputs = {**inputs, **cut_inputs(inputs, config.region, run_dir / INPUTS_NAME, pop_coordinates(inputs["pop_file"]), steps)}
         too_long = [path for path in inputs.values() if len(str(path)) > MAX_PATH_LENGTH]
         if too_long:
             raise ConfigError(f"paths in the run folder longer than {MAX_PATH_LENGTH} characters: {too_long}")
@@ -70,7 +81,7 @@ def create_run_dir(config, name=None):
         "seed": config.run["seed"],
         "name_list": "'namelist.nml'",
         "mob": config.run["mob"],
-        "nstep": config.run["nstep"],
+        "nstep": config.run["nstep"] if config.period is None else period_days(config.period),
         "nagent": config.run["nagent"],
         "spin_up": config.run["spin_up"],
         "pop_file": f"'{inputs['pop_file']}'",

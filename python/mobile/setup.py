@@ -36,25 +36,12 @@ def settings_folder():
     return Path(os.environ.get("MOBILE_CONFIG_DIR", Path.home() / ".config" / "mobile"))
 
 
-def days_to_ymd(days):
-    """Years of 365 days and months of 30 days, as the setup shows the number of days to simulate."""
-    days = int(days or 0)
-    years, rest = divmod(days, 365)
-    months = min(rest // 30, 11)
-    return years, months, rest - 30 * months
-
-
-def ymd_to_days(years, months, days):
-    """Inverse of days_to_ymd; an empty entry counts as 0."""
-    return 365 * int(years or 0) + 30 * int(months or 0) + int(days or 0)
-
-
 def typed_path(value):
     """A path as typed: `~` and environment variables expanded, relative to the current folder."""
     return Path(os.path.expandvars(os.path.expanduser(str(value).strip()))).resolve()
 
 
-def from_fields(mobile, project, runs_dir, run, inputs, region=None):
+def from_fields(mobile, project, runs_dir, run, inputs, region=None, period=None):
     """The Config of the fields of the Setup panel. An empty optional file is not used.
 
     Raises ConfigError, listing every problem, as for a configuration file.
@@ -81,6 +68,7 @@ def from_fields(mobile, project, runs_dir, run, inputs, region=None):
         inputs=files,
         project=str(project or "").strip(),
         region=region,
+        period=period,
     )
     config.validate()
     return config
@@ -113,6 +101,7 @@ def to_dict(config):
         "run": dict(config.run),
         "inputs": dict(config.inputs),
         "region": config.region,
+        "period": config.period,
     }
 
 
@@ -132,7 +121,7 @@ def load_setup(mobile=None):
     try:
         saved = json.loads((settings_folder() / SETUP_FILE).read_text())
         return from_fields(mobile or saved["mobile"], saved["project"], saved["runs_dir"], saved["run"], saved["inputs"],
-                           saved.get("region"))
+                           saved.get("region"), saved.get("period"))
     except (OSError, ValueError, KeyError, TypeError, ConfigError):
         return None
 
@@ -141,7 +130,7 @@ def from_manifest(manifest, current):
     """The settings with which a run was made, from its run.json, in the project and results
     folder of the current settings."""
     return from_fields(current.mobile, current.project, current.runs_dir, manifest["run"], manifest["inputs"],
-                       manifest.get("region"))
+                       manifest.get("region"), manifest.get("period"))
 
 
 def list_folder(folder, kind):
