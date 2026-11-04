@@ -118,7 +118,7 @@ def create_app(config):
                         ui.card_header("Model parameters"),
                         ui.p("Only the sliders you move are changed for the next run; the others keep their value.", class_="small text-muted mb-1"),
                         ui.output_ui("parameter_sliders"),
-                        ui.div(ui.input_action_button("reset", "Reset parameters", class_="btn-sm"), class_="mt-2"),
+                        ui.div(ui.input_action_button("reset", "Reset parameters", class_="btn-lg"), class_="mt-3 text-center"),
                     ),
                     ui.card(
                         ui.card_header("Outputs"),
