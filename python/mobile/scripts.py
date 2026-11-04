@@ -211,7 +211,7 @@ function placeColourBar(plot) {
 // A plot drawn while its tab was hidden has no size: fit the plots when their tab is shown again.
 // A map playing in a tab that is now hidden stops.
 $(document).on('shown.bs.tab', function() {
-  for (const id of ['map', 'cell_plot', 'envelope_plot', 'preview_map', 'preview_cell_plot']) {
+  for (const id of ['map', 'cell_plot', 'envelope_plot', 'preview_map', 'preview_cell_plot', 'region_map']) {
     const plot = document.getElementById(id);
     if (plot && plot.data && plot.offsetParent !== null) Plotly.Plots.resize(plot);
   }
@@ -238,8 +238,10 @@ Shiny.addCustomMessageHandler('plot', function(message) {
     if (zoom.x) layout.xaxis.range = zoom.x;
     if (zoom.y) layout.yaxis.range = zoom.y;
   }
+  // On the region map, a way back to drawing after zooming
+  const extra = message.id === 'region_map' ? {modeBarButtonsToAdd: ['drawrect'], modeBarButtonsToRemove: ['select2d', 'lasso2d']} : {};
   const drawing = Plotly.react(message.id, message.figure.data, layout,
-                               {responsive: true, displaylogo: false, doubleClick: 'reset'});
+                               {responsive: true, displaylogo: false, doubleClick: 'reset', ...extra});
   if (player) {
     document.getElementById(player.dateId).textContent = (layout.meta || {}).date || '';
     drawing.then(() => player.drawn());
@@ -264,22 +266,21 @@ Shiny.addCustomMessageHandler('plot', function(message) {
     });
     plot.on('plotly_doubleclick', function() { clearTimeout(pendingClick); });
   }
-  if (message.id === 'preview_map' && !plot.regionReported) {
+  if (message.id === 'region_map' && !plot.regionReported) {
     plot.regionReported = true;
     plot.on('plotly_relayout', function(event) { reportRegion(plot, event); });
+    plot.on('plotly_click', function(event) {
+      const point = event.points[0];
+      Shiny.setInputValue('region_click', {lon: point.x, lat: point.y}, {priority: 'event'});
+    });
   }
 });
-// The region to simulate, drawn on the preview map after its Draw button: the rectangle drawn last.
-// The outline the server draws is named 'region'.
-$(document).on('click', '#region_draw', function() {
-  const plot = document.getElementById('preview_map');
-  if (plot && plot.data) Plotly.relayout(plot, {dragmode: 'drawrect', newshape: {line: {color: '#0b0b0b', width: 2, dash: 'dot'}}});
-});
+// The region map, for a subregion: the rectangle drawn on it. Only one rectangle is ever on the map: the one
+// drawn is removed at once, and the server draws the region it gives, named 'region'.
 function reportRegion(plot, event) {
-  if (plot._fullLayout.dragmode !== 'drawrect' || !event.shapes) return;
-  const shape = event.shapes[event.shapes.length - 1];
-  if (!shape || shape.type !== 'rect' || shape.name === 'region') return;
-  Plotly.relayout(plot, {dragmode: 'zoom'});
+  const shape = (event.shapes || []).filter(s => s.type === 'rect' && s.name !== 'region').pop();
+  if (!shape) return;
+  Plotly.relayout(plot, {shapes: plot.layout.shapes.filter(s => s.type !== 'rect' || s.name === 'region')});
   Shiny.setInputValue('region_drawn', {x0: shape.x0, x1: shape.x1, y0: shape.y0, y1: shape.y1}, {priority: 'event'});
 }
 """

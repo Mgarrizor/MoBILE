@@ -7,6 +7,7 @@ import socket
 from dataclasses import replace
 from pathlib import Path
 
+import plotly.graph_objects as go
 import plotly.offline
 from shiny import App, reactive, render, run_app, ui
 
@@ -42,6 +43,12 @@ from .variables import (
 
 
 STATIC_MESSAGE = "This variable does not change over time: see the map."
+HUMANS_PER_AGENT_RANGE = (0.5, 2)  # Outside it, the sidebar suggests a number of agents
+REGION_MAP_TITLES = {
+    "all": "Population density. The whole grid is simulated.",
+    "box": "Drag a rectangle to choose the subregion",
+    "point": "Click a cell to choose the point",
+}
 
 
 def create_app(config):
@@ -580,7 +587,7 @@ def create_app(config):
             )
 
         def region_outline():
-            """The edges of the cells of the region in the boxes, for the preview map; None for the whole grid."""
+            """The edges of the cells of the region in the boxes, for the region map; None for the whole grid."""
             region, region_grid, _ = typed_region_grid()
             if region is None or region_grid is None:
                 return None
@@ -590,9 +597,12 @@ def create_app(config):
             return (float(min(region_grid["lon"])) - half_lon, float(max(region_grid["lon"])) + half_lon,
                     float(min(region_grid["lat"])) - half_lat, float(max(region_grid["lat"])) + half_lat)
 
+        regions_drawn = reactive.value(0)
+
         @reactive.effect
         @reactive.event(input.region_drawn)
         def region_drawn():
+            regions_drawn.set(regions_drawn() + 1)
             box = input.region_drawn()
             values = {"north": max(box["y0"], box["y1"]), "west": min(box["x0"], box["x1"]),
                       "south": min(box["y0"], box["y1"]), "east": max(box["x0"], box["x1"])}
@@ -601,12 +611,77 @@ def create_app(config):
             ui.update_radio_buttons("setup_region", selected="box")
 
         @reactive.effect
-        @reactive.event(input.preview_cell)
+        @reactive.event(input.region_click)
         def pick_point():
             if input.setup_region() == "point":
-                cell = input.preview_cell()
+                cell = input.region_click()
                 ui.update_numeric("setup_point_lat", value=round(cell["lat"], 3))
                 ui.update_numeric("setup_point_lon", value=round(cell["lon"], 3))
+
+        @reactive.calc
+        def region_map_data():
+            """The population density in the box of the Setup tab, on which the region is chosen; None if unreadable."""
+            try:
+                return open_field(typed_path(input.setup_pop_file()), "pop_file")
+            except (OSError, ValueError, KeyError, StopIteration, TypeError, RuntimeError):
+                return None
+
+        def region_map_extent():
+            data = region_map_data()
+            return None if data is None else extent_key(data["lon"].values, data["lat"].values)
+
+        region_basemap_for = reactive.value(None)
+
+        @reactive.extended_task
+        async def region_basemap_task(lon, lat):
+            return await asyncio.to_thread(load_basemap, lon, lat)
+
+        @reactive.effect
+        def fetch_region_basemap():
+            key = region_map_extent()
+            if key is None:
+                return
+            with reactive.isolate():
+                if region_basemap_for() == key:
+                    return
+                region_basemap_for.set(key)
+                data = region_map_data()
+                region_basemap_task.invoke(data["lon"].values, data["lat"].values)
+
+        def region_basemap():
+            ready = region_basemap_task.status() == "success" and region_basemap_for() == region_map_extent()
+            return region_basemap_task.result() if ready else None
+
+        @reactive.effect
+        async def draw_region_map():
+            """The population, and the region in the boxes. What a drag or a click does depends on the choice:
+            nothing for the whole grid, a rectangle for a subregion, a cell for a point."""
+            regions_drawn()  # A rectangle drawn is replaced by the region it gives
+            data = region_map_data()
+            if data is None:
+                await send_figure(session, "region_map", message_figure("Choose a population density file in Driving files to see the grid."))
+                return
+            mode = input.setup_region()
+            region, region_grid, _ = typed_region_grid()
+            figure = map_figure(data, None, ("Population density", data.attrs.get("units", "")), 1, field_limits(data, log=True),
+                                (), region_basemap(), colour_map="Reds", log=True)
+            outline = region_outline()
+            if outline is not None:
+                west, east, south, north = outline
+                figure.add_shape(type="rect", name="region", x0=west, x1=east, y0=south, y1=north, layer="above",
+                                 line={"color": BOX, "width": 2.5}, fillcolor="rgba(255, 255, 255, 0.15)")
+            if mode == "point" and region_grid is not None:
+                figure.add_trace(go.Scatter(x=[region_grid["lon"][0]], y=[region_grid["lat"][0]], mode="markers", hoverinfo="skip",
+                                            marker={"symbol": "circle-open", "size": 18, "line": {"width": 3}, "color": BOX},
+                                            showlegend=False))
+            figure.update_layout(
+                title=REGION_MAP_TITLES[mode],
+                dragmode="drawrect" if mode == "box" else "zoom",
+                newshape={"line": {"color": BOX, "width": 2, "dash": "dot"}},
+                # The zoom is kept while the grid is the same
+                uirevision=str(region_map_extent()),
+            )
+            await send_figure(session, "region_map", figure)
 
         @render.ui
         def setup_status():
@@ -705,7 +780,12 @@ def create_app(config):
             nagent = input.nagent()
             if not nagent or nagent < 1:
                 return ""
-            return f"Mean humans per agent: {grid()['people'] / nagent:.2f} ({grid()['people']:,.0f} people)"
+            people = grid()["people"]
+            text = f"Mean humans per agent: {people / nagent:.2f} ({people:,.0f} people)"
+            # Far from 1, as after choosing a small region
+            if not HUMANS_PER_AGENT_RANGE[0] <= people / nagent <= HUMANS_PER_AGENT_RANGE[1]:
+                text += f". For about 1, use about {max(round(people), 1):,} agents."
+            return text
 
         @render.ui
         def status():
@@ -1071,11 +1151,6 @@ def create_app(config):
             )
             # The zoom is kept while the grid is the same
             figure.update_layout(meta={"date": figure.layout.meta["date"], "view": str(preview_extent())})
-            outline = region_outline()
-            if outline is not None:
-                west, east, south, north = outline
-                figure.add_shape(type="rect", name="region", x0=west, x1=east, y0=south, y1=north, layer="above",
-                                 line={"color": BOX, "width": 2}, fillcolor="rgba(0, 0, 0, 0)")
             await send_figure(session, "preview_map", figure)
 
         @reactive.effect
