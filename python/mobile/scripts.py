@@ -36,8 +36,7 @@ PAGE_STYLE = """
 .logo { background: white; border-radius: 4px; padding: 2px; }
 .sidebar-heading { font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
                    color: var(--bs-secondary-color); margin: 0.5rem 0 0.25rem; }
-.apply-bar { position: sticky; bottom: 0; z-index: 10; background: var(--bs-body-bg); margin-top: 1rem;
-             padding: 0.75rem 0; border-top: 1px solid var(--bs-border-color); }
+.apply-bar { display: flex; flex-direction: column; align-items: center; margin: 1rem 0; }
 /* North over West and East, South under them, as in the Copernicus data store */
 .region-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 9rem)); column-gap: 0.75rem; }
 .region-north { grid-area: 1 / 2; } .region-west { grid-area: 2 / 1; }

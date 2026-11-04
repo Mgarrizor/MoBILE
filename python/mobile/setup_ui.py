@@ -61,14 +61,13 @@ def setup_tab(config):
              ui.tags.strong("Apply setup"), ". Next, set the parameters in the Parameters tab and press Run in the sidebar.",
              class_="text-muted"),
         ui.layout_columns(run_box, files_box, col_widths=(5, 7)),
-        _region_card(config),
-        _preview_box(),
-        # Stays at the bottom of the window while the tab is scrolled
         ui.div(
-            ui.input_action_button("apply_setup", "Apply setup", class_="btn-primary"),
+            ui.input_action_button("apply_setup", "Apply setup", class_="btn-primary btn-lg"),
             ui.output_ui("setup_status"),
             class_="apply-bar",
         ),
+        _region_card(config),
+        _preview_box(),
         class_="mt-3",
     )
 
