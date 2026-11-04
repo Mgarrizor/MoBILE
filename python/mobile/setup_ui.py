@@ -177,7 +177,6 @@ def _preview_box():
                 col_widths=(2, 2, 2, 2, 3),
             ),
         ),
-        ui.div(id="preview_map", style="height: 600px;"),
         ui.panel_conditional(
             maps,
             ui.div(
@@ -187,6 +186,7 @@ def _preview_box():
                 class_="dots",
             ),
         ),
+        ui.div(id="preview_map", style="height: 600px;"),
         ui.panel_conditional(daily, ui.div(id="preview_cell_plot", style="height: 300px;")),
         class_="mt-3",
     )
