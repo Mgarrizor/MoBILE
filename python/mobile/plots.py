@@ -196,7 +196,7 @@ def _axes(figure, lat, lon):
     ticks = {"tick0": 0, "dtick": _grid_step(lat, lon), "tickfont": {"size": AXIS_FONT}, "showgrid": False, "zeroline": False}
     figure.update_xaxes(
         title_text="Longitude [°E]", range=[float(lon.min()), float(lon.max())],
-        constrain="domain", constraintoward="left", **ticks, **allowed(lon),
+        constrain="domain", constraintoward="center", **ticks, **allowed(lon),
     )
     figure.update_yaxes(
         title_text="Latitude [°N]", range=[float(lat.min()), float(lat.max())],

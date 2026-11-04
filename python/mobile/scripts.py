@@ -36,6 +36,19 @@ PAGE_STYLE = """
 .logo { background: white; border-radius: 4px; padding: 2px; }
 .sidebar-heading { font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
                    color: var(--bs-secondary-color); margin: 0.5rem 0 0.25rem; }
+/* Run and Cancel keep the same size whatever their label, as Run shows a spinner while busy.
+   Cancel is pastel red while it can be used, that is while a run is going. */
+.run-bar > * { width: 100%; white-space: nowrap; }
+#cancel:not(:disabled) { background-color: #f4a6a6; border-color: #f4a6a6; color: #5c1a1a; }
+#cancel:not(:disabled):hover { background-color: #ee8e8e; border-color: #ee8e8e; }
+/* Sidebar entries are typed, without up and down buttons */
+.bslib-sidebar-layout input[type=number] { -moz-appearance: textfield; appearance: textfield; }
+.bslib-sidebar-layout input[type=number]::-webkit-inner-spin-button,
+.bslib-sidebar-layout input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+/* The sidebar stays in view while the page scrolls */
+@media (min-width: 992px) {
+  .bslib-sidebar-layout:not(.sidebar-collapsed) > .sidebar { position: sticky; top: 0; align-self: start; height: 100vh; overflow-y: auto; }
+}
 .apply-bar { display: flex; flex-direction: column; align-items: center; margin: 1rem 0; }
 /* North over West and East, South under them, as in the Copernicus data store */
 .region-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 9rem)); column-gap: 0.75rem; }
@@ -55,7 +68,7 @@ function makePlayer(prefix, sliderId, dateId) {
   prefix: prefix,
   dateId: dateId,
   rates: [0.5, 1, 2, 3, 4, 5, 6, 8, 10, 15, 20],
-  rate: 2,
+  rate: 5,  // Index in rates: 5 fps
   playing: false,
   sentAt: 0,
   lastDrawn: 0,
@@ -136,6 +149,15 @@ for (const player of Object.values(players)) {
 }
 // In the capture phase, as the Run button does not pass its clicks on
 document.addEventListener('click', (event) => { if (event.target.closest('#run')) players.map.pause(); }, true);
+// The dotted line of the preview's time series follows the day of the map in the browser, without a redraw
+$(document).on('shiny:inputchanged', (event) => {
+  if (event.name !== 'preview_day') return;
+  const plot = document.getElementById('preview_cell_plot');
+  const index = plot && plot.layout && plot.layout.shapes ? plot.layout.shapes.findIndex(s => s.type === 'line' && s.yref === 'paper') : -1;
+  const dates = plot && plot.data && plot.data.length ? plot.data[0].x : null;
+  if (index < 0 || !dates || !dates[event.value - 1]) return;
+  Plotly.relayout(plot, {[`shapes[${index}].x0`]: dates[event.value - 1], [`shapes[${index}].x1`]: dates[event.value - 1]});
+});
 // Another file in the preview has other days, or none
 $(document).on('shiny:inputchanged', (event) => { if (event.name === 'preview_file') players.preview_map.pause(); });
 $(document).on('shiny:sessioninitialized', () => Object.values(players).forEach(player => player.show()));

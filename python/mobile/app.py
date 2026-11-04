@@ -31,7 +31,7 @@ from .scripts import (
 )
 from .setup import (
     OPTIONAL_FILES, REQUIRED_FILES, from_fields, from_manifest, create_folder, list_folder, region_from_fields, region_mode,
-    save_setup, start_folder, typed_path,
+    save_setup, start_folder, typed_path, days_to_ymd, ymd_to_days,
 )
 from .setup_ui import (
     DAILY_FILES, EXAMPLE_FOLDER, PREVIEW_FILES, PREVIEW_STYLE, REGION_BOXES, SUFFIX_NAMES, example_note_box, region_values,
@@ -67,6 +67,11 @@ def create_app(config):
                          "keep the mean humans per agent close to 1 for reliable results."),
                 value=config.run["nagent"], min=1, step=100000,
             ),
+            ui.input_numeric(
+                "ha", with_tip("Humans per agent (HA)", "People represented by one agent. Linked to the number of agents: "
+                               "changing one sets the other. Close to 1 is best for reliable results."),
+                value=None, min=0, step="any",
+            ),
             ui.div(ui.output_text("humans_per_agent"), class_="small text-muted mb-3"),
             ui.input_numeric(
                 "seed", with_tip("Seed", "Starting point of the random numbers. The same seed and threads give the same results."),
@@ -79,9 +84,9 @@ def create_app(config):
             ui.panel_conditional("input.seed_band", ui.input_numeric("n_seeds", "Number of seeds", value=5, min=2, step=1)),
             ui.input_text("run_name", "Run name (optional)", placeholder="e.g. kenya_e0_high"),
             ui.div(
-                ui.input_task_button("run", "Run", label_busy="Running…", class_="btn-primary flex-fill"),
-                ui.input_action_button("cancel", "Cancel", class_="flex-fill", disabled=True),
-                class_="d-flex gap-2",
+                ui.input_task_button("run", "Run", label_busy="Running…", class_="btn-primary"),
+                ui.input_action_button("cancel", "Cancel", disabled=True),
+                class_="run-bar d-flex flex-column gap-2",
             ),
             ui.div("Earlier runs", class_="sidebar-heading mt-4"),
             ui.input_select("previous_run", "Runs in the results folder", {}),
@@ -113,7 +118,7 @@ def create_app(config):
                         ui.card_header("Model parameters"),
                         ui.p("Only the sliders you move are changed for the next run; the others keep their value.", class_="small text-muted mb-1"),
                         ui.output_ui("parameter_sliders"),
-                        ui.div(ui.input_action_button("reset", "Reset parameters", class_="btn-sm"), class_="mt-2"),
+                        ui.div(ui.input_action_button("reset", "Reset parameters", class_="btn-lg"), class_="mt-3 text-center"),
                     ),
                     ui.card(
                         ui.card_header("Outputs"),
@@ -327,6 +332,11 @@ def create_app(config):
             if not all(isinstance(value, int) and value >= 1 for value in (nagent, seed, n_seeds)):
                 ui.notification_show("Agents, seed and number of seeds must be positive integers.", type="error")
                 return
+            people = grid()["people"]
+            if nagent > people:
+                ui.notification_show(f"The simulated region has {people:,.0f} people, fewer than the {nagent:,} agents. "
+                                     f"Use at most {int(people):,} agents.", type="error")
+                return
             try:
                 run_config = replace(setup(), params={**setup().params, **overrides()}, output=selected_output()).with_run(nagent=nagent, seed=seed)
             except ConfigError as error:
@@ -496,7 +506,8 @@ def create_app(config):
             for key, _, _ in (*REQUIRED_FILES, *OPTIONAL_FILES):
                 ui.update_text(f"setup_{key}", value=setup_value(config, key))
             ui.update_select("setup_disID", selected=str(config.run["disID"]))
-            ui.update_numeric("setup_nstep", value=config.run["nstep"])
+            for key, value in zip(("years", "months", "days"), days_to_ymd(config.run["nstep"])):
+                ui.update_numeric(f"setup_{key}", value=value)
             ui.update_switch("setup_spin_up", value=config.run["spin_up"] == 1)
             ui.update_numeric("setup_threads", value=config.run["threads"])
             mode, values = region_values(config)
@@ -514,7 +525,7 @@ def create_app(config):
             run = {
                 "disID": int(input.setup_disID()),
                 "mob": setup().run["mob"],
-                "nstep": input.setup_nstep(),
+                "nstep": ymd_to_days(input.setup_years(), input.setup_months(), input.setup_days()),
                 "spin_up": 1 if input.setup_spin_up() else 0,
                 "nagent": input.nagent(),
                 "seed": input.seed(),
@@ -776,16 +787,33 @@ def create_app(config):
                 ui.update_text(state_["field"], value=str(state_["folder"]))
                 ui.modal_remove()
 
+        @reactive.effect
+        @reactive.event(input.nagent, grid)
+        def show_ha():
+            nagent = input.nagent()
+            if nagent and nagent >= 1:
+                ui.update_numeric("ha", value=round(grid()["people"] / nagent, 4))
+
+        @reactive.effect
+        @reactive.event(input.ha)
+        def set_nagent_from_ha():
+            ha, nagent = input.ha(), input.nagent()
+            if not ha or ha <= 0:
+                return
+            if nagent and nagent >= 1 and abs(ha - round(grid()["people"] / nagent, 4)) < 1e-9:
+                return  # The value shown for the number of agents
+            ui.update_numeric("nagent", value=max(round(grid()["people"] / ha), 1))
+
         @render.text
         def humans_per_agent():
             nagent = input.nagent()
             if not nagent or nagent < 1:
                 return ""
             people = grid()["people"]
-            text = f"Mean humans per agent: {people / nagent:.2f} ({people:,.0f} people)"
+            text = f"{people:,.0f} people in the simulated region"
             # Far from 1, as after choosing a small region
             if not HUMANS_PER_AGENT_RANGE[0] <= people / nagent <= HUMANS_PER_AGENT_RANGE[1]:
-                text += f". For about 1, use about {max(round(people), 1):,} agents."
+                text += f". For HA about 1, use about {max(round(people), 1):,} agents."
             return text
 
         @render.ui
@@ -1155,7 +1183,6 @@ def create_app(config):
             )
             # The zoom is kept while the grid is the same
             figure.update_layout(meta={"date": figure.layout.meta["date"], "view": str(preview_extent())})
-            figure.update_xaxes(constraintoward="center")
             await send_figure(session, "preview_map", figure)
 
         @reactive.effect
@@ -1256,10 +1283,10 @@ def create_app(config):
             if not preview_cells():
                 await send_figure(session, "preview_cell_plot", message_figure("Add a dot on the map to see the daily values of its cell."))
                 return
-            figure = cell_figure(
-                data, preview_description(), preview_cells(), min(input.preview_day(), data.sizes["time"]),
-                from_zero=key == "rain_file",
-            )
+            # The line of the day is moved by the browser as the day changes, so the day is not a dependency
+            with reactive.isolate():
+                day = min(input.preview_day(), data.sizes["time"])
+            figure = cell_figure(data, preview_description(), preview_cells(), day, from_zero=key == "rain_file")
             await send_figure(session, "preview_cell_plot", figure)
 
     return App(app_ui, server, static_assets={"/assets": ASSETS})

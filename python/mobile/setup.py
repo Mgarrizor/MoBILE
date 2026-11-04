@@ -36,6 +36,19 @@ def settings_folder():
     return Path(os.environ.get("MOBILE_CONFIG_DIR", Path.home() / ".config" / "mobile"))
 
 
+def days_to_ymd(days):
+    """Years of 365 days and months of 30 days, as the setup shows the number of days to simulate."""
+    days = int(days or 0)
+    years, rest = divmod(days, 365)
+    months = min(rest // 30, 11)
+    return years, months, rest - 30 * months
+
+
+def ymd_to_days(years, months, days):
+    """Inverse of days_to_ymd; an empty entry counts as 0."""
+    return 365 * int(years or 0) + 30 * int(months or 0) + int(days or 0)
+
+
 def typed_path(value):
     """A path as typed: `~` and environment variables expanded, relative to the current folder."""
     return Path(os.path.expandvars(os.path.expanduser(str(value).strip()))).resolve()
