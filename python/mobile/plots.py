@@ -4,6 +4,8 @@ import json
 
 import numpy as np
 import plotly.graph_objects as go
+import xarray as xr
+from plotly.subplots import make_subplots
 
 from .basemap import PADDING_DEGREES
 from .driving import mean_age
@@ -388,3 +390,131 @@ def message_figure(text):
 def send_figure(session, plot_id, figure):
     # to_json so that numpy arrays and dates are encoded as plotly.js expects
     return session.send_custom_message("plot", {"id": plot_id, "figure": json.loads(figure.to_json())})
+
+
+# Sensitivity analysis: S1, and the rest of ST (interactions) stacked on it, in one hue; each seed in ink
+S1_COLOUR = "#2a78d6"
+INTERACTION_COLOUR = "#9ec2ee"
+SEED_MARK = "#0b0b0b"
+
+
+def indices_figure(result):
+    """S1 and ST of each parameter, most influential first: a bar of S1 with the interactions (ST − S1) on top, so
+    that the whole bar is ST, each with its 95% confidence interval; with several seeds, the indices of each seed alone
+    as dots."""
+    mean = result["mean"]
+    order = np.argsort(-np.nan_to_num(mean["ST"]))
+    names = [result["parameters"][j] for j in order]
+    x = np.arange(len(names))
+    s1, st = mean["S1"][order], mean["ST"][order]
+    figure = go.Figure(layout=_base_layout(title=f"Sobol indices of {result['description']}"))
+    figure.add_trace(go.Bar(
+        x=x, y=s1, name="S1: alone", marker={"color": S1_COLOUR, "cornerradius": 4}, width=0.6,
+        error_y={"type": "data", "array": mean["S1_conf"][order], "color": TEXT, "thickness": 1.5, "width": 4},
+        customdata=np.column_stack([s1, mean["S1_conf"][order]]),
+        hovertemplate="%{hovertext}<br>S1 = %{customdata[0]:.3f} ± %{customdata[1]:.3f}<extra></extra>", hovertext=names,
+    ))
+    figure.add_trace(go.Bar(
+        x=x, y=st - s1, base=s1, name="ST − S1: with others", marker={"color": INTERACTION_COLOUR, "cornerradius": 4}, width=0.6,
+        error_y={"type": "data", "array": mean["ST_conf"][order], "color": TEXT, "thickness": 1.5, "width": 4},
+        customdata=np.column_stack([st, mean["ST_conf"][order], st - s1]),
+        hovertemplate="%{hovertext}<br>ST = %{customdata[0]:.3f} ± %{customdata[1]:.3f}<br>ST − S1 = %{customdata[2]:.3f}<extra></extra>", hovertext=names,
+    ))
+    if "each" in result:
+        seeds = result["seeds"]
+        for key, symbol, offset in (("S1", "circle", -0.12), ("ST", "diamond-open", 0.12)):
+            values = result["each"][key][:, order]
+            figure.add_trace(go.Scatter(
+                x=np.repeat(x + offset, len(seeds)), y=values.T.ravel(), mode="markers", name=f"{key} of each seed",
+                marker={"symbol": symbol, "size": 8, "color": SEED_MARK, "line": {"width": 1.5, "color": SEED_MARK}}, opacity=0.75,
+                customdata=np.tile(seeds, len(names)), hovertext=np.repeat(names, len(seeds)),
+                hovertemplate="%{hovertext}, seed %{customdata}<br>" + key + " = %{y:.3f}<extra></extra>",
+            ))
+    figure.update_layout(
+        barmode="overlay", plot_bgcolor="white", bargap=0.3,
+        legend={"orientation": "h", "y": -0.18},
+        xaxis={"tickvals": x, "ticktext": names, "tickfont": {"size": AXIS_FONT}, "showgrid": False},
+        yaxis={"title_text": "Share of the variance", "gridcolor": GRID, "zeroline": True, "zerolinecolor": TEXT,
+               "range": [min(0.0, float(np.nanmin(s1 - mean["S1_conf"][order]))) - 0.02, max(1.0, float(np.nanmax(st + mean["ST_conf"][order]))) + 0.02]},
+    )
+    return figure
+
+
+def second_order_figure(result):
+    """S2 of each pair of parameters: the share of the variance they explain together, beyond each alone."""
+    names = result["parameters"]
+    s2, conf = result["mean"]["S2"], result["mean"]["S2_conf"]
+    upper = np.triu(np.ones_like(s2, bool), 1)
+    z = np.where(upper, s2, np.nan)
+    text = np.where(upper, np.vectorize(lambda v: f"{v:.3f}")(np.nan_to_num(s2)), "")
+    colours = COLOUR_MAPS["Blues"]
+    figure = go.Figure(go.Heatmap(
+        x=names, y=names, z=z, zmin=0, zmax=max(0.05, float(np.nanmax(z)) if upper.any() else 0.05),
+        colorscale=[[i / (len(colours) - 1), colour] for i, colour in enumerate(colours)],
+        text=text, texttemplate="%{text}", customdata=np.where(upper, conf, np.nan), xgap=2, ygap=2,
+        colorbar={"title": {"text": "S2", "side": "right"}, "outlinewidth": 0, "thickness": 16},
+        hovertemplate="%{y} with %{x}<br>S2 = %{z:.3f} ± %{customdata:.3f}<extra></extra>",
+    ), layout=_base_layout(title="S2: what each pair explains together, beyond each alone"))
+    figure.update_layout(plot_bgcolor="white", xaxis={"side": "bottom", "showgrid": False}, yaxis={"autorange": "reversed", "showgrid": False})
+    return figure
+
+
+def index_values(result, name, key):
+    """(values at the cells, title, colour limits, colour map) of an index of one parameter on a map: S1 or ST of the
+    mean over seeds ('S1', 'ST'), their range across seeds ('S1_range', 'ST_range'), or the share of the variance
+    from chance ('chance', the same for every parameter)."""
+    j = result["parameters"].index(name)
+    if key == "chance":
+        return result["chance"], "Share of the variance from chance (the seed)", (0, 1), "Reds"
+    if key.endswith("_range"):
+        index = key[: -len("_range")]
+        values = result["range"][index][j]
+        highest = float(np.nanmax(values)) if np.isfinite(values).any() else 1.0
+        return values, f"{index} of {name}: highest minus lowest among the {len(result['seeds'])} seeds", (0, max(highest, 0.01)), "Reds"
+    return result["mean"][key][j], f"{key} of {name}", (0, 1), "Blues"
+
+
+def index_map_figure(result, name, key, basemap=None):
+    """A map of an index of one parameter, cell by cell."""
+    lat, lon = result["lat"], result["lon"]
+    values, title, limits, colours = index_values(result, name, key)
+    grid = np.full(lat.size * lon.size, np.nan)
+    grid[result["cells"]] = values
+    data = xr.DataArray(grid.reshape(lat.size, lon.size), dims=("lat", "lon"), coords={"lat": lat, "lon": lon})
+    figure = map_figure(data, None, (title, ""), 1, limits, basemap=basemap, colour_map=colours)
+    figure.update_layout(title=f"{title}. No colour: not simulated, or the output does not change")
+    return figure
+
+
+def climate_figure(result, name, key):
+    """The index of a map in each cell against the mean rainfall and temperature of the cell over the same days,
+    with the median of the index in each tenth of the cells: how the sensitivity follows the climate."""
+    values, title, _, _ = index_values(result, name, key)
+    short = title.split(":")[0]
+    climate = result["climate"]
+    figure = make_subplots(rows=1, cols=max(1, len(climate)), shared_yaxes=True, horizontal_spacing=0.06)
+    figure.update_layout(_base_layout(title=f"{title}, in each cell against its climate over the same days"))
+    for column, (label, units, x) in enumerate(climate.values(), start=1):
+        usable = np.isfinite(x) & np.isfinite(values)
+        # WebGL only when SVG would be slow: some browsers have none
+        points = go.Scattergl if usable.sum() > 5000 else go.Scatter
+        figure.add_trace(points(
+            x=x[usable], y=values[usable], mode="markers", marker={"size": 5, "color": S1_COLOUR, "opacity": 0.35},
+            name="Cells", showlegend=column == 1, hovertemplate=f"{label}: %{{x:.3g}}<br>{short} = %{{y:.3f}}<extra></extra>",
+        ), row=1, col=column)
+        if usable.sum() >= 20:
+            edges = np.unique(np.quantile(x[usable], np.linspace(0, 1, 11)))
+            bins = np.clip(np.digitize(x[usable], edges[1:-1]), 0, len(edges) - 2)
+            filled = [b for b in range(len(edges) - 1) if (bins == b).any()]
+            figure.add_trace(go.Scatter(
+                x=[np.median(x[usable][bins == b]) for b in filled], y=[np.median(values[usable][bins == b]) for b in filled],
+                mode="lines+markers", line={"color": SEED_MARK, "width": 2}, marker={"size": 8},
+                name="Median in each tenth of the cells", showlegend=column == 1,
+                hovertemplate=f"{label}: %{{x:.3g}}<br>median {short} = %{{y:.3f}}<extra></extra>",
+            ), row=1, col=column)
+        figure.update_xaxes(title_text=_with_units(label, units), gridcolor=GRID, row=1, col=column)
+    figure.update_yaxes(title_text=short, gridcolor=GRID, row=1, col=1)
+    figure.update_layout(plot_bgcolor="white", legend={"orientation": "h", "y": -0.25})
+    if not climate:
+        figure.add_annotation(text="The outputs have no rainfall or temperature to compare with.", showarrow=False, x=0.5, y=0.5, xref="paper", yref="paper")
+    return figure

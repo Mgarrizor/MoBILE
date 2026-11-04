@@ -26,6 +26,7 @@ from .plots import (
 )
 from .region import region_problems
 from .results import list_runs
+from .sensitivity_ui import sensitivity_card, sensitivity_server
 from .scripts import (
     BROWSER_HANDLER, CLOSED_HANDLER, DOTS_HANDLER, PARAMETER_STYLE, PLAYER, PLOT_HANDLER, SLIDER_FORMAT, THEME, PAGE_STYLE,
 )
@@ -109,7 +110,7 @@ def create_app(config):
                 "2. Parameters",
                 ui.layout_columns(
                     ui.card(
-                        ui.card_header("Model parameters"),
+                        ui.card_header("Parameters for single runs"),
                         ui.p("Only the sliders you move are changed for the next run; the others keep their value.", class_="small text-muted mb-1"),
                         ui.output_ui("parameter_sliders"),
                         ui.div(ui.input_action_button("reset", "Reset parameters", class_="btn-lg"), class_="mt-3 text-center"),
@@ -123,6 +124,7 @@ def create_app(config):
                     col_widths=(7, 5),
                     class_="mt-3",
                 ),
+                sensitivity_card(),
                 value="parameters",
             ),
             ui.nav_panel(
@@ -243,6 +245,11 @@ def create_app(config):
         def grid_key():
             return extent_key(grid()["lon"], grid()["lat"])
 
+        analysis = sensitivity_server(
+            input, output, session, setup, slider_setup, overrides, selected_output, lambda: run_task.status() == "running",
+            lambda: agents(),  # Defined further down, from HA
+        )
+
         basemap_for = reactive.value(None)  # The grid the basemap and the terrain were asked for
         terrain_for = reactive.value(None)
 
@@ -331,6 +338,9 @@ def create_app(config):
                 ui.notification_show(f"The simulated region has {people:,.0f} people, fewer than the {nagent:,} agents. "
                                      f"Use at most {int(people):,} agents.", type="error")
                 return
+            if analysis.running():
+                ui.notification_show("A sensitivity analysis is running: wait for it, or cancel it, before a single run.", type="warning")
+                return
             try:
                 run_config = replace(setup(), params={**setup().params, **overrides()}, output=selected_output()).with_run(nagent=nagent, seed=seed)
             except ConfigError as error:
@@ -360,7 +370,8 @@ def create_app(config):
                 state.runner.cancel()
 
         async def close_app():
-            """Stop any run, tell the browser, then stop the server as Ctrl+C does."""
+            """Stop any run or analysis, tell the browser, then stop the server as Ctrl+C does."""
+            analysis.cancel()
             state.update(cancelled=True)
             if state.runner is not None:
                 state.runner.cancel()
@@ -370,12 +381,12 @@ def create_app(config):
         @reactive.effect
         @reactive.event(input.close)
         async def ask_to_close():
-            if run_task.status() != "running":
+            if run_task.status() != "running" and not analysis.running():
                 await close_app()
                 return
             ui.modal_show(
                 ui.modal(
-                    "A run is in progress. Closing the GUI will cancel it.",
+                    "A run or sensitivity analysis is in progress. Closing the GUI will cancel it; an analysis can be resumed later.",
                     title="Close the GUI?",
                     footer=ui.TagList(ui.modal_button("Keep running"), ui.input_action_button("close_confirmed", "Cancel run and close")),
                 )
@@ -513,8 +524,8 @@ def create_app(config):
         @reactive.effect
         @reactive.event(input.apply_setup)
         def apply_setup():
-            if run_task.status() == "running":
-                ui.notification_show("Wait for the run to finish, or cancel it, before changing the setup.", type="warning")
+            if run_task.status() == "running" or analysis.running():
+                ui.notification_show("Wait for the run or analysis to finish, or cancel it, before changing the setup.", type="warning")
                 return
             run = {
                 "disID": int(input.setup_disID()),
