@@ -4,7 +4,7 @@ days and the physical units. They only read the coordinates, attributes and a sa
 import numpy as np
 import xarray as xr
 
-from .driving import LAT_NAMES, LON_NAMES, TIME_NAMES, first_name, open_field, sample_days
+from .driving import FIELD_NAMES, LAT_NAMES, LON_NAMES, TIME_NAMES, first_name, open_field, sample_days
 from .period import as_days
 
 READ_ERRORS = (OSError, ValueError, KeyError, StopIteration, TypeError, RuntimeError)
@@ -62,6 +62,19 @@ def grid_text(axes):
 def day_text(axes):
     days = axes["days"]
     return f"{axes['steps']} steps" if days is None else f"{axes['steps']} days, {days[0]} to {days[-1]}"
+
+
+def wrong_file_hint(key, path):
+    """", it has <variable>: a <other> file?" when a file has the variable of another driving field."""
+    try:
+        with xr.open_dataset(path) as data:
+            for other, names in FIELD_NAMES.items():
+                found = next((name for name in names if name in data.data_vars), None)
+                if other != key and found:
+                    return f"; it has {found!r}, the {LABELS[other].lower()} variable: is it the wrong file?"
+    except READ_ERRORS:
+        pass
+    return ""
 
 
 def value_problems(key, path):
@@ -135,8 +148,8 @@ def driving_problems(inputs):
         if key in axes:
             try:
                 problems += [f"{LABELS[key]}: {text}." for text in value_problems(key, inputs[key])]
-            except READ_ERRORS:
-                pass  # Named in the first lines, or no variable the model knows
+            except READ_ERRORS as error:
+                problems.append(f"{LABELS[key]}: {error}{wrong_file_hint(key, inputs[key])}.")
     area = inputs.get("area_file", "NONE")
     if "area_file" in axes:
         try:

@@ -322,6 +322,13 @@ class TestDrivingChecks(unittest.TestCase):
         later = self.changed("temp_file", lambda d: d.assign_coords(time=d.time.values + 86400 * 10**9))
         self.assertTrue(any("differ" in text for text in driving_problems(later)))
 
+    def test_a_file_in_the_wrong_box(self):
+        swapped = {**self.inputs, "rain_file": self.inputs["temp_file"]}
+        problems = driving_problems(swapped)
+        self.assertTrue(any(text.startswith("Rainfall: no variable named rain") and "temperature" in text for text in problems), problems)
+        swapped = {**self.inputs, "temp_file": self.inputs["rain_file"]}
+        self.assertTrue(any(text.startswith("Temperature: no variable named") and "'precip'" in text for text in driving_problems(swapped)))
+
     def test_unreadable_file(self):
         (self.folder / "bad.nc").write_text("not netCDF")
         problems = driving_problems({**self.inputs, "rain_file": str(self.folder / "bad.nc")})
