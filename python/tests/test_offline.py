@@ -39,7 +39,7 @@ from mobile.setup import (
 )
 from mobile.grid import pop_coordinates, read_grid
 from mobile.region import axis_range, cut_inputs, region_problems
-from mobile.runner import ProgressParser
+from mobile.runner import ProgressParser, macos_sdk, run_environment
 
 CONFIG = example_config()
 
@@ -545,6 +545,28 @@ class TestProgress(unittest.TestCase):
         self.assertEqual(event.stage, "integrating")
         self.assertAlmostEqual(event.fraction, 0.501)
         self.assertIsNone(parser.parse("Pi = 3.1416"))
+
+
+class TestRunEnvironment(unittest.TestCase):
+    def test_sdk_is_given_on_a_mac_unless_set(self):
+        with mock.patch("mobile.runner.macos_sdk", return_value="/sdk/MacOSX.sdk"):
+            self.assertEqual(run_environment("/m", {})["SDKROOT"], "/sdk/MacOSX.sdk")
+            self.assertEqual(run_environment("/m", {"SDKROOT": "/mine"})["SDKROOT"], "/mine")
+        with mock.patch("mobile.runner.macos_sdk", return_value=None):
+            self.assertNotIn("SDKROOT", run_environment("/m", {}))
+        env = run_environment("/m", {"PATH": "/bin"})
+        self.assertEqual((env["MOBILE"], env["PATH"]), ("/m", "/bin"))
+
+    def test_sdk_only_where_xcrun_finds_one(self):
+        with mock.patch("sys.platform", "linux"):
+            self.assertIsNone(macos_sdk())
+        with mock.patch("sys.platform", "darwin"), mock.patch("subprocess.run", side_effect=FileNotFoundError):
+            self.assertIsNone(macos_sdk())
+        with mock.patch("sys.platform", "darwin"), mock.patch("subprocess.run") as run:
+            run.return_value = mock.Mock(returncode=0, stdout="/does/not/exist\n")
+            self.assertIsNone(macos_sdk())
+            run.return_value = mock.Mock(returncode=0, stdout=str(Path(__file__).parent) + "\n")
+            self.assertEqual(macos_sdk(), str(Path(__file__).parent))
 
 
 class TestRunState(unittest.TestCase):

@@ -129,6 +129,13 @@ To repeat a run by hand, run `bash run_MOBILE.sh` in a copy of that folder.
 
 - *Not found, but needed to compile MoBILE*: install `gfortran`, `make` and netCDF-Fortran (`nf-config`,
   `nc-config`).
+- *`ld: library 'System' not found`* at the end of the compilation, on a Mac: no library is missing. gfortran looks
+  for the macOS SDK named after the macOS version (`MacOSX27.sdk`), and the Command Line Tools may not have it
+  yet when macOS is newer (check with `ls /Library/Developer/CommandLineTools/SDKs`). The GUI and `mobile run`
+  give the SDK that is installed (`xcrun --show-sdk-path`) to the run, unless `SDKROOT` is set. To run
+  `mobile.sh` or `run_MOBILE.sh` by hand, set it yourself: `export SDKROOT=$(xcrun --show-sdk-path)`. Updating the
+  Command Line Tools in System Settings, Software Update (or `xcode-select --install` if they are not installed)
+  also helps.
 - *runs_dir cannot be inside the MoBILE repository*: you started the GUI inside the repository. Leave it
   and start again from another folder, or choose a results folder outside it in the Setup tab.
 - *MoBILE location unknown*: `export MOBILE=/path/to/MoBILE` in the terminal you start `mobile gui` from.

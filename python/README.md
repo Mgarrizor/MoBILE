@@ -5,7 +5,9 @@ It fills in a copy of MoBILE's `utils/run_MOBILE.sh` for each run, so the model 
 
 ## Install
 
-MoBILE needs `gfortran`, `make` and netCDF-Fortran (`nf-config`, `nc-config`), which pip cannot install.
+MoBILE needs `gfortran`, `make` and netCDF-Fortran (`nf-config`, `nc-config`), which pip cannot install. On a Mac,
+`brew install gcc netcdf netcdf-fortran` gives them, and the Command Line Tools (`xcode-select --install`) are needed
+too. If compiling stops with `ld: library 'System' not found`, see Troubleshooting in [GUI.md](GUI.md).
 
     git clone https://github.com/Mgarrizor/MoBILE.git
     export MOBILE=$PWD/MoBILE            # add to ~/.zshrc or ~/.bashrc to keep it

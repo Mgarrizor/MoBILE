@@ -6,6 +6,7 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -18,6 +19,28 @@ FINISHED_LINE = "Program finished successfully"
 COMPILE_RE = re.compile(r"Compile module (\S+)")
 SPINUP_RE = re.compile(r"Spin-up convergence\s+([\d.]+)\s*<=\?\s*([\d.]+)")
 INTEGRATE_RE = re.compile(r"Integrating\s*(\d+)\s*/\s*(\d+)\s*-\s*([\d.]+)\s*%")
+
+
+def macos_sdk():
+    """The path of the newest macOS SDK installed, from xcrun; None if there is none or this is not a Mac."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        found = subprocess.run(["xcrun", "--show-sdk-path"], capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    path = found.stdout.strip()
+    return path if found.returncode == 0 and os.path.isdir(path) else None
+
+
+def run_environment(mobile, environ=None):
+    """The environment of a run. On a Mac, gfortran looks for the SDK named after the macOS version, which the
+    Command Line Tools may not have yet (linking then fails with "library 'System' not found"), so the SDK
+    that is installed is given, unless SDKROOT is set."""
+    env = {**(os.environ if environ is None else environ), "MOBILE": str(mobile), "GFORTRAN_UNBUFFERED_PRECONNECTED": "1"}
+    if "SDKROOT" not in env and (sdk := macos_sdk()):
+        env["SDKROOT"] = sdk
+    return env
 
 
 class RunnerBusy(RuntimeError):
@@ -88,11 +111,7 @@ class Runner:
 
     def _run_locked(self, name, on_progress):
         run_dir = create_run_dir(self.config, name)
-        env = {
-            **os.environ,
-            "MOBILE": str(self.config.mobile),
-            "GFORTRAN_UNBUFFERED_PRECONNECTED": "1",
-        }
+        env = run_environment(self.config.mobile)
         parser = ProgressParser()
         finished = False
         started = time.time()
