@@ -41,7 +41,7 @@ def setup_tab(config):
         ui.layout_columns(
             *(ui.input_numeric(f"setup_{key}", label, value=value, min=0, step=1)
               for key, label, value in zip(("years", "months", "days"), ("Years", "Months", "Days"), days_to_ymd(run["nstep"]))),
-            col_widths=(4, 4, 4),
+            col_widths=(4, 4, 4), fill=False,
         ),
         ui.input_switch("setup_spin_up", with_tip("Spin-up to equilibrium", "Let the model settle to equilibrium before the simulated period starts."), value=run["spin_up"] == 1),
         ui.input_numeric("setup_threads", with_tip("Threads", "CPU threads used by the model. Results depend on the number: keep it fixed to compare runs."), value=run["threads"], min=1, step=1),
