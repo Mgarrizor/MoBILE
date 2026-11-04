@@ -16,7 +16,7 @@ from .config import ConfigError, default_params, default_sliders, read_params
 from .driving import field_limits, open_field, read_age
 from .grid import extent_key, load_grid, mask_like, read_grid
 from .layout import (
-    ANALYSIS_TABS, ASSETS, GUI_OUTPUT, HA_BELOW_ONE, OUTPUT_FLAGS, funders, help_tab, no_run_yet, output_groups, output_switch_id,
+    ANALYSIS_TABS, ASSETS, GUI_OUTPUT, HA_BELOW_ONE, OPTUNA_URL, OUTPUT_FLAGS, funders, help_tab, no_run_yet, output_groups, output_switch_id,
     page_header, page_title, parameter_legend, player_controls, slider_grid, slider_groups, with_tip,
 )
 from .outcome import RunState, load_outcome, run_label, run_model, run_name_problem
@@ -37,7 +37,7 @@ from .setup import (
     save_setup, start_folder, typed_path,
 )
 from .setup_ui import (
-    DAILY_FILES, EXAMPLE_FOLDER, PREVIEW_FILES, PREVIEW_STYLE, REGION_BOXES, SUFFIX_NAMES, example_note_box, region_values,
+    DAILY_FILES, EXAMPLE_FOLDER, PREVIEW_FILES, PREVIEW_STYLE, REGION_BOXES, SUFFIX_NAMES, available_model, example_note_box, region_values,
     period_values, setup_problems, setup_tab, setup_value,
 )
 from .variables import (
@@ -55,6 +55,7 @@ REGION_MAP_TITLES = {
 
 
 def create_app(config):
+    config, model_note = available_model(config)
     default_output = {flag for flags in OUTPUT_FLAGS.values() for flag, _, on in flags if on}
     initial_output = set(config.output) if config.output is not None else set(GUI_OUTPUT)
     missing = set(default_sliders()) - set(default_params())
@@ -170,6 +171,10 @@ def create_app(config):
                 "Analysis (to come)",
                 *[ui.nav_panel(name, ui.p(text, class_="text-muted mt-3")) for name, text in ANALYSIS_TABS],
             ),
+            ui.nav_panel("Calibration (to come)",
+                         ui.p("Calibration of model parameters against observations, with the ", ui.a("Optuna", href=OPTUNA_URL, target="_blank"),
+                              " parameter optimisation suite: to come.", class_="text-muted mt-3"),
+                         value="calibration"),
             ui.nav_panel("Help", help_tab(), value="help"),
             id="tab",
             selected="setup",
@@ -186,6 +191,8 @@ def create_app(config):
         state = RunState()
         setup = reactive.value(config)  # The applied settings of the Setup panel
         setup_problem = reactive.value(None)
+        if model_note:
+            ui.notification_show(model_note, type="warning", duration=None)
         browse = reactive.value(None)  # {"field", "kind", "folder"} of the open file browser
 
         @reactive.calc
@@ -452,7 +459,10 @@ def create_app(config):
             except (KeyError, OSError, RuntimeError) as error:
                 ui.notification_show(f"Could not load this run: {error}", type="error")
                 return
+            restored, model_note_for_run = available_model(restored)
             adopt(restored, keep_outcome=True)
+            if model_note_for_run:
+                ui.notification_show(model_note_for_run, type="warning", duration=None)
             show(outcome)
             ui.update_navs("tab", selected="results")
             ui.update_numeric("ha", value=ha_for(outcome.nagent))

@@ -392,4 +392,6 @@ PARAMETER_STYLE = """
 .param-label { cursor: help; }
 .tooltip-inner:has(.param-info) { max-width: 360px; text-align: left; }
 .param-source { margin-top: 0.4em; font-size: 0.85em; font-style: italic; }
+.card > .card-header { font-weight: 600; border: 2px solid var(--bs-primary); border-radius: var(--bs-card-inner-border-radius);
+  background: rgba(var(--bs-primary-rgb), 0.08); }
 """
