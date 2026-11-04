@@ -20,8 +20,11 @@ COLOUR_MAPS = {
 GRID_STEPS = (0.05, 0.1, 0.2, 0.25, 0.5, 1, 2, 5, 10, 20)
 GRATICULE = "rgba(11, 11, 11, 0.3)"
 AXIS_FONT = 14
-# Colour of each selected cell, on the map and in the plots
-CELL_COLOURS = ("#2a78d6", "#e34948")
+# Colour of each dot of the preview, on the map and in the plots; the first two are those of the cells
+# selected in the results
+DOT_COLOURS = ("#2a78d6", "#e34948", "#2a9d5c", "#d99a0b", "#8a4fd6", "#0f9aa8", "#d6559e", "#6b6a66")
+MAX_DOTS = len(DOT_COLOURS)
+CELL_COLOURS = DOT_COLOURS[:2]
 BOX = "#0b0b0b"
 CELL_BANDS = ("rgba(42, 120, 214, 0.2)", "rgba(227, 73, 72, 0.2)")
 NO_DATA = "#e6e5e0"
@@ -44,6 +47,42 @@ def next_cells(cells, lon, lat):
     used = {cell["colour"] for cell in kept}
     colour = next(index for index in range(len(CELL_COLOURS)) if index not in used)
     return [*kept, {"lon": lon, "lat": lat, "colour": colour}]
+
+
+def add_dot(dots, lon, lat):
+    """The dots with one more at a cell, in the first colour not in use; unchanged if the cell has one or there are
+    MAX_DOTS."""
+    if len(dots) >= MAX_DOTS or any(dot["lon"] == lon and dot["lat"] == lat for dot in dots):
+        return dots
+    colour = next(index for index in range(MAX_DOTS) if index not in {dot["colour"] for dot in dots})
+    return [*dots, {"lon": lon, "lat": lat, "colour": colour}]
+
+
+def move_dot(dots, index, lon, lat):
+    """The dots with the one at `index` moved to a cell, keeping its colour; unchanged if another dot is there."""
+    if not 0 <= index < len(dots) or any(i != index and dot["lon"] == lon and dot["lat"] == lat for i, dot in enumerate(dots)):
+        return dots
+    return [{**dot, "lon": lon, "lat": lat} if i == index else dot for i, dot in enumerate(dots)]
+
+
+def remove_dot(dots, index):
+    return [dot for i, dot in enumerate(dots) if i != index]
+
+
+def default_dot(field):
+    """The cell with data nearest to the middle of the cells with data in the first day of a field, as a dot."""
+    first = field.isel(time=0) if "time" in field.dims else field
+    values = first.values
+    rows, columns = np.nonzero(np.isfinite(values))
+    if rows.size == 0:
+        return None
+    lat, lon = first["lat"].values, first["lon"].values
+    middle = np.argmin((lat[rows] - lat[rows].mean()) ** 2 + (lon[columns] - lon[columns].mean()) ** 2)
+    return {"lon": float(lon[columns[middle]]), "lat": float(lat[rows[middle]]), "colour": 0}
+
+
+def dot_label(dot):
+    return f"{dot['lat']:.3f}°N, {dot['lon']:.3f}°E"
 
 
 def cell_envelope(members):
@@ -179,7 +218,8 @@ def grid_figure(grid, basemap=None, terrain=None):
     return figure
 
 
-def map_figure(data, grid, description, day, limits, cells=(), basemap=None, terrain=None, colour_map="Reds", log=False):
+def map_figure(data, grid, description, day, limits, cells=(), basemap=None, terrain=None, colour_map="Reds", log=False,
+               selected=None):
     """A day of a field. With a grid, only its simulated cells; without, every cell of the field, as for a driving file."""
     label, units = description
     if "time" in data.dims:
@@ -220,10 +260,11 @@ def map_figure(data, grid, description, day, limits, cells=(), basemap=None, ter
     figure.update_layout(meta={"date": date})
     _add_basemap(figure, basemap, terrain)
     _add_graticule(figure, data["lat"].values, data["lon"].values)
-    for cell in cells:
+    for index, cell in enumerate(cells):
         # A black box with a white fill shows over any colour of the data, and so does the X
-        # inside it, which has the colour of the cell's lines
-        for symbol, size, fill, line in (("square", 15, "white", BOX), ("x-thin", 9, CELL_COLOURS[cell["colour"]], CELL_COLOURS[cell["colour"]])):
+        # inside it, which has the colour of the cell's lines; the selected dot is larger
+        grow = 5 if index == selected else 0
+        for symbol, size, fill, line in (("square", 15 + grow, "white", BOX), ("x-thin", 9 + grow, DOT_COLOURS[cell["colour"]], DOT_COLOURS[cell["colour"]])):
             figure.add_trace(
                 go.Scatter(
                     x=[cell["lon"]], y=[cell["lat"]], mode="markers", hoverinfo="skip", showlegend=False,
@@ -263,7 +304,7 @@ def cell_figure(data, description, cells, day, seed=None, from_zero=True):
         figure.add_trace(
             go.Scatter(
                 x=data["time"].values, y=series.values.astype("float64"), mode="lines",
-                line={"width": 2, "color": CELL_COLOURS[cell["colour"]]}, name=_cell_label(series),
+                line={"width": 2, "color": DOT_COLOURS[cell["colour"]]}, name=_cell_label(series),
                 hovertemplate="%{y:.4g} " + units_label(units), showlegend=True,
             )
         )

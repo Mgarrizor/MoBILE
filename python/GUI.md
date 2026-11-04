@@ -64,7 +64,12 @@ Everything a run needs that is not a parameter or an output.
   their people. The region is part of the setup, applied with **Apply setup**, and the humans per agent in the
   sidebar are then those of the region.
 - **Preview driving files** draws a file as a map (rainfall and temperature by day, population density, age
-  structure) before you apply it, so mismatched grids show up early. Click a cell for its daily values.
+  structure) before you apply it, so mismatched grids show up early. **Dots on the map** mark cells whose daily
+  values are plotted below the map, one line per dot. There is one dot to start with, near the middle of the data.
+  A click on the map moves the highlighted dot; press **Add dot** and click the map to place another (up to 8,
+  each in its own colour). The dots are listed with their coordinates: click a row to highlight its dot, and its
+  cross to remove it. The dots stay while you switch between files on the same grid. The preview works while a run
+  is in progress.
 
 The settings are remembered for the next session in `~/.config/mobile/last_setup.json`.
 

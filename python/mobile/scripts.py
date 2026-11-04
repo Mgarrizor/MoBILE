@@ -320,6 +320,24 @@ $(document).on('shiny:updateinput', function(event) {
 """
 
 
+# The dots of the preview: a row selects its dot, its cross removes it
+DOTS_HANDLER = """
+$(document).on('click', '.dot-remove', function(event) {
+  event.stopPropagation();
+  Shiny.setInputValue('preview_dot_remove', {index: Number(this.dataset.index)}, {priority: 'event'});
+});
+$(document).on('click', '.dot-row', function() {
+  Shiny.setInputValue('preview_dot_select', {index: Number(this.dataset.index)}, {priority: 'event'});
+});
+$(document).on('keydown', '.dot-row', function(event) {
+  if ((event.key === 'Enter' || event.key === ' ') && event.target === this) {
+    event.preventDefault();
+    Shiny.setInputValue('preview_dot_select', {index: Number(this.dataset.index)}, {priority: 'event'});
+  }
+});
+"""
+
+
 BROWSER_HANDLER = """
 $(document).on('click', '.browse-entry', function(event) {
   event.preventDefault();
@@ -334,6 +352,12 @@ PARAMETER_STYLE = """
 .param-default .irs--shiny .irs-single:before { border-top-color: #8a8984; }
 .param-default label { color: var(--bs-secondary-color); }
 .param-swatch { display: inline-block; width: 0.8em; height: 0.8em; border-radius: 2px; margin-right: 0.3em; }
+.dots { max-width: 40rem; margin: 0.5rem auto 1rem; }
+.dot-row { display: flex; align-items: center; gap: 0.6rem; padding: 0.2rem 0.5rem; border: 1px solid transparent; border-radius: 4px; cursor: pointer; }
+.dot-row:hover { background: var(--bs-tertiary-bg); }
+.dot-row.selected { border-color: var(--bs-primary); background: var(--bs-tertiary-bg); }
+.dot-swatch { width: 0.9em; height: 0.9em; border-radius: 2px; flex: none; }
+.dot-remove { margin-left: auto; padding: 0 0.4rem; }
 .param-label { cursor: help; }
 .tooltip-inner:has(.param-info) { max-width: 360px; text-align: left; }
 .param-source { margin-top: 0.4em; font-size: 0.85em; font-style: italic; }

@@ -25,7 +25,10 @@ from mobile.rundir import create_run_dir, fill_template
 from mobile.app import free_port
 from mobile.layout import OUTPUT_FLAGS, logo_files
 from mobile.outcome import Outcome, RunState, run_label, run_name_problem
-from mobile.plots import age_figure, cell_envelope, colour_values, grid_step, map_figure, next_cells, units_label
+from mobile.plots import (
+    MAX_DOTS, add_dot, age_figure, cell_envelope, colour_values, default_dot, grid_step, map_figure, move_dot, next_cells,
+    remove_dot, units_label,
+)
 from mobile.setup_ui import setup_problems
 from mobile.variables import age_choices, age_groups, preferred_variable, resolve_variable, variable_choices
 from mobile.basemap import load_basemap
@@ -152,6 +155,47 @@ class TestConfig(unittest.TestCase):
             self.assertIn("out_EIR=.true.,", (run_dir / "output.txt").read_text())
             self.assertIn("out_I=.false.,", (run_dir / "output.txt").read_text())
             self.assertTrue((run_dir / "age_structure" / "cumm_age.txt").is_file())
+
+
+class TestDots(unittest.TestCase):
+    def test_added_in_the_first_free_colour_up_to_a_limit(self):
+        dots = []
+        for index in range(MAX_DOTS):
+            dots = add_dot(dots, float(index), 0.0)
+        self.assertEqual([dot["colour"] for dot in dots], list(range(MAX_DOTS)))
+        self.assertEqual(add_dot(dots, 99.0, 0.0), dots)
+        # A colour freed by removing a dot is used again
+        dots = add_dot(remove_dot(dots, 2), 50.0, 0.0)
+        self.assertEqual(dots[-1]["colour"], 2)
+        self.assertEqual(len(dots), MAX_DOTS)
+
+    def test_a_cell_has_one_dot(self):
+        dots = add_dot(add_dot([], 1.0, 1.0), 2.0, 2.0)
+        self.assertEqual(add_dot(dots, 1.0, 1.0), dots)
+        self.assertEqual(move_dot(dots, 0, 2.0, 2.0), dots)
+
+    def test_moved_dots_keep_their_colour_and_place_in_the_list(self):
+        dots = add_dot(add_dot([], 1.0, 1.0), 2.0, 2.0)
+        moved = move_dot(dots, 0, 3.0, 4.0)
+        self.assertEqual(moved[0], {"lon": 3.0, "lat": 4.0, "colour": 0})
+        self.assertEqual(moved[1], dots[1])
+        self.assertEqual(move_dot(dots, 5, 3.0, 4.0), dots)
+        self.assertEqual(remove_dot(dots, 0), [dots[1]])
+        self.assertEqual(remove_dot([], 0), [])
+
+    def test_default_dot_is_a_cell_with_data_near_the_middle(self):
+        import numpy as np
+        import xarray as xr
+
+        values = np.full((5, 5), np.nan)
+        values[0, 0] = values[4, 4] = values[2, 3] = 1.0
+        field = xr.DataArray(values, dims=("lat", "lon"), coords={"lat": np.arange(5.0), "lon": np.arange(5.0) * 10})
+        # The middle of the three cells is lat 2.0, lon 23.3: the cell at lat 2, lon 30 is the nearest
+        self.assertEqual(default_dot(field), {"lon": 30.0, "lat": 2.0, "colour": 0})
+        # The first day of a daily field
+        daily = field.expand_dims(time=[0, 1])
+        self.assertEqual(default_dot(daily), default_dot(field))
+        self.assertIsNone(default_dot(field.where(False)))
 
 
 class TestSeedEnvelope(unittest.TestCase):
