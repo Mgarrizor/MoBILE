@@ -401,10 +401,14 @@ def send_figure(session, plot_id, figure):
     return session.send_custom_message("plot", {"id": plot_id, "figure": json.loads(figure.to_json())})
 
 
-# Sensitivity analysis: S1, and the rest of ST (interactions) stacked on it, in one hue; each seed in ink
+# Sensitivity analysis: S1, and the rest of ST (interactions) stacked on it, in one hue. Marks drawn over them in
+# colours that stand out on the light and the dark theme alike (contrast over 3 on both): amber, as stochastic analyses
+# in the card, and a mid grey; the dark ink of other figures cannot be seen on the dark theme.
 S1_COLOUR = "#2a78d6"
 INTERACTION_COLOUR = "#9ec2ee"
-SEED_MARK = "#0b0b0b"
+AMBER = "#d97706"
+AMBER_FILL = "rgba(217, 119, 6, 0.3)"
+INTERVAL = "#8a8984"
 
 
 def indices_figure(result):
@@ -430,8 +434,8 @@ def indices_figure(result):
     # The intervals left (S1) and right (ST) of the middle of the bar, so that close ones do not hide each other
     for key, value, offset in (("S1", s1, -0.08), ("ST", st, 0.08)):
         figure.add_trace(go.Scatter(
-            x=x + offset, y=value, mode="markers", marker={"size": 1, "color": TEXT}, showlegend=False, hoverinfo="skip",
-            error_y={"type": "data", "array": mean[f"{key}_conf"][order], "color": TEXT, "thickness": 1.5, "width": 4},
+            x=x + offset, y=value, mode="markers", marker={"size": 1, "color": INTERVAL}, showlegend=False, hoverinfo="skip",
+            error_y={"type": "data", "array": mean[f"{key}_conf"][order], "color": INTERVAL, "thickness": 1.5, "width": 4},
         ))
     if "each" in result:
         seeds = result["seeds"]
@@ -439,7 +443,7 @@ def indices_figure(result):
             values = result["each"][key][:, order]
             figure.add_trace(go.Scatter(
                 x=np.repeat(x + offset, len(seeds)), y=values.T.ravel(), mode="markers", name=f"{key} of each seed",
-                marker={"symbol": symbol, "size": 8, "color": SEED_MARK, "line": {"width": 1.5, "color": SEED_MARK}}, opacity=0.75,
+                marker={"symbol": symbol, "size": 8, "color": AMBER, "line": {"width": 1.5, "color": AMBER}},
                 customdata=np.tile(seeds, len(names)), hovertext=np.repeat(names, len(seeds)),
                 hovertemplate="%{hovertext}, seed %{customdata}<br>" + key + " = %{y:.3f}<extra></extra>",
             ))
@@ -447,7 +451,7 @@ def indices_figure(result):
         barmode="overlay", plot_bgcolor="white", bargap=0.3,
         legend={"orientation": "h", "y": -0.18},
         xaxis={"tickvals": x, "ticktext": names, "tickfont": {"size": AXIS_FONT}, "showgrid": False},
-        yaxis={"title_text": "Share of the variance", "gridcolor": GRID, "zeroline": True, "zerolinecolor": TEXT,
+        yaxis={"title_text": "Share of the variance", "gridcolor": GRID, "zeroline": True, "zerolinecolor": INTERVAL,
                "range": [min(0.0, float(np.nanmin(s1 - mean["S1_conf"][order]))) - 0.02, max(1.0, float(np.nanmax(st + mean["ST_conf"][order]))) + 0.02]},
     )
     return figure
@@ -512,7 +516,7 @@ def climate_figure(result, name, key):
         # WebGL only when SVG would be slow: some browsers have none
         points = go.Scattergl if usable.sum() > 5000 else go.Scatter
         figure.add_trace(points(
-            x=x[usable], y=values[usable], mode="markers", marker={"size": 5, "color": S1_COLOUR, "opacity": 0.35},
+            x=x[usable], y=values[usable], mode="markers", marker={"size": 6, "color": S1_COLOUR, "opacity": 0.5},
             name="Cells", showlegend=column == 1, hovertemplate=f"{label}: %{{x:.3g}}<br>{short} = %{{y:.3f}}<extra></extra>",
         ), row=1, col=column)
         if usable.sum() >= 20:
@@ -521,7 +525,7 @@ def climate_figure(result, name, key):
             filled = [b for b in range(len(edges) - 1) if (bins == b).any()]
             figure.add_trace(go.Scatter(
                 x=[np.median(x[usable][bins == b]) for b in filled], y=[np.median(values[usable][bins == b]) for b in filled],
-                mode="lines+markers", line={"color": SEED_MARK, "width": 2}, marker={"size": 8},
+                mode="lines+markers", line={"color": AMBER, "width": 2}, marker={"size": 8},
                 name="Median in each tenth of the cells", showlegend=column == 1,
                 hovertemplate=f"{label}: %{{x:.3g}}<br>median {short} = %{{y:.3f}}<extra></extra>",
             ), row=1, col=column)
@@ -543,7 +547,7 @@ def monthly_figure(result, name, key):
     figure = go.Figure(layout=_base_layout(title=f"{key} of {name}, month by month: {result['description']}"))
     figure.add_trace(go.Box(
         x=labels, lowerfence=spread[:, 0], q1=spread[:, 1], median=spread[:, 2], q3=spread[:, 3], upperfence=spread[:, 4],
-        name="Cells: 10th, 25th, 50th, 75th, 90th percentiles", fillcolor=INTERACTION_COLOUR, line={"color": S1_COLOUR, "width": 1.5},
+        name="Cells: 10th, 25th, 50th, 75th, 90th percentiles", fillcolor=AMBER_FILL, line={"color": AMBER, "width": 1.5},
         width=0.5, hoverinfo="skip",
     ))
     figure.add_trace(go.Scatter(
@@ -554,8 +558,8 @@ def monthly_figure(result, name, key):
     ))
     line, conf = result["line"][key][:, j], result["line"][f"{key}_conf"][:, j]
     figure.add_trace(go.Scatter(
-        x=labels, y=line, mode="lines+markers", line={"color": SEED_MARK, "width": 2}, marker={"size": 8, "color": SEED_MARK},
-        error_y={"type": "data", "array": conf, "color": SEED_MARK, "thickness": 1.5, "width": 4},
+        x=labels, y=line, mode="lines+markers", line={"color": S1_COLOUR, "width": 2}, marker={"size": 8, "color": S1_COLOUR},
+        error_y={"type": "data", "array": conf, "color": S1_COLOUR, "thickness": 1.5, "width": 4},
         name="Of the mean over the cells, ± 95% interval", customdata=conf,
         hovertemplate="%{x}<br>" + key + " of the mean over the cells = %{y:.3f} ± %{customdata:.3f}<extra></extra>",
     ))
@@ -563,7 +567,7 @@ def monthly_figure(result, name, key):
         seeds = result["seeds"]
         figure.add_trace(go.Scatter(
             x=np.repeat(labels, len(seeds)), y=result["each"][key][:, :, j].ravel(), mode="markers",
-            marker={"symbol": "circle-open", "size": 8, "color": SEED_MARK, "line": {"width": 1.5}}, opacity=0.75,
+            marker={"symbol": "circle-open", "size": 9, "color": S1_COLOUR, "line": {"width": 1.5}},
             name="Of the mean over the cells, each seed", customdata=np.tile(seeds, len(labels)),
             hovertemplate="%{x}, seed %{customdata}<br>" + key + " = %{y:.3f}<extra></extra>",
         ))
@@ -572,7 +576,7 @@ def monthly_figure(result, name, key):
     figure.update_layout(
         plot_bgcolor="white", legend={"orientation": "h", "y": -0.18},
         xaxis={"type": "category", "showgrid": False, "tickfont": {"size": AXIS_FONT}},
-        yaxis={"title_text": f"{key}: share of the variance", "gridcolor": GRID, "zeroline": True, "zerolinecolor": TEXT,
+        yaxis={"title_text": f"{key}: share of the variance", "gridcolor": GRID, "zeroline": True, "zerolinecolor": INTERVAL,
                "range": [low - 0.02, high + 0.02]},
     )
     return figure
