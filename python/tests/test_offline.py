@@ -32,7 +32,7 @@ from mobile.plots import (
     MAX_DOTS, add_dot, age_figure, cell_envelope, climate_figure, colour_values, default_dot, grid_step, index_map_figure,
     indices_figure, map_figure, monthly_figure, move_dot, next_cells, remove_dot, second_order_figure, units_label,
 )
-from mobile.setup_ui import setup_problems
+from mobile.setup_ui import AVAILABLE_MODEL, MODEL_TO_COME_NOTE, _model_select, available_model, setup_problems
 from mobile.variables import age_choices, age_groups, preferred_variable, resolve_variable, variable_choices
 from mobile.basemap import load_basemap
 from mobile.driving import field_limits, mean_age, open_field, read_age
@@ -352,6 +352,32 @@ class TestRunName(unittest.TestCase):
         self.assertTrue(run_label("runs/kenya_e0", manifest).startswith("kenya_e0 (2026-11-02 21:05:12): "))
         self.assertTrue(run_label("runs/20261102-210512-ab12", manifest).startswith("2026-11-02 21:05:12: "))
         self.assertTrue(run_label("runs/seed_band_20261102-210512-ab12", {**manifest, "seeds": [1, 2]}).startswith("2026-11-02 21:05:12: "))
+
+
+class TestModelChoice(unittest.TestCase):
+    """The cholera model is listed as to come: not selectable, and a setup with it runs VECTRI-ABM in the GUI."""
+
+    def setUp(self):
+        work_in_a_scratch_folder(self)
+
+    def test_model_to_come_falls_back(self):
+        example = Config.load(CONFIG)
+        cholera = replace(example, run={**example.run, "disID": 0})
+        config, note = available_model(cholera)
+        self.assertEqual(config.run["disID"], AVAILABLE_MODEL)
+        self.assertEqual(note, MODEL_TO_COME_NOTE)
+        self.assertEqual({key: value for key, value in config.run.items() if key != "disID"},
+                         {key: value for key, value in cholera.run.items() if key != "disID"})
+
+    def test_available_model_unchanged(self):
+        example = Config.load(CONFIG)
+        self.assertEqual(example.run["disID"], 1)
+        self.assertEqual(available_model(example), (example, None))
+
+    def test_menu_greys_out_cholera(self):
+        menu = str(_model_select("1"))
+        self.assertRegex(menu, r'<option value="0" disabled[^>]*>Cholera model \(to come\)</option>')
+        self.assertNotRegex(menu, r'<option value="1"[^>]*disabled')
 
 
 class TestSetup(unittest.TestCase):

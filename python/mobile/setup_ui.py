@@ -1,5 +1,7 @@
 """The Setup tab: choosing the driving files and previewing them."""
 
+from dataclasses import replace
+
 from shiny import ui
 
 from .checks import driving_days
@@ -13,7 +15,30 @@ SUFFIX_NAMES = {"netcdf": ("netCDF (.nc)",), "text": ("text (.txt, .csv)",), "fo
 
 
 FILE_LABELS = {key: label for key, label, _ in (*REQUIRED_FILES, *OPTIONAL_FILES)}
-MODEL_CHOICES = {"1": "VECTRI-ABM (malaria)", "0": "Cholera"}
+MODEL_CHOICES = {"1": "VECTRI-ABM (malaria)", "0": "Cholera model (to come)"}
+MODELS_TO_COME = {0}  # disID listed in the menu, greyed out: not tested yet
+AVAILABLE_MODEL = 1
+MODEL_TO_COME_NOTE = "Cholera model is not available yet; VECTRI-ABM is selected."
+
+
+def available_model(config):
+    """(config, note): a setup with a model still to come runs VECTRI-ABM instead, with a note saying so.
+    Only in the GUI: `mobile run` still runs any model."""
+    if config.run["disID"] not in MODELS_TO_COME:
+        return config, None
+    return replace(config, run={**config.run, "disID": AVAILABLE_MODEL}), MODEL_TO_COME_NOTE
+
+
+def _model_select(selected):
+    """The model menu, with the models still to come shown but not selectable."""
+    menu = ui.input_select("setup_disID", "Model", MODEL_CHOICES, selected=selected)
+    pending = [menu]
+    while pending:
+        tag = pending.pop()
+        if getattr(tag, "name", None) == "option" and int(tag.attrs["value"]) in MODELS_TO_COME:
+            tag.attrs["disabled"] = ""
+        pending.extend(getattr(tag, "children", []))
+    return menu
 
 
 def _path_input(id, label, value, kind):
@@ -49,7 +74,7 @@ def setup_tab(config):
     run_box = ui.card(
         ui.card_header("Run parameters"),
         ui.input_text("setup_project", "Project", value=config.project, width="100%"),
-        ui.input_select("setup_disID", "Model", MODEL_CHOICES, selected=str(run["disID"])),
+        _model_select(str(run["disID"])),
         ui.tags.label("Period to simulate (default: all the driving data)", class_="form-label mb-1"),
         ui.layout_columns(
             ui.input_date("setup_start", "Start", value=start, min=first, max=last, format="yyyy-mm-dd"),

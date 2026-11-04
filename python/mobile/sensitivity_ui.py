@@ -13,7 +13,7 @@ from shiny import reactive, render, ui
 
 from .basemap import load_basemap
 from .config import ConfigError, SLIDER_GROUPS
-from .layout import HA_BELOW_ONE, OUTPUT_FLAGS, parameter_label, with_tip
+from .layout import HA_BELOW_ONE, OUTPUT_FLAGS, SALIB_URL, parameter_label, with_tip
 from .outcome import run_name_problem
 from .plots import climate_figure, index_map_figure, indices_figure, monthly_figure, second_order_figure, send_figure
 from .sensitivity import DISTRIBUTIONS, Metric, SampledParameter, design_problems, run_count_formula
@@ -111,7 +111,7 @@ def _how_calculated():
                        "remain, on average, if every other parameter were known. ", strong("ST − S1"), ": through interactions only. ",
                        strong("S2"), ": what a pair explains together, beyond each alone. The S1 add up to 1 only if no parameter "
                        "interacts with another."),
-            ui.tags.li(strong("Estimates. "), "SALib's estimators (Saltelli 2010 for S1 and S2, Jansen 1999 for ST) on the "
+            ui.tags.li(strong("Estimates. "), ui.a("SALib", href=SALIB_URL, target="_blank"), "'s estimators (Saltelli 2010 for S1 and S2, Jansen 1999 for ST) on the "
                        "N(2D+2) or N(D+2) runs of the Sobol design. Whiskers are 95% confidence intervals from 100 bootstrap "
                        "resamples of the N samples. A small N gives wide intervals, and values a little below 0 or above 1: "
                        "a larger N narrows them."),

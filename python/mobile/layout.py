@@ -20,6 +20,9 @@ LOGO_SUFFIXES = (".png", ".svg", ".jpg", ".jpeg")
 FUNDER_PLACEHOLDERS = 3
 CODE_DOCS_URL = "https://mgarrizor.github.io/MoBILE/"  # FORD, built from the source code
 USER_DOCS_URL = "https://mobile-ictp.readthedocs.io/en/latest/"  # Sphinx, on Read the Docs
+SALIB_URL = "https://salib.readthedocs.io/"
+VECTRI_DOCS_URL = "https://users.ictp.it/~tompkins/vectri/documentation/"  # The VECTRI model, which VECTRI-ABM builds on
+OPTUNA_URL = "https://optuna.org/"
 GUI_OUTPUT = ("out_EIR", "out_vect")  # What a run writes unless changed in the Outputs tab
 
 
@@ -225,13 +228,15 @@ def help_tab():
 
 def docs():
     """The documentation built with the package, readable offline; a placeholder until there is one."""
-    code_docs = ui.p("Documentation of the source code: ", ui.a(CODE_DOCS_URL, href=CODE_DOCS_URL, target="_blank"), class_="small")
-    online = ui.p("User documentation online: ", ui.a(USER_DOCS_URL, href=USER_DOCS_URL, target="_blank"), class_="small")
+    vectri = ui.p("VECTRI documentation: ", ui.a(VECTRI_DOCS_URL, href=VECTRI_DOCS_URL, target="_blank"), class_="small")
+    code_docs = ui.p("Documentation of the source code (under construction): ", ui.a(CODE_DOCS_URL, href=CODE_DOCS_URL, target="_blank"), class_="small")
+    online = ui.p("User documentation online (under construction): ", ui.a(USER_DOCS_URL, href=USER_DOCS_URL, target="_blank"), class_="small")
     if not (ASSETS / "docs" / "index.html").is_file():
-        return ui.div(ui.p("The user documentation is not included in this installation.", class_="text-muted mt-3"), online, code_docs)
+        return ui.div(ui.p("The user documentation is not included in this installation.", class_="text-muted mt-3"), vectri, online, code_docs)
     return ui.div(
         ui.p(ui.a("Open in a new window", href="/assets/docs/index.html", target="_blank"), class_="small mt-3 mb-2"),
         ui.tags.iframe(src="/assets/docs/index.html", title="Documentation", style="width: 100%; height: 80vh; border: 1px solid var(--bs-border-color);"),
+        vectri,
         online,
         code_docs,
     )

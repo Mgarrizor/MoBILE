@@ -28,8 +28,9 @@ folder in the Setup tab.
 ## The page
 
 The tabs follow the order of the work: **1. Setup**, **2. Parameters**, **3. Results**. The GUI opens on Setup.
-The sidebar, always visible, starts runs and loads earlier ones. The **Analysis (to come)** menu holds tabs that
-are not implemented yet (Time series, Demography, Mobility); the sensitivity analysis is in **2. Parameters**. **Help** has a short
+The sidebar, always visible, starts runs and loads earlier ones. The **Analysis (to come)** menu and the **Calibration (to come)** tab hold
+work that is not implemented yet (Analysis: Time series, Demography, Mobility; Calibration: with the
+[Optuna](https://optuna.org/) parameter optimisation suite); the sensitivity analysis is in **2. Parameters**. **Help** has a short
 guide and the documentation. Hover over ⓘ beside a setting for an explanation.
 
 **Light**, **System** and **Dark** at the top right set the colours of the page and of the plots. *System*
@@ -91,7 +92,7 @@ The settings are remembered for the next session in `~/.config/mobile/last_setup
 ### Sensitivity analysis
 
 How much of the variance of an output each parameter explains, from many runs with the parameters drawn from their
-distributions (SALib, Sobol). It uses the setup applied in tab 1, the HA and seed of the sidebar, and every
+distributions ([SALib](https://salib.readthedocs.io/), Sobol). It uses the setup applied in tab 1, the HA and seed of the sidebar, and every
 parameter not sampled at its slider value.
 
 1. **Parameters to sample**: tick at least two, by group. Choose a distribution (uniform, log-uniform, normal or

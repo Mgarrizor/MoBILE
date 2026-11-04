@@ -165,7 +165,7 @@ Sensitivity analysis
 
 The **Sensitivity analysis (Sobol)** card, in the Parameters tab, runs the model for many combinations of the
 parameters you tick, drawn from their distributions (uniform, log-uniform, or normal and log-normal truncated to
-their bounds), with the setup applied in the Setup tab. It uses SALib's Sobol method: N base samples give N(2D+2)
+their bounds), with the setup applied in the Setup tab. It uses `SALib <https://salib.readthedocs.io/>`_'s Sobol method: N base samples give N(2D+2)
 runs for D parameters with second-order indices, N(D+2) without. With **Stochastic**, the whole analysis is
 repeated for several seeds with the same samples.
 
