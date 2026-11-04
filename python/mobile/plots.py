@@ -409,8 +409,8 @@ SEED_MARK = "#0b0b0b"
 
 def indices_figure(result):
     """S1 and ST of each parameter, most influential first: a bar of S1 with the interactions (ST − S1) on top, so
-    that the whole bar is ST, each with its 95% confidence interval; with several seeds, the indices of each seed alone
-    as dots."""
+    that the whole bar is ST, with the 95% confidence intervals of S1 (left) and ST (right); with several seeds, the
+    indices of each seed alone as dots, S1 on the left and ST on the right."""
     mean = result["mean"]
     order = np.argsort(-np.nan_to_num(mean["ST"]))
     names = [result["parameters"][j] for j in order]
@@ -419,19 +419,23 @@ def indices_figure(result):
     figure = go.Figure(layout=_base_layout(title=f"Sobol indices of {result['description']}"))
     figure.add_trace(go.Bar(
         x=x, y=s1, name="S1: alone", marker={"color": S1_COLOUR, "cornerradius": 4}, width=0.6,
-        error_y={"type": "data", "array": mean["S1_conf"][order], "color": TEXT, "thickness": 1.5, "width": 4},
         customdata=np.column_stack([s1, mean["S1_conf"][order]]),
         hovertemplate="%{hovertext}<br>S1 = %{customdata[0]:.3f} ± %{customdata[1]:.3f}<extra></extra>", hovertext=names,
     ))
     figure.add_trace(go.Bar(
         x=x, y=st - s1, base=s1, name="ST − S1: with others", marker={"color": INTERACTION_COLOUR, "cornerradius": 4}, width=0.6,
-        error_y={"type": "data", "array": mean["ST_conf"][order], "color": TEXT, "thickness": 1.5, "width": 4},
         customdata=np.column_stack([st, mean["ST_conf"][order], st - s1]),
         hovertemplate="%{hovertext}<br>ST = %{customdata[0]:.3f} ± %{customdata[1]:.3f}<br>ST − S1 = %{customdata[2]:.3f}<extra></extra>", hovertext=names,
     ))
+    # The intervals left (S1) and right (ST) of the middle of the bar, so that close ones do not hide each other
+    for key, value, offset in (("S1", s1, -0.08), ("ST", st, 0.08)):
+        figure.add_trace(go.Scatter(
+            x=x + offset, y=value, mode="markers", marker={"size": 1, "color": TEXT}, showlegend=False, hoverinfo="skip",
+            error_y={"type": "data", "array": mean[f"{key}_conf"][order], "color": TEXT, "thickness": 1.5, "width": 4},
+        ))
     if "each" in result:
         seeds = result["seeds"]
-        for key, symbol, offset in (("S1", "circle", -0.12), ("ST", "diamond-open", 0.12)):
+        for key, symbol, offset in (("S1", "circle", -0.2), ("ST", "diamond-open", 0.2)):
             values = result["each"][key][:, order]
             figure.add_trace(go.Scatter(
                 x=np.repeat(x + offset, len(seeds)), y=values.T.ravel(), mode="markers", name=f"{key} of each seed",
@@ -491,7 +495,7 @@ def index_map_figure(result, name, key, basemap=None):
     grid[result["cells"]] = values
     data = xr.DataArray(grid.reshape(lat.size, lon.size), dims=("lat", "lon"), coords={"lat": lat, "lon": lon})
     figure = map_figure(data, None, (title, ""), 1, limits, basemap=basemap, colour_map=colours)
-    figure.update_layout(title=f"{title}. No colour: not simulated, or the output does not change")
+    figure.update_layout(title=f"{title}. No colour: not simulated, or the output does not change", meta={"date": "", "colourBarBeside": True})
     return figure
 
 
@@ -526,4 +530,49 @@ def climate_figure(result, name, key):
     figure.update_layout(plot_bgcolor="white", legend={"orientation": "h", "y": -0.25})
     if not climate:
         figure.add_annotation(text="The outputs have no rainfall or temperature to compare with.", showarrow=False, x=0.5, y=0.5, xref="paper", yref="paper")
+    return figure
+
+
+def monthly_figure(result, name, key):
+    """An index of one parameter month by month: a box of its value in each cell, from the 10th to the 90th percentile
+    across the cells with the 25th, 50th and 75th, and the index of the mean over the cells with its 95% confidence
+    interval; with several seeds, that of each seed alone as dots."""
+    j = result["parameters"].index(name)
+    labels = [str(month)[:7] for month in result["months"]]
+    spread = result["spread"][key][:, j]
+    figure = go.Figure(layout=_base_layout(title=f"{key} of {name}, month by month: {result['description']}"))
+    figure.add_trace(go.Box(
+        x=labels, lowerfence=spread[:, 0], q1=spread[:, 1], median=spread[:, 2], q3=spread[:, 3], upperfence=spread[:, 4],
+        name="Cells: 10th, 25th, 50th, 75th, 90th percentiles", fillcolor=INTERACTION_COLOUR, line={"color": S1_COLOUR, "width": 1.5},
+        width=0.5, hoverinfo="skip",
+    ))
+    figure.add_trace(go.Scatter(
+        x=labels, y=spread[:, 2], mode="markers", marker={"size": 18, "opacity": 0}, showlegend=False,
+        customdata=np.column_stack([spread, result["cells_used"]]),
+        hovertemplate="%{x}, across %{customdata[5]} cells<br>90th: %{customdata[4]:.3f}<br>75th: %{customdata[3]:.3f}"
+                      "<br>median: %{customdata[2]:.3f}<br>25th: %{customdata[1]:.3f}<br>10th: %{customdata[0]:.3f}<extra></extra>",
+    ))
+    line, conf = result["line"][key][:, j], result["line"][f"{key}_conf"][:, j]
+    figure.add_trace(go.Scatter(
+        x=labels, y=line, mode="lines+markers", line={"color": SEED_MARK, "width": 2}, marker={"size": 8, "color": SEED_MARK},
+        error_y={"type": "data", "array": conf, "color": SEED_MARK, "thickness": 1.5, "width": 4},
+        name="Of the mean over the cells, ± 95% interval", customdata=conf,
+        hovertemplate="%{x}<br>" + key + " of the mean over the cells = %{y:.3f} ± %{customdata:.3f}<extra></extra>",
+    ))
+    if "each" in result:
+        seeds = result["seeds"]
+        figure.add_trace(go.Scatter(
+            x=np.repeat(labels, len(seeds)), y=result["each"][key][:, :, j].ravel(), mode="markers",
+            marker={"symbol": "circle-open", "size": 8, "color": SEED_MARK, "line": {"width": 1.5}}, opacity=0.75,
+            name="Of the mean over the cells, each seed", customdata=np.tile(seeds, len(labels)),
+            hovertemplate="%{x}, seed %{customdata}<br>" + key + " = %{y:.3f}<extra></extra>",
+        ))
+    low = float(np.nanmin(np.r_[spread[:, 0], line - conf, 0.0]))
+    high = float(np.nanmax(np.r_[spread[:, 4], line + conf, 1.0]))
+    figure.update_layout(
+        plot_bgcolor="white", legend={"orientation": "h", "y": -0.18},
+        xaxis={"type": "category", "showgrid": False, "tickfont": {"size": AXIS_FONT}},
+        yaxis={"title_text": f"{key}: share of the variance", "gridcolor": GRID, "zeroline": True, "zerolinecolor": TEXT,
+               "range": [low - 0.02, high + 0.02]},
+    )
     return figure

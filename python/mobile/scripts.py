@@ -232,7 +232,7 @@ function placeColourBar(plot) {
 // A plot drawn while its tab was hidden has no size: fit the plots when their tab is shown again.
 // A map playing in a tab that is now hidden stops.
 $(document).on('shown.bs.tab', function() {
-  for (const id of ['map', 'cell_plot', 'envelope_plot', 'preview_map', 'preview_cell_plot', 'region_map', 'sa_indices', 'sa_pairs', 'sa_map', 'sa_climate']) {
+  for (const id of ['map', 'cell_plot', 'envelope_plot', 'preview_map', 'preview_cell_plot', 'region_map', 'sa_indices', 'sa_pairs', 'sa_map', 'sa_climate', 'sa_monthly']) {
     const plot = document.getElementById(id);
     if (plot && plot.data && plot.offsetParent !== null) Plotly.Plots.resize(plot);
   }
@@ -269,6 +269,12 @@ Shiny.addCustomMessageHandler('plot', function(message) {
   }
   const plot = document.getElementById(message.id);
   plot.plain = plain;
+  // A map without a player, as those of the sensitivity analysis: its colour bar beside it too
+  if (!player && (layout.meta || {}).colourBarBeside && !plot.colourBarPlaced) {
+    plot.colourBarPlaced = true;
+    plot.on('plotly_afterplot', function() { placeColourBar(plot); });
+  }
+  if (!player && (layout.meta || {}).colourBarBeside) drawing.then(() => placeColourBar(plot));
   if (player) updateCellGrid(plot);
   if (player && !plot.clickReported) {
     plot.clickReported = true;

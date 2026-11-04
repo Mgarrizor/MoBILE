@@ -30,7 +30,7 @@ from mobile.layout import OUTPUT_FLAGS, logo_files
 from mobile.outcome import Outcome, RunState, run_label, run_name_problem
 from mobile.plots import (
     MAX_DOTS, add_dot, age_figure, cell_envelope, climate_figure, colour_values, default_dot, grid_step, index_map_figure,
-    indices_figure, map_figure, move_dot, next_cells, remove_dot, second_order_figure, units_label,
+    indices_figure, map_figure, monthly_figure, move_dot, next_cells, remove_dot, second_order_figure, units_label,
 )
 from mobile.setup_ui import setup_problems
 from mobile.variables import age_choices, age_groups, preferred_variable, resolve_variable, variable_choices
@@ -47,7 +47,7 @@ from mobile.grid import pop_coordinates, read_grid
 from mobile.region import axis_range, cut_inputs, region_problems
 from mobile.runner import ProgressParser, RunCancelled, Runner, RunnerBusy, macos_sdk, run_environment
 from mobile.sensitivity_results import (
-    analyse_study, cell_dataset, chance_share, complete_seeds, describe_metric, indices_table, metric_key,
+    PERCENTILES, analyse_study, cell_dataset, chance_share, complete_seeds, describe_metric, indices_table, metric_key, monthly_table,
 )
 from mobile.sensitivity_runs import (
     RECORD, SAMPLES, StudyState, create_study, list_studies, read_study, run_finished, run_name, run_study, study_label, studies_dir,
@@ -892,6 +892,7 @@ class TestStudyRuns(unittest.TestCase):
     FAKE = """#!/bin/bash
 sleep ${FAKE_SLEEP:-0}
 echo '================= Running MoBILE ================='
+[ -n "$FAKE_FAIL" ] && { echo ' More agents than people! --> STOP'; exit 0; }
 mkdir -p output && touch output/output.nc
 echo 'Program finished successfully'
 """
@@ -946,6 +947,17 @@ echo 'Program finished successfully'
         self.assertIn(str(folder / "inputs" / "rain_file.nc"), script)
         self.assertFalse((folder / "runs" / run_name(3, 0) / "inputs").exists())
 
+    def test_stops_when_runs_fail_alike(self):
+        folder = create_study(self.config, self.parameters, 8, False, [1], sample_seed=1)  # 8 × 4 = 32 runs
+        with mock.patch.dict(os.environ, {"FAKE_FAIL": "1"}):
+            record = run_study(folder, StudyState(), parallel=1)
+        self.assertEqual((record["status"], record["finished"], record["failed"]), ("stopped", 0, 3))
+        self.assertIn("More agents than people", record["failure"])
+        self.assertIn("stopped, 0 of 32 done", study_label(folder, record))
+        # Fixed: resuming runs them all
+        record = run_study(folder, StudyState(), parallel=4)
+        self.assertEqual((record["status"], record["finished"]), ("finished", 32))
+
     def test_cancel_and_resume(self):
         import threading
         import time
@@ -971,10 +983,11 @@ echo 'Program finished successfully'
         self.assertEqual(state.done_before, done)
 
 
-def write_known_study(root, n, seeds=(1,), second_order=False, noise=0.0, days=40, shape=(4, 5), hole=(0, 0)):
+def write_known_study(root, n, seeds=(1,), second_order=False, noise=0.0, days=40, shape=(4, 5), hole=(0, 0), swap_day=None):
     """A sensitivity analysis on disk whose outputs come from a model with known indices, not from MoBILE: x1, x2, x3
     uniform on [0, 1], and EIR = a·x1 + b·x2 + noise in every populated cell and day, with a = rain / 10 and b = temperature / 10
-    of the cell, so that S1 = a² / (a² + b²) for x1, b² / (a² + b²) for x2, and 0 for x3. Returns (folder, a, b)."""
+    of the cell, so that S1 = a² / (a² + b²) for x1, b² / (a² + b²) for x2, and 0 for x3. From day swap_day on, x1 and
+    x2 swap their weights. Returns (folder, a, b)."""
     root = Path(root).resolve()
     lat, lon = np.linspace(-1, 1, shape[0]), np.linspace(30, 32, shape[1])
     pop = np.full(shape, 100.0)
@@ -1001,6 +1014,10 @@ def write_known_study(root, n, seeds=(1,), second_order=False, noise=0.0, days=4
             (run_dir / "output").mkdir(parents=True)
             eir = a * x1 + b * x2 + noise * noise_of.standard_normal(shape)
             eir[hole] = 1000 * x3  # Would make x3 matter, were the cell without population counted
+            daily = np.broadcast_to(eir, (days, *shape)).copy()
+            if swap_day is not None:
+                daily[swap_day:] = b * x1 + a * x2
+                daily[swap_day:, hole[0], hole[1]] = 1000 * x3
             with netCDF4.Dataset(run_dir / "output" / "output.nc", "w") as dataset:
                 for name, size in (("time", days), ("lat", lat.size), ("lon", lon.size)):
                     dataset.createDimension(name, size)
@@ -1009,7 +1026,7 @@ def write_known_study(root, n, seeds=(1,), second_order=False, noise=0.0, days=4
                 time[:] = np.arange(days)
                 dataset.createVariable("lat", "f8", ("lat",))[:] = lat
                 dataset.createVariable("lon", "f8", ("lon",))[:] = lon
-                for group, name, field in (("Human", "EIR", eir), ("Climate", "rain", rain), ("Climate", "t2m", temperature)):
+                for group, name, field in (("Human", "EIR", daily), ("Climate", "rain", rain), ("Climate", "t2m", temperature)):
                     variable = dataset.createGroup(group).createVariable(name, "f4", ("time", "lat", "lon"))
                     variable.units = "day^-1"
                     variable[:] = np.broadcast_to(field, (days, *shape))
@@ -1074,6 +1091,33 @@ class TestStudyResults(unittest.TestCase):
         self.assertTrue(np.isnan(maps["ST"].values[:, 0, 0]).all())
         for figure in (index_map_figure(result, "x2", "ST"), climate_figure(result, "x2", "S1")):
             figure.to_json()
+
+    def test_month_by_month(self):
+        # x1 and x2 swap their weights on 1 February: the indices of January and February swap too
+        folder, a, b = write_known_study(self.root, 128, seeds=(1, 2), days=75, swap_day=31)
+        metric = Metric("EIR", "sum", "none", months=(1, 2), by_month=True)
+        result = analyse_study(folder, read_study(folder), metric)
+        self.assertEqual([str(month) for month in result["months"]], ["2012-01-01", "2012-02-01"])
+        self.assertEqual(list(result["cells_used"]), [19, 19])
+        january = (a**2 / (a**2 + b**2))[self.populated]
+        expected = np.percentile(january, PERCENTILES)
+        np.testing.assert_allclose(result["spread"]["S1"][0, 0], expected, atol=0.03)  # x1 in January
+        np.testing.assert_allclose(result["spread"]["S1"][1, 1], expected, atol=0.03)  # x2 in February
+        mean_a, mean_b = a[self.populated].mean(), b[self.populated].mean()
+        line = mean_a**2 / (mean_a**2 + mean_b**2)
+        np.testing.assert_allclose(result["line"]["S1"][:, 0], [line, 1 - line], atol=0.03)
+        self.assertEqual(result["each"]["S1"].shape, (2, 2, 3))
+        table = monthly_table(result)
+        self.assertEqual(len(table), 2 * 3 * 2)
+        self.assertIn("of_spatial_mean_seed_2", table)
+        monthly_figure(result, "x2", "ST").to_json()
+        # Cancelled while reading: no half-written file is kept
+        progress = StudyState()
+        progress.cancel()
+        with self.assertRaises(InterruptedError):
+            analyse_study(folder, read_study(folder), Metric("EIR", "max", "none", by_month=True), progress)
+        self.assertFalse(list((folder / "metrics").glob("*/*.tmp.npy")))
+        self.assertTrue(Metric("EIR", "sum", "mean", by_month=True).problems())
 
     def test_only_seeds_with_every_run(self):
         folder, _, _ = write_known_study(self.root, 4, seeds=(5, 6))
