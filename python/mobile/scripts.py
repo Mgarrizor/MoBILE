@@ -68,7 +68,7 @@ function makePlayer(prefix, sliderId, dateId) {
   prefix: prefix,
   dateId: dateId,
   rates: [0.5, 1, 2, 3, 4, 5, 6, 8, 10, 15, 20],
-  rate: 2,
+  rate: 5,  // Index in rates: 5 fps
   playing: false,
   sentAt: 0,
   lastDrawn: 0,
