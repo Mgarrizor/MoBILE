@@ -31,7 +31,10 @@ IN A TERMINAL
   folder can be chosen or made in the Setup tab), with the output in
   output/output.nc, the log in run.log and the record of the run in run.json.
   A seed band from the app is one folder runs/seed_band_<date>-<id>/ with a
-  folder seed_<seed>/ like that for each seed.
+  folder seed_<seed>/ like that for each seed. A sensitivity analysis from the
+  app is runs/sensitivity/<name>/: sa.json (what was sampled and how),
+  samples.txt (the values, one row per sample) and one run folder like that
+  per sample and seed in runs/seed_<seed>/sample_<index>/.
   To repeat a run by hand, run `bash run_MOBILE.sh` in a copy of that folder.
 
 IN PYTHON
@@ -45,6 +48,15 @@ IN PYTHON
                              A run from earlier, used like `result` above
   mobile.load_seed_band("runs/<seed_band_folder>")
                              A seed band from earlier: one such result per seed
+
+  A sensitivity analysis from the app, analysed again:
+  from mobile.sensitivity import Metric
+  from mobile.sensitivity_runs import list_studies, read_study
+  from mobile.sensitivity_results import analyse_study
+  folder = next(iter(list_studies("runs")))       The newest analysis
+  result = analyse_study(folder, read_study(folder), Metric("EIR", time="sum", space="mean"))
+  result["parameters"], result["mean"]["S1"], result["mean"]["ST"]
+                             Sobol indices, with S1_conf and ST_conf
 
 Results depend on the seed AND the number of threads. Keep both fixed to compare runs.
 """

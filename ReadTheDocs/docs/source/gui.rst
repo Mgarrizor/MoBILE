@@ -102,8 +102,9 @@ What to fill in
 ``run``
    As the flags of ``run_MOBILE.sh``. Two of them deserve care:
 
-   - ``nagent``: results depend on the number of humans each agent represents, which the GUI shows
-     next to the number of agents. Lowering ``nagent`` to save time changes the answer.
+   - ``nagent``: results depend on the number of humans each agent represents (HA). In the GUI you enter
+     HA, and the number of agents follows from it; below 1 there would be more agents than people, and the
+     model stops at once. Raising HA to save time changes the answer.
    - ``threads``: a run is only reproducible with the same ``seed`` **and** the same number of threads.
 
 ``inputs``
@@ -151,3 +152,26 @@ Each run has its own folder, ``runs/<date>-<id>/``:
   a copy of the folder.
 
 The runs of a seed band are grouped in ``runs/seed_band_<date>-<id>/``.
+
+A sensitivity analysis has its own folder, ``runs/sensitivity/<name>/``, apart from single runs:
+
+- ``sa.json``: what was sampled and how, the setup, and how far the runs got;
+- ``samples.txt``: the parameter values, one row per sample;
+- ``runs/seed_<seed>/sample_<index>/``: one run folder, as above, for each sample and seed;
+- ``metrics/``: what was read from the runs for each way of analysing them, so that analysing them again is quick.
+
+Sensitivity analysis
+--------------------
+
+The **Sensitivity analysis (Sobol)** card, in the Parameters tab, runs the model for many combinations of the
+parameters you tick, drawn from their distributions (uniform, log-uniform, or normal and log-normal truncated to
+their bounds), with the setup applied in the Setup tab. It uses SALib's Sobol method: N base samples give N(2D+2)
+runs for D parameters with second-order indices, N(D+2) without. With **Stochastic**, the whole analysis is
+repeated for several seeds with the same samples.
+
+The runs are kept: a cancelled analysis resumes where it stopped, and a finished one can be analysed again, for
+another variable, period, months or reduction, without running again. The indices can be those of one number per
+run (the variable summed, averaged or at its maximum over the days, then averaged or summed over the populated
+cells), maps of the indices cell by cell compared with the rainfall and temperature of each cell, or indices month
+by month across the cells. **How the indices are calculated**, in the card, explains the numbers. ``python/GUI.md``
+in the repository describes every control.

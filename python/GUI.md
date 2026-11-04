@@ -79,17 +79,62 @@ The settings are remembered for the next session in `~/.config/mobile/last_setup
 
 ### 2. Parameters tab
 
-- **Model parameters**: sliders by group (Human, Vector, Hydro, Climate). A blue slider starts at its value in
+- **Parameters for single runs**: sliders by group (Human, Vector, Hydro, Climate). A blue slider starts at its value in
   the parameter file, a grey one (marked *default*) at the model default. Only sliders you move are changed for
   the run. **Reset parameters** puts them all back. Slider ranges are placeholders (the example value ±50%).
   Hover over the name of a parameter (or move to it with Tab) for what it does, the formula it enters and
   where it comes from. The descriptions are in `info` and `source` of each slider in `sliders.yaml`.
-- **Outputs**: which fields the next run writes. Age-resolved fields give large files.
+- **Outputs**: which fields the next run writes. Age-resolved fields give large files. A sensitivity analysis writes
+  the same fields, and only these can be analysed afterwards.
+- **Sensitivity analysis (Sobol)**, below: see the next section.
+
+### Sensitivity analysis
+
+How much of the variance of an output each parameter explains, from many runs with the parameters drawn from their
+distributions (SALib, Sobol). It uses the setup applied in tab 1, the HA and seed of the sidebar, and every
+parameter not sampled at its slider value.
+
+1. **Parameters to sample**: tick at least two, by group. Choose a distribution (uniform, log-uniform, normal or
+   log-normal, the last two truncated to the minimum and maximum) and its bounds, which start at the range of the
+   slider. Normal needs a mean and sd; log-normal those of ln x. Only slider parameters can be sampled for now.
+2. **Sobol**: the base samples N, a power of 2, and whether to compute second-order indices (S2, for each pair).
+   The number of runs is shown with its formula: N(2D+2) with S2, N(D+2) without, D the parameters sampled.
+3. **Stochastic** (amber): repeat the analysis for several seeds, from the sidebar seed up, with the same samples,
+   to see how much chance changes the indices. The number of runs is multiplied by the seeds.
+4. **Runs at the same time**: each uses the threads of the setup; the line under the number of runs warns when
+   they need more cores than the computer has. **Analysis name** (optional) names its folder.
+5. **Run analysis** shows the progress (runs done, running, failed, time left); **Cancel** stops it. A single
+   Run and an analysis cannot go on at the same time.
+
+**Earlier analyses** lists the analyses in the results folder, with their parameters. **Resume** goes on with a
+cancelled one, running only the runs left. The runs are kept, so a finished analysis can be analysed again in other
+ways without running again. If the first 3 runs of an analysis all fail, it stops and shows the end of the log of
+one: they would all fail alike. Fix the cause and press Resume.
+
+**Analyse the runs** of the analysis chosen under Earlier analyses:
+
+- **Variable**, **Days** (from, to) and **Months** (e.g. only those of the wet season).
+- **Over the days**: mean, sum or maximum of each run.
+- **Over the cells**:
+  - *Mean* or *Sum over the populated cells*: one number per run. Bars of S1 (alone) with ST − S1 (with the others)
+    stacked on top, so that the whole bar is ST, with 95% confidence intervals; S2 for each pair; a table and a CSV.
+  - *None: a map of the indices*: indices cell by cell, a tab for each parameter, and the index of each cell against
+    its mean rainfall and temperature over the same days; netCDF.
+  - *None, month by month*: the days of each month reduced apart and the indices computed in each cell. For each
+    month, a box of the indices of the cells (10th to 90th percentile, with the 25th, 50th and 75th) and a line
+    for the indices of the mean over the cells, with 95% intervals; CSV.
+- With several seeds, the indices are those of the mean over the seeds, and each seed alone shows as dots (or as
+  its range across seeds, on the maps). The share of the variance from chance is the variance across the seeds of
+  the same sample over the variance of all the runs.
+
+The first analysis of a variable reads every run, which for thousands of runs takes minutes; what is read is kept,
+so analysing it again is quick. **How the indices are calculated**, under the choices, says what the numbers mean.
 
 ### Sidebar
 
-- **Run**: **Number of agents** and **Seed**. The line under the agents shows the mean humans per agent: results
-  depend on it, so keep it close to 1 when comparing runs; far from 1, the line suggests a number of agents.
+- **Run**: **HA** (humans per agent) and **Seed**. The number of agents follows from HA: the people of the simulated
+  region over HA, shown under it. Results depend on HA, so keep it fixed when comparing runs. Below 1 there are more
+  agents than people and the model stops at once: the line turns red, and Run and Run analysis refuse to start.
   **Seed band** runs several consecutive seeds with the
   same parameters, to see the spread between them. **Run name** (optional) is the name of the output folder,
   letters, digits, `.`, `_`, `-` only; without one, it is named after the date.
@@ -122,10 +167,19 @@ run), `params.txt` and the filled-in `run_MOBILE.sh`. A run on a region also hol
 files cut to it, which `run_MOBILE.sh` reads. A seed band is `<results folder>/seed_band_<date-id>/seed_<seed>/`.
 To repeat a run by hand, run `bash run_MOBILE.sh` in a copy of that folder.
 
+A sensitivity analysis is `<results folder>/sensitivity/<name or date-id>/`, apart from single runs:
+`sa.json` (what was sampled and how, the setup, how far the runs got), `samples.txt` (the parameter values, one row
+per sample), `inputs/` (the driving files cut once for all the runs, with a region or a period),
+`runs/seed_<seed>/sample_<index>/` (one run folder per sample and seed, as above) and `metrics/` (what was read from
+the runs for each way of analysing them).
+
 ## Good to know
 
 - A run compiles the model, then simulates: the example takes minutes, large grids hours.
-- Only one run can use a MoBILE source tree at a time, because `mobile.sh` modifies the shared `src/`.
+- `mobile.sh` modifies the shared `src/` while it compiles, so runs from the same MoBILE source tree compile one at
+  a time; once compiled, the runs of an analysis go on side by side.
+- With spin-up (`spin_up: 1`), the model needs at least a full year of driving data: a shorter period stops at
+  *Cannot build spin-up climatology*.
 - Results depend on the seed and on the number of threads. Keep both fixed to compare runs.
 - Mobility is not functional in the model yet.
 
@@ -144,5 +198,8 @@ To repeat a run by hand, run `bash run_MOBILE.sh` in a copy of that folder.
   and start again from another folder, or choose a results folder outside it in the Setup tab.
 - *MoBILE location unknown*: `export MOBILE=/path/to/MoBILE` in the terminal you start `mobile gui` from.
 - *The run failed*: the end of its log is shown in the page, the whole log is `<results folder>/<run>/run.log`.
+- *Analysis stopped: its first 3 runs all failed twice*: the end of the log of one is shown; the logs are in
+  `runs/seed_<seed>/sample_<index>/run.log` of the analysis folder. Common causes: HA below 1 (*More agents than
+  people*), or a period under a year with spin-up.
 - *Terrain could not be downloaded*: check the connection and turn the switch on again.
 - `mobile help` lists all commands, and the Python interface (`mobile.Runner`, `mobile.load_run`).

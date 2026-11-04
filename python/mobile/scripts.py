@@ -180,7 +180,8 @@ function themeLayout(layout, plain) {
   layout.paper_bgcolor = colours.paper;
   layout.font = {...(layout.font || {}), color: colours.text};
   if (plain) layout.plot_bgcolor = colours.paper;
-  for (const axis of ['xaxis', 'yaxis']) if (layout[axis]) layout[axis].gridcolor = colours.grid;
+  // Every axis, also those of plots side by side (xaxis2, yaxis2...)
+  for (const axis of Object.keys(layout).filter(key => /^[xy]axis\d*$/.test(key))) if (layout[axis]) layout[axis].gridcolor = colours.grid;
   if (layout.legend) layout.legend.bgcolor = colours.legend;
   (layout.shapes || []).forEach(function(shape) { if (shape.line && isText(shape.line.color)) shape.line.color = colours.text; });
   return layout;
@@ -188,10 +189,12 @@ function themeLayout(layout, plain) {
 // A plot already drawn, when the theme changes
 function themePlot(plot) {
   if (!plot.layout) return;
+  const axes = Object.keys(plot.layout).filter(key => /^[xy]axis\d*$/.test(key));
   const update = themeLayout({font: plot.layout.font, legend: plot.layout.legend ? {} : undefined,
-                              xaxis: {}, yaxis: {}, shapes: JSON.parse(JSON.stringify(plot.layout.shapes || []))}, plot.plain);
-  const flat = {paper_bgcolor: update.paper_bgcolor, font: update.font, 'xaxis.gridcolor': update.xaxis.gridcolor,
-                'yaxis.gridcolor': update.yaxis.gridcolor, shapes: update.shapes};
+                              ...Object.fromEntries(axes.map(axis => [axis, {}])),
+                              shapes: JSON.parse(JSON.stringify(plot.layout.shapes || []))}, plot.plain);
+  const flat = {paper_bgcolor: update.paper_bgcolor, font: update.font, shapes: update.shapes};
+  for (const axis of axes) flat[`${axis}.gridcolor`] = update[axis].gridcolor;
   if (plot.plain) flat.plot_bgcolor = update.plot_bgcolor;
   if (update.legend) flat['legend.bgcolor'] = update.legend.bgcolor;
   Plotly.relayout(plot, flat);
