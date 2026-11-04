@@ -62,14 +62,8 @@ def create_app(config):
         ui.sidebar(
             ui.div("Run", class_="sidebar-heading"),
             ui.input_numeric(
-                "nagent",
-                with_tip("Number of agents", "Simulated people. More agents is slower but closer to the real population: "
-                         "keep the mean humans per agent close to 1 for reliable results."),
-                value=config.run["nagent"], min=1, step=100000,
-            ),
-            ui.input_numeric(
-                "ha", with_tip("Humans per agent (HA)", "People represented by one agent. Linked to the number of agents: "
-                               "changing one sets the other. Close to 1 is best for reliable results."),
+                "ha", with_tip("Humans per agent (HA)", "People represented by one agent, which sets the number of agents. "
+                               "Close to 1 is best for reliable results: more agents is slower but closer to the real population."),
                 value=None, min=0, step="any",
             ),
             ui.div(ui.output_text("humans_per_agent"), class_="small text-muted mb-3"),
@@ -327,10 +321,10 @@ def create_app(config):
         @reactive.effect
         @reactive.event(input.run)
         def start_run():
-            nagent, seed = input.nagent(), input.seed()
+            nagent, seed = agents(), input.seed()
             n_seeds = input.n_seeds() if input.seed_band() else 1
             if not all(isinstance(value, int) and value >= 1 for value in (nagent, seed, n_seeds)):
-                ui.notification_show("Agents, seed and number of seeds must be positive integers.", type="error")
+                ui.notification_show("HA must be positive, and the seed and number of seeds positive integers.", type="error")
                 return
             people = grid()["people"]
             if nagent > people:
@@ -450,7 +444,7 @@ def create_app(config):
             adopt(restored, keep_outcome=True)
             show(outcome)
             ui.update_navs("tab", selected="results")
-            ui.update_numeric("nagent", value=outcome.nagent)
+            ui.update_numeric("ha", value=ha_for(outcome.nagent))
             ui.update_numeric("seed", value=outcome.seeds[0])
             ui.update_switch("seed_band", value=len(outcome.seeds) > 1)
             if len(outcome.seeds) > 1:
@@ -493,7 +487,7 @@ def create_app(config):
                 return
             grid_changed = (old.inputs["pop_file"], old.inputs["area_file"], old.region) != (new.inputs["pop_file"], new.inputs["area_file"], new.region)
             setup.set(new)
-            save_setup(replace(new, run={**new.run, "nagent": input.nagent() or new.run["nagent"], "seed": input.seed() or new.run["seed"]}))
+            save_setup(replace(new, run={**new.run, "nagent": agents() or new.run["nagent"], "seed": input.seed() or new.run["seed"]}))
             show_setup_fields(new)
             if grid_changed and not keep_outcome:
                 current.set(None)
@@ -527,7 +521,7 @@ def create_app(config):
                 "mob": setup().run["mob"],
                 "nstep": ymd_to_days(input.setup_years(), input.setup_months(), input.setup_days()),
                 "spin_up": 1 if input.setup_spin_up() else 0,
-                "nagent": input.nagent(),
+                "nagent": agents() or setup().run["nagent"],
                 "seed": input.seed(),
                 "threads": input.setup_threads(),
             }
@@ -787,33 +781,40 @@ def create_app(config):
                 ui.update_text(state_["field"], value=str(state_["folder"]))
                 ui.modal_remove()
 
-        @reactive.effect
-        @reactive.event(input.nagent, grid)
-        def show_ha():
-            nagent = input.nagent()
-            if nagent and nagent >= 1:
-                ui.update_numeric("ha", value=round(grid()["people"] / nagent, 4))
+        def ha_for(nagent):
+            """HA, to 8 significant digits, that gives this number of agents."""
+            return float(f"{grid()['people'] / nagent:.8g}")
+
+        @reactive.calc
+        def agents():
+            """The number of agents for the HA set: the people of the simulated region over HA."""
+            ha = input.ha()
+            if not ha or ha <= 0:
+                return None
+            return max(round(grid()["people"] / ha), 1)
+
+        # HA starts from the number of agents of the setup. After that it is the entry, and the number of
+        # agents follows it, also when the region changes.
+        started = reactive.value(False)
 
         @reactive.effect
-        @reactive.event(input.ha)
-        def set_nagent_from_ha():
-            ha, nagent = input.ha(), input.nagent()
-            if not ha or ha <= 0:
-                return
-            if nagent and nagent >= 1 and abs(ha - round(grid()["people"] / nagent, 4)) < 1e-9:
-                return  # The value shown for the number of agents
-            ui.update_numeric("nagent", value=max(round(grid()["people"] / ha), 1))
+        def initial_ha():
+            grid()
+            with reactive.isolate():
+                if not started():
+                    started.set(True)
+                    ui.update_numeric("ha", value=ha_for(config.run["nagent"]))
 
         @render.text
         def humans_per_agent():
-            nagent = input.nagent()
-            if not nagent or nagent < 1:
+            nagent = agents()
+            if nagent is None:
                 return ""
             people = grid()["people"]
-            text = f"{people:,.0f} people in the simulated region"
+            text = f"{people:,.0f} people in the simulated region, {nagent:,} agents"
             # Far from 1, as after choosing a small region
             if not HUMANS_PER_AGENT_RANGE[0] <= people / nagent <= HUMANS_PER_AGENT_RANGE[1]:
-                text += f". For HA about 1, use about {max(round(people), 1):,} agents."
+                text += f". HA = 1 would be {max(round(people), 1):,} agents."
             return text
 
         @render.ui
