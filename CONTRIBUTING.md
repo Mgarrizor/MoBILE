@@ -25,6 +25,15 @@ into `main` through a pull request.
 
 Never use `git push --force` on `gui` or `main`: it would delete the other person's commits.
 
+## Keep the model source code out of GUI changes
+
+Changes to the GUI and the Python package (`python/`) must **never** touch the model source code
+(`src/`, including `src/deps/`, and the `Makefile`). A GUI branch and its pull request contain only
+files under `python/` (plus documentation). If a GUI change seems to need a model change, for example
+a new `&OUTPUT` flag or a different default, make the model change in a separate branch and pull
+request, reviewed on its own. Before opening a pull request, check with
+`git diff --stat origin/gui` that nothing outside `python/` is changed unintentionally.
+
 ## Tests
 
 `.github/workflows/python-tests.yml` runs the tests in `python/tests` on every pull request into
