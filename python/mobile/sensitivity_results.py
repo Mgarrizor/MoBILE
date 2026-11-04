@@ -3,13 +3,14 @@ kept in the folder of the analysis, and their Sobol indices, for the mean over s
 
 <analysis folder>/metrics/<key>/ holds, for one way of reducing the outputs (metric.json), the values of every run of
 each seed (seed_<seed>.npy, one row per run) and, for maps, the cells they are of (cells.npy, flat indices on the
-grid). Analysing them again in another way, or with the indices of another parameter on show, does not read the
+grid), and month by month, the first day of the months (months.npy). Analysing them again in another way, or with the indices of another parameter on show, does not read the
 runs again.
 """
 
 import hashlib
 import json
 import time
+import warnings
 from dataclasses import asdict
 from pathlib import Path
 
@@ -77,7 +78,8 @@ def describe_metric(metric, cells=None):
     if metric.start or metric.end:
         window = f" from {metric.start or 'the first day'} to {metric.end or 'the last day'}"
     months = f" in {', '.join(MONTHS[month - 1] for month in sorted(metric.months))}" if metric.months else ""
-    text = metric.variable + (f", {time} over the days{window}{months}" if time else f", every day{window}{months}")
+    days = "the days of each month" if metric.by_month else "the days"
+    text = metric.variable + (f", {time} over {days}{window}{months}" if time else f", every day{window}{months}")
     where = f"the {cells:,} populated cells" if cells else "the populated cells"
     if metric.space in ("mean", "sum"):
         text += f", {metric.space} over {where}"
@@ -112,6 +114,14 @@ def _days(times, metric):
     return int(days[0]), int(days[-1]) + 1
 
 
+def _month_starts(times, metric, first, last):
+    """The first day of each month of the window with days in the months of the metric, as resample gives them."""
+    days = np.asarray(times[first:last], dtype="datetime64[D]")
+    months = np.unique(days.astype("datetime64[M]"))
+    chosen = set(metric.months or range(1, 13))
+    return np.array([month for month in months if int(str(month)[5:7]) in chosen], dtype="datetime64[D]")
+
+
 def analysis_mask(record, info):
     """The simulated cells of the analysis on the coordinates of its outputs (lat, lon), as booleans."""
     grid = read_grid(record["inputs"]["pop_file"], record["inputs"]["area_file"], record["region"])
@@ -122,8 +132,10 @@ def analysis_mask(record, info):
 
 
 def extract(folder, record, metric, seeds, info, mask, progress=None):
-    """{seed: values of every run, one row per run in the order of the samples}, from the outputs or, if read before,
-    from metrics/; and the flat indices of the cells for a map (None for a number per run).
+    """({seed: values of every run, one row per run in the order of the samples}, the flat indices of the cells for a
+    map or month by month (None for a number per run), the first day of each month (None but month by month)), from
+    the outputs or, if read before, from metrics/. Month by month, the values of a seed are (runs, months, cells),
+    left on disk until used.
 
     progress, a StudyState, counts the runs read and is checked for a cancel between runs."""
     problems = metric.problems()
@@ -141,25 +153,45 @@ def extract(folder, record, metric, seeds, info, mask, progress=None):
         np.save(store / "cells.npy", cells)
     group = info["variables"][metric.variable]["group"]
     first, last = _days(info["time"], metric)
+    months = _month_starts(info["time"], metric, first, last) if metric.by_month else None
+    if months is not None:
+        if months.size == 0:
+            raise ValueError("No day of the output is in the months chosen.")
+        np.save(store / "months.npy", months)
     count = sample_count(folder)
     todo = [seed for seed in seeds if not (store / f"seed_{seed}.npy").is_file()]
     if progress is not None:
         done = count * (len(seeds) - len(todo))  # Not begin(), which would forget a cancel pressed meanwhile
         progress.update(total=count * len(seeds), done=done, done_before=done, failed=0, started=time.time(), message="Reading")
     for seed in todo:
-        values = []
+        temporary = store / f"seed_{seed}.tmp.npy"
+        if months is not None:
+            # Runs × months × cells can be gigabytes: written to disk as it is read
+            values = np.lib.format.open_memmap(temporary, mode="w+", dtype="float32", shape=(count, months.size, cells.size))
+        else:
+            values = []
         for index in range(count):
             if progress is not None and progress.cancelled:
+                del values
+                temporary.unlink(missing_ok=True)
                 raise InterruptedError("Reading cancelled.")
             path = Path(folder) / RUNS / run_name(seed, index) / "output" / "output.nc"
             reduced = reduce_field(_read(path, group, metric.variable, info, first, last), metric, mask)
-            values.append(reduced.values.ravel()[cells] if cells is not None else float(reduced))
+            if months is not None:
+                values[index] = reduced.values.reshape(months.size, -1)[:, cells]
+            else:
+                values.append(reduced.values.ravel()[cells] if cells is not None else float(reduced))
             if progress is not None:
                 progress.count("done")
-        temporary = store / f"seed_{seed}.tmp.npy"
-        np.save(temporary, np.asarray(values, dtype="float32" if cells is not None else "float64"))
+        if months is not None:
+            values.flush()
+            del values
+        else:
+            np.save(temporary, np.asarray(values, dtype="float32" if cells is not None else "float64"))
         temporary.replace(store / f"seed_{seed}.npy")  # Only whole seeds are kept
-    return {seed: np.load(store / f"seed_{seed}.npy").astype("float64") for seed in seeds}, cells
+    if months is not None:
+        return {seed: np.load(store / f"seed_{seed}.npy", mmap_mode="r") for seed in seeds}, cells, months
+    return {seed: np.load(store / f"seed_{seed}.npy").astype("float64") for seed in seeds}, cells, None
 
 
 def chance_share(Y):
@@ -198,6 +230,45 @@ def cell_analysis(parameters, Y, second_order):
     return result
 
 
+PERCENTILES = (10, 25, 50, 75, 90)
+
+
+def monthly_analysis(parameters, values, second_order, seed=None):
+    """Indices month by month. values is a list over the seeds of (runs, months, cells). For each month, the indices of
+    each cell for the mean over seeds, summed up by their PERCENTILES across the cells ('spread', (months, parameters,
+    percentiles)); the indices of the mean over the cells with bootstrap confidence intervals ('line', (months,
+    parameters)); with several seeds, those of each seed alone ('each', (months, seeds, parameters)); and the cells
+    with an index ('cells_used')."""
+    months, d = values[0].shape[1], len(parameters)
+    spread = {key: np.full((months, d, len(PERCENTILES)), np.nan) for key in ("S1", "ST")}
+    line = {key: np.full((months, d), np.nan) for key in ("S1", "S1_conf", "ST", "ST_conf")}
+    each = {key: np.full((months, len(values), d), np.nan) for key in ("S1", "ST")}
+    used = np.zeros(months, int)
+    for m in range(months):
+        Y = np.stack([np.asarray(seed_values[:, m, :], dtype="float64") for seed_values in values])
+        mean = Y.mean(axis=0)
+        cells = analyse_cells(parameters, mean, second_order)
+        used[m] = int(np.isfinite(cells["ST"][0]).sum())
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)  # A month without any cell that changes
+            for key in ("S1", "ST"):
+                spread[key][m] = np.nanpercentile(cells[key], PERCENTILES, axis=1).T
+            overall = np.nanmean(mean, axis=1)
+            if np.ptp(overall) > 0:
+                indices = analyse(parameters, overall, second_order, seed=seed)
+                for key in line:
+                    line[key][m] = indices[key]
+            if len(values) > 1:
+                for s, seed_Y in enumerate(Y):
+                    alone = analyse_cells(parameters, np.nanmean(seed_Y, axis=1)[:, None], second_order)
+                    for key in ("S1", "ST"):
+                        each[key][m, s] = alone[key][:, 0]
+    result = {"kind": "months", "spread": spread, "line": line, "cells_used": used}
+    if len(values) > 1:
+        result["each"] = each
+    return result
+
+
 def climate_maps(run_dir, info, metric, cells):
     """{name: (label, units, values at the cells)} of the mean rainfall and temperature over the days of the metric,
     from the climate written in a run, which every run of the analysis reads."""
@@ -222,12 +293,16 @@ def analyse_study(folder, record, metric, progress=None):
     run_dir = first_run(folder, record)
     info = output_info(run_dir)
     mask = analysis_mask(record, info)
-    values, cells = extract(folder, record, metric, seeds, info, mask, progress)
-    Y = np.array([values[seed] for seed in seeds])
+    values, cells, months = extract(folder, record, metric, seeds, info, mask, progress)
     parameters = study_parameters(record)
-    if cells is None:
-        result = scalar_analysis(parameters, Y, record["second_order"], seed=record["sample_seed"])
+    if months is not None:
+        result = monthly_analysis(parameters, [values[seed] for seed in seeds], record["second_order"], seed=record["sample_seed"])
+        result["months"] = months
+        result["cells"] = cells
+    elif cells is None:
+        result = scalar_analysis(parameters, np.array([values[seed] for seed in seeds]), record["second_order"], seed=record["sample_seed"])
     else:
+        Y = np.array([values[seed] for seed in seeds])
         result = cell_analysis(parameters, Y, record["second_order"])
         result["cells"] = cells
         result["climate"] = climate_maps(run_dir, info, metric, cells)
@@ -257,6 +332,22 @@ def indices_table(result):
             for s, seed in enumerate(result["seeds"]):
                 table[f"{key}_seed_{seed}"] = result["each"][key][s]
     return table
+
+
+def monthly_table(result):
+    """The indices month by month as rows of a CSV: one per month, parameter and index."""
+    rows = []
+    for m, month in enumerate(result["months"]):
+        for j, name in enumerate(result["parameters"]):
+            for key in ("S1", "ST"):
+                row = {"month": str(month)[:7], "parameter": name, "index": key}
+                row.update({f"p{p}_across_cells": value for p, value in zip(PERCENTILES, result["spread"][key][m, j])})
+                row.update({"of_spatial_mean": result["line"][key][m, j], "of_spatial_mean_conf95": result["line"][f"{key}_conf"][m, j],
+                            "cells": result["cells_used"][m]})
+                if "each" in result:
+                    row.update({f"of_spatial_mean_seed_{seed}": result["each"][key][m, s, j] for s, seed in enumerate(result["seeds"])})
+                rows.append(row)
+    return pd.DataFrame(rows)
 
 
 def cell_dataset(result):

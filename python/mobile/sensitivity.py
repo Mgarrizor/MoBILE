@@ -131,7 +131,8 @@ class Metric:
     """How a field of a run becomes the number, or the map or time series, analysed.
 
     The time window is the days from start to end (ISO dates, either open) and, if months is given, only those
-    months of the year (1 to 12), so that wet and dry seasons can be analysed apart."""
+    months of the year (1 to 12), so that wet and dry seasons can be analysed apart. With by_month, the days are
+    reduced within each month of the window instead of over all of them, giving a value per month."""
 
     variable: str
     time: str = "sum"
@@ -139,6 +140,7 @@ class Metric:
     start: str | None = None
     end: str | None = None
     months: tuple | None = None
+    by_month: bool = False
 
     def problems(self):
         problems = []
@@ -148,6 +150,8 @@ class Metric:
             problems.append(f"Unknown space reduction {self.space!r}.")
         if self.time == "none" and self.space == "none":
             problems.append("Reduce over time, space or both: a value for every cell and day cannot be analysed.")
+        if self.by_month and (self.time == "none" or self.space != "none"):
+            problems.append("Month by month reduces the days of each month and keeps every cell.")
         if self.months is not None and (not self.months or not set(self.months) <= set(range(1, 13))):
             problems.append("Months must be numbers from 1 to 12.")
         if self.start and self.end and np.datetime64(self.start) > np.datetime64(self.end):
@@ -158,6 +162,7 @@ class Metric:
 def reduce_field(field, metric, mask=None):
     """The value analysed for one run, from its field on (time, lat, lon) or (lat, lon):
     a number if time and space are reduced, a (lat, lon) map if only time is, a (time) series if only space is.
+    With by_month, time is reduced within each month: (time, ...) with the first day of each month as its time.
     Space reductions are over the cells of mask (lat, lon), the populated cells, when given."""
     problems = metric.problems()
     if problems:
@@ -168,7 +173,11 @@ def reduce_field(field, metric, mask=None):
             field = field.sel(time=field["time"].dt.month.isin(list(metric.months)))
         if field.sizes["time"] == 0:
             raise ValueError("No day of the output is in the time window.")
-        if metric.time != "none":
+        if metric.by_month:
+            field = getattr(field.resample(time="MS"), metric.time)(skipna=True)
+            # Months of the window outside the months chosen come back empty from resample
+            field = field.sel(time=field["time"].dt.month.isin(list(metric.months or range(1, 13))))
+        elif metric.time != "none":
             field = getattr(field, metric.time)("time", skipna=True)
     if mask is not None:
         field = field.where(mask)

@@ -33,6 +33,7 @@ SAMPLES = "samples.txt"
 RUNS = "runs"
 INPUTS = "inputs"
 ATTEMPTS = 2  # A failed run is tried once more before it counts as failed
+FAIL_FAST = 3  # The analysis stops if this many runs fail before any finishes: they would all fail alike
 
 
 def studies_dir(runs_dir):
@@ -128,6 +129,7 @@ class StudyState:
         self.total = self.done = self.failed = self.done_before = 0
         self.started = time.time()
         self.message = ""
+        self.failure = None  # The end of the log of the first run that failed
 
     def begin(self, total, done):
         with self.lock:
@@ -135,6 +137,7 @@ class StudyState:
             self.total, self.done, self.done_before, self.failed = total, done, done, 0
             self.started = time.time()
             self.message = "Starting"
+            self.failure = None
 
     def update(self, **values):
         with self.lock:
@@ -176,7 +179,8 @@ def run_study(folder, state, parallel=1, threads=None):
     """Run the samples of an analysis not yet finished, parallel at a time, and return its record.
 
     A run folder left by a cancelled or failed attempt is removed and made again. The status is finished
-    when every run is, cancelled, or incomplete if some failed twice."""
+    when every run is, cancelled, incomplete if some failed twice, or stopped if the first FAIL_FAST runs all failed
+    twice (the record then holds the end of the log of one, as failure)."""
     folder = Path(folder)
     record = read_study(folder)
     config = study_config(folder, record)
@@ -197,6 +201,7 @@ def run_study(folder, state, parallel=1, threads=None):
             params={**config.params, **{name: float(value) for name, value in zip(names, values[index])}},
             run={**config.run, "seed": seed},
         )
+        result = None
         for _ in range(ATTEMPTS):
             run_dir = config.runs_dir / run_name(seed, index)
             if run_dir.exists():
@@ -216,14 +221,23 @@ def run_study(folder, state, parallel=1, threads=None):
                 state.count("done")
                 return
         state.count("failed")
+        with state.lock:
+            state.failure = state.failure or result.log_tail(15)
+            systematic = state.failed >= FAIL_FAST and state.done == state.done_before
+        if systematic:
+            state.update(message="stopped")
+            state.cancel()
 
     state.update(message="Running")
     with ThreadPoolExecutor(max_workers=max(1, parallel)) as pool:
         for _ in pool.map(one, todo):
             pass
     done, total, failed, *_ = state.snapshot()
-    status = "cancelled" if state.cancelled and done + failed < total else "finished" if done == total else "incomplete"
-    record = {**read_study(folder), "status": status, "finished": done, "failed": failed}
+    if state.message == "stopped":
+        status = "stopped"
+    else:
+        status = "cancelled" if state.cancelled and done + failed < total else "finished" if done == total else "incomplete"
+    record = {**read_study(folder), "status": status, "finished": done, "failed": failed, "failure": state.failure}
     write_study(folder, record)
     state.update(message=status)
     return record

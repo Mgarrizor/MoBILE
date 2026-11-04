@@ -61,6 +61,9 @@ OUTPUT_FLAGS = {
 }
 
 
+# More agents than people: the model stops at once ("More agents than people! --> STOP")
+HA_BELOW_ONE = "HA is below 1: more agents than people, and the model stops at once. Use HA = 1 or more."
+
 def with_tip(label, text):
     """A label followed by an (i) that explains the control on hover or focus."""
     icon = ui.tags.span("ⓘ", class_="text-muted ms-1", tabindex="0", role="img", **{"aria-label": "More information"})

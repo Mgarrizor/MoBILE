@@ -13,12 +13,12 @@ from shiny import reactive, render, ui
 
 from .basemap import load_basemap
 from .config import ConfigError, SLIDER_GROUPS
-from .layout import OUTPUT_FLAGS, parameter_label, with_tip
+from .layout import HA_BELOW_ONE, OUTPUT_FLAGS, parameter_label, with_tip
 from .outcome import run_name_problem
-from .plots import climate_figure, index_map_figure, indices_figure, second_order_figure, send_figure
+from .plots import climate_figure, index_map_figure, indices_figure, monthly_figure, second_order_figure, send_figure
 from .sensitivity import DISTRIBUTIONS, Metric, SampledParameter, design_problems, run_count_formula
 from .sensitivity_results import (
-    MONTHS, analysable_variables, analyse_study, cell_dataset, first_run, indices_table, output_info,
+    MONTHS, analysable_variables, analyse_study, cell_dataset, first_run, indices_table, monthly_table, output_info,
 )
 from .sensitivity_runs import (
     StudyState, create_study, describe_parameter, list_studies, read_study, run_study, studies_dir, study_label, study_parameters,
@@ -51,7 +51,10 @@ SA_STYLE = """
 .sa-table td:first-child, .sa-table th:first-child { text-align: left; }
 """
 TIME_CHOICES = {"mean": "Mean", "sum": "Sum", "max": "Maximum"}
-SPACE_CHOICES = {"mean": "Mean over the populated cells", "sum": "Sum over the populated cells", "none": "None: a map of the indices"}
+SPACE_CHOICES = {
+    "mean": "Mean over the populated cells", "sum": "Sum over the populated cells", "none": "None: a map of the indices",
+    "months": "None, month by month: the indices across the cells",
+}
 
 
 def _fields_header():
@@ -116,6 +119,10 @@ def _how_calculated():
                        "parameters change the expected output. The dots are each seed analysed alone: their spread is how much "
                        "chance moves the indices. The share from chance is the variance across the seeds of the same sample, "
                        "averaged over the samples, over the variance of all the runs."),
+            ui.tags.li(strong("Month by month. "), "The days of each month are reduced apart, and the indices computed in each "
+                       "cell for each month. A box spans the 10th to the 90th percentile of the indices across the cells, its "
+                       "middle part the 25th to the 75th, with the median; the line is the index of the mean over the cells, "
+                       "with its 95% interval."),
             ui.tags.li(strong("Maps. "), "The same in each cell, without confidence intervals (a bootstrap for every cell would "
                        "take too long). A cell whose number is the same in every run has no index. The scatter plots compare the "
                        "index of each cell with its mean rainfall and temperature over the same days, as written in the runs."),
@@ -154,6 +161,7 @@ def _results_section():
         ),
         _how_calculated(),
         ui.output_ui("sa_summary"),
+        ui.output_ui("sa_map_tabs"),
         ui.navset_hidden(
             ui.nav_panel("none", value="none"),
             ui.nav_panel(
@@ -169,12 +177,16 @@ def _results_section():
             ),
             ui.nav_panel(
                 "cells",
-                ui.output_ui("sa_map_tabs"),
-                ui.input_radio_buttons("sa_map_index", None, {"ST": "ST", "S1": "S1"}, selected="ST", inline=True),
                 ui.div(id="sa_map", style="height: 560px;"),
                 ui.div(id="sa_climate", style="height: 380px;"),
                 ui.download_button("sa_download_nc", "Download the maps (netCDF)", class_="btn-sm mt-2"),
                 value="cells",
+            ),
+            ui.nav_panel(
+                "months",
+                ui.div(id="sa_monthly", style="height: 460px;"),
+                ui.download_button("sa_download_months", "Download the indices by month (CSV)", class_="btn-sm mt-2"),
+                value="months",
             ),
             id="sa_view", selected="none",
         ),
@@ -261,7 +273,7 @@ def _clock(seconds):
     return f"{seconds // 3600}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
 
 
-def sensitivity_server(input, output, session, setup, slider_setup, overrides, selected_output, single_run_running, agents):
+def sensitivity_server(input, output, session, setup, slider_setup, overrides, selected_output, single_run_running, agents, ha):
     """The server side of the card. Returns running() and cancel() for the rest of the app."""
     state = StudyState()
     studies_changed = reactive.value(0)
@@ -366,6 +378,9 @@ def sensitivity_server(input, output, session, setup, slider_setup, overrides, s
         nagent, seed = agents(), input.seed()
         if not all(isinstance(value, int) and value >= 1 for value in (nagent, seed)) or seeds is None:
             problems.append("HA must be positive, and the seed and number of seeds positive whole numbers.")
+        elif ha() < 1:
+            # More agents than people: the model stops at once, so every run would fail
+            problems.append(HA_BELOW_ONE)
         name = input.sa_name().strip()
         folder = studies_dir(setup().runs_dir)
         if name and (folder / name).exists():
@@ -444,6 +459,14 @@ def sensitivity_server(input, output, session, setup, slider_setup, overrides, s
         runs = f"{record['finished']:,} of {record['runs']:,} runs done"
         if record["status"] == "finished":
             return ui.p(f"Analysis finished: {runs}.", class_="mt-3 mb-0")
+        if record["status"] == "stopped":
+            return ui.card(
+                ui.p(f"Analysis stopped: its first {record['failed']} runs all failed twice, so the others would fail too. "
+                     "The end of the log of one of them:", class_="mb-1"),
+                ui.tags.pre(record.get("failure") or "", class_="small mb-1"),
+                ui.p("Fix the cause and press Resume: the runs are tried again.", class_="mb-0"),
+                class_="border-danger mt-3",
+            )
         if record["status"] == "cancelled":
             return ui.p(f"Analysis cancelled: {runs}. Choose it under Earlier analyses and press Resume to go on.", class_="mt-3 mb-0")
         return ui.card(ui.p(f"{record['failed']:,} runs failed twice ({runs}): their run.log, in the runs folder of the analysis, "
@@ -534,9 +557,11 @@ def sensitivity_server(input, output, session, setup, slider_setup, overrides, s
             return
         first, last_day = str(info["time"][0])[:10], str(info["time"][-1])[:10]
         start, end = (str(day) if day else None for day in (input.sa_window() or (None, None)))
+        by_month = input.sa_space() == "months"
         metric = Metric(
-            input.sa_variable(), input.sa_time(), input.sa_space(),
+            input.sa_variable(), input.sa_time(), "none" if by_month else input.sa_space(),
             None if start in (None, first) else start, None if end in (None, last_day) else end, None if len(months) == 12 else months,
+            by_month,
         )
         problems = metric.problems()
         if problems:
@@ -602,6 +627,12 @@ def sensitivity_server(input, output, session, setup, slider_setup, overrides, s
                 lines.append(f"Chance (the seed) makes {_percent(np.nanmedian(chance))} of the variance of the number of a cell over "
                              f"all the runs in the median cell, from {_percent(np.nanquantile(chance, 0.1))} to "
                              f"{_percent(np.nanquantile(chance, 0.9))} in 80% of the cells: see its map.")
+        if outcome["kind"] == "months":
+            lines.append(f"{len(outcome['months'])} months. Boxes: the index of each cell, from the 10th to the 90th percentile across "
+                         "the cells; line: the index of the mean over the cells.")
+            if np.any(outcome["cells_used"] < len(outcome["cells"])):
+                lines.append("Cells whose number is the same in every run have no index and are left out of the boxes: hover "
+                             "over a box for how many it holds.")
         return ui.div(*[ui.p(line, class_="mb-1") for line in lines], class_="small mt-2")
 
     @reactive.effect
@@ -614,30 +645,37 @@ def sensitivity_server(input, output, session, setup, slider_setup, overrides, s
             await send_figure(session, "sa_indices", indices_figure(outcome))
             if outcome["second_order"]:
                 await send_figure(session, "sa_pairs", second_order_figure(outcome))
-        if kind == "cells":
-            choices = {"ST": "ST", "S1": "S1"}
-            if "range" in outcome:
-                choices.update({"ST_range": "ST: range across seeds", "S1_range": "S1: range across seeds", "chance": "Share from chance"})
-            with reactive.isolate():
-                selected = input.sa_map_index() if input.sa_map_index() in choices else "ST"
-            ui.update_radio_buttons("sa_map_index", choices=choices, selected=selected, inline=True)
 
     @render.ui
     def sa_map_tabs():
+        """A tab for each parameter and the index to show, for maps and month by month."""
         outcome = result()
-        if not outcome or outcome.get("kind") != "cells":
+        if not outcome or outcome.get("kind") not in ("cells", "months"):
             return None
-        return ui.navset_pill(*[ui.nav_panel(name, value=name) for name in outcome["parameters"]], id="sa_map_param")
+        choices = {"ST": "ST", "S1": "S1"}
+        if "range" in outcome:
+            choices.update({"ST_range": "ST: range across seeds", "S1_range": "S1: range across seeds", "chance": "Share from chance"})
+        with reactive.isolate():
+            index = input.sa_map_index() if "sa_map_index" in input and input.sa_map_index() in choices else "ST"
+            name = input.sa_map_param() if "sa_map_param" in input and input.sa_map_param() in outcome["parameters"] else None
+        return ui.TagList(
+            ui.navset_pill(*[ui.nav_panel(parameter, value=parameter) for parameter in outcome["parameters"]], id="sa_map_param",
+                           selected=name),
+            ui.input_radio_buttons("sa_map_index", None, choices, selected=index, inline=True),
+        )
 
     @reactive.effect
     async def show_map():
         outcome = result()
-        if not outcome or outcome.get("kind") != "cells":
+        if not outcome or outcome.get("kind") not in ("cells", "months") or "sa_map_index" not in input:
             return
         name = input.sa_map_param() if "sa_map_param" in input else None
         key = input.sa_map_index()
         if name not in outcome["parameters"]:
             name = outcome["parameters"][0]
+        if outcome["kind"] == "months":
+            await send_figure(session, "sa_monthly", monthly_figure(outcome, name, key if key in ("ST", "S1") else "ST"))
+            return
         if key not in ("ST", "S1") and "range" not in outcome:
             key = "ST"
         await send_figure(session, "sa_map", index_map_figure(outcome, name, key, outcome.get("basemap")))
@@ -678,6 +716,12 @@ def sensitivity_server(input, output, session, setup, slider_setup, overrides, s
         outcome = result()
         if outcome and outcome.get("kind") == "scalar":
             yield f"# {outcome['description']}\n" + indices_table(outcome).to_csv(index=False)
+
+    @render.download(filename=lambda: _download_name("indices_by_month.csv"))
+    def sa_download_months():
+        outcome = result()
+        if outcome and outcome.get("kind") == "months":
+            yield f"# {outcome['description']}\n" + monthly_table(outcome).to_csv(index=False)
 
     @render.download(filename=lambda: _download_name("index_maps.nc"))
     def sa_download_nc():

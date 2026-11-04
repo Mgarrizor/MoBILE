@@ -16,7 +16,7 @@ from .config import ConfigError, default_params, default_sliders, read_params
 from .driving import field_limits, open_field, read_age
 from .grid import extent_key, load_grid, mask_like, read_grid
 from .layout import (
-    ANALYSIS_TABS, ASSETS, GUI_OUTPUT, OUTPUT_FLAGS, funders, help_tab, no_run_yet, output_groups, output_switch_id,
+    ANALYSIS_TABS, ASSETS, GUI_OUTPUT, HA_BELOW_ONE, OUTPUT_FLAGS, funders, help_tab, no_run_yet, output_groups, output_switch_id,
     page_header, page_title, parameter_legend, player_controls, slider_grid, slider_groups, with_tip,
 )
 from .outcome import RunState, load_outcome, run_label, run_model, run_name_problem
@@ -69,7 +69,7 @@ def create_app(config):
                                "Close to 1 is best for reliable results: more agents is slower but closer to the real population."),
                 value=None, min=0, step="any",
             ),
-            ui.div(ui.output_text("humans_per_agent"), class_="small text-muted mb-3"),
+            ui.div(ui.output_ui("humans_per_agent"), class_="small text-muted mb-3"),
             ui.input_numeric(
                 "seed", with_tip("Seed", "Starting point of the random numbers. The same seed and threads give the same results."),
                 value=config.run["seed"], min=1, step=1,
@@ -249,7 +249,7 @@ def create_app(config):
 
         analysis = sensitivity_server(
             input, output, session, setup, slider_setup, overrides, selected_output, lambda: run_task.status() == "running",
-            lambda: agents(),  # Defined further down, from HA
+            lambda: agents(), lambda: input.ha(),  # agents is defined further down
         )
 
         basemap_for = reactive.value(None)  # The grid the basemap and the terrain were asked for
@@ -335,10 +335,8 @@ def create_app(config):
             if not all(isinstance(value, int) and value >= 1 for value in (nagent, seed, n_seeds)):
                 ui.notification_show("HA must be positive, and the seed and number of seeds positive integers.", type="error")
                 return
-            people = grid()["people"]
-            if nagent > people:
-                ui.notification_show(f"The simulated region has {people:,.0f} people, fewer than the {nagent:,} agents. "
-                                     f"Use at most {int(people):,} agents.", type="error")
+            if input.ha() < 1:
+                ui.notification_show(HA_BELOW_ONE, type="error")
                 return
             if analysis.running():
                 ui.notification_show("A sensitivity analysis is running: wait for it, or cancel it, before a single run.", type="warning")
@@ -904,16 +902,18 @@ def create_app(config):
                     started.set(True)
                     ui.update_numeric("ha", value=ha_for(config.run["nagent"]))
 
-        @render.text
+        @render.ui
         def humans_per_agent():
             nagent = agents()
             if nagent is None:
-                return ""
+                return None
             people = grid()["people"]
             text = f"{people:,.0f} people in the simulated region, {nagent:,} agents"
             # Far from 1, as after choosing a small region
             if not HUMANS_PER_AGENT_RANGE[0] <= people / nagent <= HUMANS_PER_AGENT_RANGE[1]:
                 text += f". HA = 1 would be {max(round(people), 1):,} agents."
+            if input.ha() < 1:
+                return ui.TagList(text, ui.div(HA_BELOW_ONE, class_="text-danger"))
             return text
 
         @render.ui
