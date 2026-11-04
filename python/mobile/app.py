@@ -13,7 +13,7 @@ from shiny import App, reactive, render, run_app, ui
 
 from .basemap import load_basemap, load_terrain
 from .config import ConfigError, default_params, default_sliders, read_params
-from .driving import field_limits, open_field, read_age
+from .driving import climatology, field_limits, open_field, read_age
 from .grid import extent_key, load_grid, mask_like, read_grid
 from .layout import (
     ANALYSIS_TABS, ASSETS, GUI_OUTPUT, HA_BELOW_ONE, OPTUNA_URL, OUTPUT_FLAGS, funders, help_tab, no_run_yet, output_groups, output_switch_id,
@@ -37,7 +37,7 @@ from .setup import (
     save_setup, start_folder, typed_path,
 )
 from .setup_ui import (
-    DAILY_FILES, EXAMPLE_FOLDER, PREVIEW_FILES, PREVIEW_STYLE, REGION_BOXES, SUFFIX_NAMES, available_model, example_note_box, region_values,
+    DAILY_FILES, EXAMPLE_FOLDER, PREVIEW_FILES, PREVIEW_STYLE, REGION_BOXES, REGION_LAYERS, REGION_MONTHS, SUFFIX_NAMES, available_model, example_note_box, region_values,
     period_values, setup_problems, setup_tab, setup_value,
 )
 from .variables import (
@@ -48,7 +48,7 @@ from .variables import (
 STATIC_MESSAGE = "This variable does not change over time: see the map."
 HUMANS_PER_AGENT_RANGE = (0.5, 2)  # Outside it, the sidebar suggests a number of agents
 REGION_MAP_TITLES = {
-    "all": "Population density. The whole grid is simulated.",
+    "all": "The whole grid is simulated",
     "box": "Drag a rectangle to choose the subregion",
     "point": "Click a cell to choose the point",
 }
@@ -765,9 +765,55 @@ def create_app(config):
             ready = region_basemap_task.status() == "success" and region_basemap_for() == region_map_extent()
             return region_basemap_task.result() if ready else None
 
+        region_climates = {}  # Mean rainfall or temperature computed in this session: {key: (field, problem)}
+        region_climates_added = reactive.value(0)
+
+        def climate_or_problem(wanted):
+            path, key, start, end, choice = wanted
+            try:
+                return wanted, climatology(path, key, start, end, REGION_MONTHS[choice][1]), None
+            except (OSError, ValueError, KeyError, StopIteration, TypeError, RuntimeError) as error:
+                return wanted, None, str(error)
+
+        @reactive.extended_task
+        async def region_climate_task(wanted):
+            return await asyncio.to_thread(climate_or_problem, wanted)
+
+        @reactive.calc
+        def region_climate_key():
+            """(path, file key, start, end, choice of months) of the mean the region map shows; None for population.
+            Over the period typed in Run parameters, or all the days of the file if it cannot be used."""
+            key = input.region_layer()
+            if key == "pop_file":
+                return None
+            typed = typed_days()
+            start, end = (None, None) if typed is None or typed[2] else typed[:2]
+            return str(typed_path(input[f"setup_{key}"]())), key, start, end, input.region_month()
+
+        @reactive.effect
+        def compute_region_climate():
+            wanted = region_climate_key()
+            if wanted is not None and wanted not in region_climates:
+                region_climate_task.invoke(wanted)  # One at a time: a second waits for the first
+
+        @reactive.effect
+        def keep_region_climate():
+            if region_climate_task.status() != "success":
+                return
+            wanted, field, problem = region_climate_task.result()
+            region_climates[wanted] = (field, problem)
+            with reactive.isolate():
+                region_climates_added.set(region_climates_added() + 1)
+
+        def region_climate_title(wanted, field):
+            _, key, start, end, choice = wanted
+            period = f"{start} to {end}" if start is not None else "all the days of the file"
+            when = "" if REGION_MONTHS[choice][1] is None else f" in {REGION_MONTHS[choice][0]}"
+            return f"Mean {REGION_LAYERS[key].lower()}{when}, {period} ({field.attrs['days']:,} days)"
+
         @reactive.effect
         async def draw_region_map():
-            """The population, and the region in the boxes. What a drag or a click does depends on the choice:
+            """The population, or the mean rainfall or temperature, and the region in the boxes. What a drag or a click does depends on the choice:
             nothing for the whole grid, a rectangle for a subregion, a cell for a point."""
             regions_drawn()  # A rectangle drawn is replaced by the region it gives
             data = region_map_data()
@@ -776,8 +822,24 @@ def create_app(config):
                 return
             mode = input.setup_region()
             region, region_grid, _ = typed_region_grid()
-            figure = map_figure(data, None, ("Population density", data.attrs.get("units", "")), 1, field_limits(data, log=True),
-                                (), region_basemap(), colour_map="Reds", log=True)
+            wanted = region_climate_key()
+            if wanted is None:
+                title = "Population density"
+                figure = map_figure(data, None, (title, data.attrs.get("units", "")), 1, field_limits(data, log=True),
+                                    (), region_basemap(), colour_map="Reds", log=True)
+            else:
+                region_climates_added()
+                name = REGION_LAYERS[wanted[1]].lower()
+                if wanted not in region_climates:
+                    await send_figure(session, "region_map", message_figure(f"Computing the mean {name}…"))
+                    return
+                field, problem = region_climates[wanted]
+                if problem is not None:
+                    await send_figure(session, "region_map", message_figure(f"The mean {name} cannot be computed: {problem}."))
+                    return
+                title = region_climate_title(wanted, field)
+                figure = map_figure(field, None, (title, field.attrs.get("units", "")), 1, field_limits(field),
+                                    (), region_basemap(), colour_map=PREVIEW_STYLE[wanted[1]][0])
             outline = region_outline()
             if outline is not None:
                 west, east, south, north = outline
@@ -788,7 +850,8 @@ def create_app(config):
                                             marker={"symbol": "circle-open", "size": 18, "line": {"width": 3}, "color": BOX},
                                             showlegend=False))
             figure.update_layout(
-                title=REGION_MAP_TITLES[mode],
+                title=f"{title}<br><span style='font-size: 0.85em'>{REGION_MAP_TITLES[mode]}</span>",
+                margin={"t": 66},  # Two lines of title
                 dragmode="drawrect" if mode == "box" else "zoom",
                 newshape={"line": {"color": BOX, "width": 2, "dash": "dot"}},
                 # The zoom is kept while the grid is the same

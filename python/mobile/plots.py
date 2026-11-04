@@ -357,11 +357,11 @@ def age_figure(ages, fraction, cumulative, name):
         name="Fraction by year of age (left axis)", hovertemplate="Age %{x}: %{y:.4f}<extra></extra>",
     ))
     figure.add_trace(go.Scatter(
-        x=[mean, mean], y=[0, at_mean], mode="lines", line={"color": BOX, "width": 1}, opacity=0.3,
+        x=[mean, mean], y=[0, at_mean], mode="lines", line={"color": AMBER, "width": 1}, opacity=0.6,
         showlegend=False, hoverinfo="skip",
     ))
     figure.add_trace(go.Scatter(
-        x=[mean], y=[at_mean], mode="markers", marker={"color": BOX, "size": 10}, name=f"Mean age: {mean:.1f} years",
+        x=[mean], y=[at_mean], mode="markers", marker={"color": AMBER, "size": 10}, name=f"Mean age: {mean:.1f} years",
         hovertemplate=f"Mean age: {mean:.1f} years<extra></extra>",
     ))
     figure.add_trace(go.Scatter(

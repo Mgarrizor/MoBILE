@@ -1,5 +1,6 @@
 """The Setup tab: choosing the driving files and previewing them."""
 
+import calendar
 from dataclasses import replace
 
 from shiny import ui
@@ -134,6 +135,22 @@ def region_values(config):
     return region_mode(region), {key: round(float(value), 3) for key, value in values.items()}
 
 
+REGION_LAYERS = {"pop_file": "Population density", "rain_file": "Rainfall", "temp_file": "Temperature"}
+SEASONS = {"DJF": (12, 1, 2), "MAM": (3, 4, 5), "JJA": (6, 7, 8), "SON": (9, 10, 11)}
+# What the mean of the region map is over: {choice: (name, calendar months or None for all of them)}
+REGION_MONTHS = {
+    "all": ("all year", None),
+    **{season: (f"{season} ({calendar.month_name[months[0]]} to {calendar.month_name[months[-1]]})", months)
+       for season, months in SEASONS.items()},
+    **{str(month): (calendar.month_name[month], (month,)) for month in range(1, 13)},
+}
+REGION_MONTH_MENU = {
+    "all": "All year",
+    "Seasons": {season: REGION_MONTHS[season][0] for season in SEASONS},
+    "Months": {str(month): calendar.month_name[month] for month in range(1, 13)},
+}
+
+
 REGION_BOXES = (("north", "North [°N]"), ("west", "West [°E]"), ("east", "East [°E]"), ("south", "South [°N]"))
 
 
@@ -146,7 +163,7 @@ REGION_HINTS = {
 
 def _region_card(config):
     """The region to simulate, with a map of its own: the whole grid, a box as in the Copernicus data store,
-    or a point. The map shows the population, and is used for the region only."""
+    or a point. The map shows the population, or the mean rainfall or temperature, and is used for the region only."""
     mode, values = region_values(config)
     boxes = [
         ui.div(ui.input_numeric(f"setup_{key}", label, value=values.get(key), step=0.05), class_=f"region-{key}")
@@ -172,7 +189,20 @@ def _region_card(config):
                 ),
                 ui.output_ui("region_summary"),
             ),
-            ui.div(id="region_map", style="height: 480px;"),
+            ui.div(
+                ui.div(
+                    ui.input_radio_buttons(
+                        "region_layer",
+                        with_tip("Map", "Rainfall and temperature are their mean over the period in Run parameters, from the "
+                                        "files in Driving files: to help choose the region."),
+                        REGION_LAYERS, inline=True,
+                    ),
+                    ui.panel_conditional("input.region_layer !== 'pop_file'",
+                                         ui.input_select("region_month", "Mean over", REGION_MONTH_MENU, width="15rem")),
+                    class_="d-flex flex-wrap align-items-end gap-4",
+                ),
+                ui.div(id="region_map", style="height: 480px;"),
+            ),
             col_widths=(4, 8),
         ),
         class_="mt-3",
