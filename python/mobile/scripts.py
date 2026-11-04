@@ -36,6 +36,16 @@ PAGE_STYLE = """
 .logo { background: white; border-radius: 4px; padding: 2px; }
 .sidebar-heading { font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
                    color: var(--bs-secondary-color); margin: 0.5rem 0 0.25rem; }
+/* Run and Cancel keep the same size whatever their label, as Run shows a spinner while busy */
+.run-bar > * { flex: 1 1 0; min-width: 0; white-space: nowrap; }
+/* Sidebar entries are typed, without up and down buttons */
+.bslib-sidebar-layout input[type=number] { -moz-appearance: textfield; appearance: textfield; }
+.bslib-sidebar-layout input[type=number]::-webkit-inner-spin-button,
+.bslib-sidebar-layout input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+/* The sidebar stays in view while the page scrolls */
+@media (min-width: 992px) {
+  .bslib-sidebar-layout:not(.sidebar-collapsed) > .sidebar { position: sticky; top: 0; align-self: start; height: 100vh; overflow-y: auto; }
+}
 .apply-bar { display: flex; flex-direction: column; align-items: center; margin: 1rem 0; }
 /* North over West and East, South under them, as in the Copernicus data store */
 .region-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 9rem)); column-gap: 0.75rem; }

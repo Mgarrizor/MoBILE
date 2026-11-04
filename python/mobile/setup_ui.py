@@ -5,7 +5,7 @@ from shiny import ui
 from .grid import pop_coordinates
 from .layout import player_controls, with_tip
 from .plots import COLOUR_MAPS
-from .setup import OPTIONAL_FILES, REGION_MODES, REQUIRED_FILES, region_mode
+from .setup import OPTIONAL_FILES, REGION_MODES, REQUIRED_FILES, days_to_ymd, region_mode
 
 
 SUFFIX_NAMES = {"netcdf": ("netCDF (.nc)",), "text": ("text (.txt, .csv)",), "folder": ()}
@@ -37,7 +37,12 @@ def setup_tab(config):
         ui.card_header("Run parameters"),
         ui.input_text("setup_project", "Project", value=config.project, width="100%"),
         ui.input_select("setup_disID", "Model", MODEL_CHOICES, selected=str(run["disID"])),
-        ui.input_numeric("setup_nstep", "Days to simulate (0: all the driving data)", value=run["nstep"], min=0, step=1),
+        ui.tags.label("Time to simulate (all zero: all the driving data)", class_="form-label mb-1"),
+        ui.layout_columns(
+            *(ui.input_numeric(f"setup_{key}", label, value=value, min=0, step=1)
+              for key, label, value in zip(("years", "months", "days"), ("Years", "Months", "Days"), days_to_ymd(run["nstep"]))),
+            col_widths=(4, 4, 4),
+        ),
         ui.input_switch("setup_spin_up", with_tip("Spin-up to equilibrium", "Let the model settle to equilibrium before the simulated period starts."), value=run["spin_up"] == 1),
         ui.input_numeric("setup_threads", with_tip("Threads", "CPU threads used by the model. Results depend on the number: keep it fixed to compare runs."), value=run["threads"], min=1, step=1),
         _path_input("setup_runs_dir", "Results folder", str(config.runs_dir), "folder"),

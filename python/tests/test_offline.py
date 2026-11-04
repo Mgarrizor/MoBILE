@@ -35,7 +35,8 @@ from mobile.basemap import load_basemap
 from mobile.driving import field_limits, mean_age, open_field, read_age
 from mobile.results import list_runs, load_run, load_seed_band, write_seed_band
 from mobile.setup import (
-    create_folder, from_fields, from_manifest, list_folder, load_setup, region_from_fields, region_mode, save_setup, start_folder,
+    create_folder, days_to_ymd, from_fields, from_manifest, list_folder, load_setup, region_from_fields, region_mode, save_setup,
+    start_folder, ymd_to_days,
 )
 from mobile.grid import pop_coordinates, read_grid
 from mobile.region import axis_range, cut_inputs, region_problems
@@ -225,6 +226,17 @@ class TestOutputs(unittest.TestCase):
         self.assertEqual(preferred_variable(variables, "rain"), "rain")
         self.assertEqual(preferred_variable(variables, "V"), "EIR")
         self.assertEqual(preferred_variable({"rain": variables["rain"]}, "V"), "rain")
+
+
+class TestSimulatedTime(unittest.TestCase):
+    def test_days_and_years_months_days_agree(self):
+        self.assertEqual(days_to_ymd(0), (0, 0, 0))
+        self.assertEqual(days_to_ymd(730), (2, 0, 0))
+        self.assertEqual(ymd_to_days(1, 2, 3), 428)
+        self.assertEqual(ymd_to_days(None, None, 10), 10)
+        for days in (0, 1, 29, 30, 359, 360, 364, 365, 1000, 3650):
+            self.assertEqual(ymd_to_days(*days_to_ymd(days)), days)
+            self.assertLess(days_to_ymd(days)[1], 12)
 
 
 class TestRunName(unittest.TestCase):
