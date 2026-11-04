@@ -1151,6 +1151,7 @@ def create_app(config):
             )
             # The zoom is kept while the grid is the same
             figure.update_layout(meta={"date": figure.layout.meta["date"], "view": str(preview_extent())})
+            figure.update_xaxes(constraintoward="center")
             await send_figure(session, "preview_map", figure)
 
         @reactive.effect
