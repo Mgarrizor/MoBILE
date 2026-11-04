@@ -315,11 +315,13 @@ class TestDrivingChecks(unittest.TestCase):
         self.assertTrue(any("kelvin" in text for text in driving_problems(bare)))
 
     def test_grid_and_days(self):
+        import numpy as np
+
         coarse = self.changed("temp_file", lambda d: d.isel(latitude=slice(0, 10)))
         self.assertTrue(any(text.startswith("Temperature") and "grid" in text for text in driving_problems(coarse)))
         short = self.changed("temp_file", lambda d: d.isel(time=slice(0, 1000)))
         self.assertTrue(any(text.startswith("Temperature") and "1000 days" in text for text in driving_problems(short)))
-        later = self.changed("temp_file", lambda d: d.assign_coords(time=d.time.values + 86400 * 10**9))
+        later = self.changed("temp_file", lambda d: d.assign_coords(time=d.time.values + np.timedelta64(10, "D")))
         self.assertTrue(any("differ" in text for text in driving_problems(later)))
 
     def test_a_file_in_the_wrong_box(self):
@@ -509,7 +511,14 @@ class TestPort(unittest.TestCase):
 
 class TestMapScale(unittest.TestCase):
     def test_units_in_brackets_once(self):
-        self.assertEqual(units_label("day^-1"), "[day^-1]")
+        self.assertEqual(units_label("day^-1"), "[day<sup>−1</sup>]")
+        self.assertEqual(units_label("probability day^-1"), "[probability day<sup>−1</sup>]")
+        self.assertEqual(units_label("km^-2"), "[km<sup>−2</sup>]")
+        self.assertEqual(units_label("kg m-2 s-1"), "[kg m<sup>−2</sup> s<sup>−1</sup>]")
+        self.assertEqual(units_label("m**2"), "[m<sup>2</sup>]")
+        self.assertEqual(units_label("m2"), "[m<sup>2</sup>]")
+        self.assertEqual(units_label("mm/day"), "[mm/day]")
+        self.assertEqual(units_label("[agents]"), "[agents]")
         self.assertEqual(units_label("[fraction]"), "[fraction]")
         self.assertEqual(units_label(" "), "")
 

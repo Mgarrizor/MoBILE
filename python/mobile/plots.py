@@ -1,6 +1,7 @@
 """Colours, figures and the messages that send them to the page."""
 
 import json
+import re
 
 import numpy as np
 import plotly.graph_objects as go
@@ -93,11 +94,19 @@ def cell_envelope(members):
     return np.median(members, axis=0), members.min(axis=0), members.max(axis=0)
 
 
+def _superscript(exponent):
+    return "<sup>" + exponent.replace("-", "−").lstrip("+") + "</sup>"
+
+
 def units_label(units):
-    """Units between square brackets, also when the file already has them so."""
+    """Units between square brackets, also when the file already has them so, with their exponents as
+    superscripts (HTML, as Plotly draws it): day^-1, day-1 and m2 give day⁻¹ and m². Plotly text only."""
     units = units.strip()
     if units.startswith("[") and units.endswith("]"):
         units = units[1:-1].strip()
+    units = re.sub(r"(?:\^|\*\*)\{?([+-]?\d+)\}?", lambda match: _superscript(match.group(1)), units)
+    units = re.sub(r"(?<=[A-Za-z])(-\d)\b", lambda match: _superscript(match.group(1)), units)
+    units = re.sub(r"\b([kcd]?m)([23])\b", lambda match: match.group(1) + _superscript(match.group(2)), units)
     return f"[{units}]" if units else ""
 
 
