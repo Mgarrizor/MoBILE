@@ -2,7 +2,7 @@
 
 import re
 import threading
-from dataclasses import field
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .results import load_run, load_seed_band, write_seed_band
@@ -14,6 +14,7 @@ from .variables import AGE_FIELD, age_groups, age_label
 MAX_LOADED_VARIABLES = 4
 
 
+@dataclass
 class RunState:
     """Written by the worker thread, read by the session."""
 
@@ -35,6 +36,7 @@ class RunState:
             return self.message, self.fraction, self.member, self.members
 
 
+@dataclass
 class Outcome:
     status: str
     loaded: bool = False

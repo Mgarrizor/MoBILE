@@ -24,7 +24,7 @@ from mobile.config import (
 from mobile.rundir import create_run_dir, fill_template
 from mobile.app import free_port
 from mobile.layout import OUTPUT_FLAGS, logo_files
-from mobile.outcome import run_label, run_name_problem
+from mobile.outcome import Outcome, RunState, run_label, run_name_problem
 from mobile.plots import age_figure, cell_envelope, colour_values, grid_step, map_figure, next_cells, units_label
 from mobile.setup_ui import setup_problems
 from mobile.variables import age_choices, age_groups, preferred_variable, resolve_variable, variable_choices
@@ -501,6 +501,23 @@ class TestProgress(unittest.TestCase):
         self.assertEqual(event.stage, "integrating")
         self.assertAlmostEqual(event.fraction, 0.501)
         self.assertIsNone(parser.parse("Pi = 3.1416"))
+
+
+class TestRunState(unittest.TestCase):
+    """What Run, Cancel and Load run rely on: both are dataclasses, with a lock and lists of their own."""
+
+    def test_state_is_updated_and_read(self):
+        state = RunState()
+        state.update(message="Day 3 of 40", fraction=0.075, member=2, members=5, cancelled=True)
+        self.assertEqual(state.snapshot(), ("Day 3 of 40", 0.075, 2, 5))
+        self.assertTrue(state.cancelled)
+        self.assertIsNot(state.lock, RunState().lock)
+
+    def test_outcome_from_keywords(self):
+        outcome = Outcome(status="finished", nagent=1000, seeds=[1])
+        self.assertEqual((outcome.status, outcome.nagent, outcome.seeds, outcome.results), ("finished", 1000, [1], []))
+        outcome.results.append("result")
+        self.assertEqual(Outcome(status="finished").results, [])
 
 
 class TestRegion(unittest.TestCase):
