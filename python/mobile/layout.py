@@ -14,7 +14,6 @@ ANALYSIS_TABS = (
     ("Time series", "Time series analysis, such as spectrograms: to come."),
     ("Demography", "Age-related analysis: to come."),
     ("Mobility", "Mobility analysis: to come. Mobility is not yet functional in MoBILE."),
-    ("Sensitivity analysis", "Sensitivity analysis of the model parameters with SALib: to come."),
 )
 ASSETS = Path(__file__).parent / "assets"
 LOGO_SUFFIXES = (".png", ".svg", ".jpg", ".jpeg")

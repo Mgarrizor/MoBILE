@@ -232,7 +232,7 @@ function placeColourBar(plot) {
 // A plot drawn while its tab was hidden has no size: fit the plots when their tab is shown again.
 // A map playing in a tab that is now hidden stops.
 $(document).on('shown.bs.tab', function() {
-  for (const id of ['map', 'cell_plot', 'envelope_plot', 'preview_map', 'preview_cell_plot', 'region_map']) {
+  for (const id of ['map', 'cell_plot', 'envelope_plot', 'preview_map', 'preview_cell_plot', 'region_map', 'sa_indices', 'sa_pairs', 'sa_map', 'sa_climate']) {
     const plot = document.getElementById(id);
     if (plot && plot.data && plot.offsetParent !== null) Plotly.Plots.resize(plot);
   }

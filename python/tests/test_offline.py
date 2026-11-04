@@ -11,6 +11,9 @@ from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
+import netCDF4
+import numpy as np
+
 from mobile.config import (
     SLIDER_GROUPS,
     Config,
@@ -26,8 +29,8 @@ from mobile.app import free_port
 from mobile.layout import OUTPUT_FLAGS, logo_files
 from mobile.outcome import Outcome, RunState, run_label, run_name_problem
 from mobile.plots import (
-    MAX_DOTS, add_dot, age_figure, cell_envelope, colour_values, default_dot, grid_step, map_figure, move_dot, next_cells,
-    remove_dot, units_label,
+    MAX_DOTS, add_dot, age_figure, cell_envelope, climate_figure, colour_values, default_dot, grid_step, index_map_figure,
+    indices_figure, map_figure, move_dot, next_cells, remove_dot, second_order_figure, units_label,
 )
 from mobile.setup_ui import setup_problems
 from mobile.variables import age_choices, age_groups, preferred_variable, resolve_variable, variable_choices
@@ -40,7 +43,16 @@ from mobile.setup import (
 )
 from mobile.grid import pop_coordinates, read_grid
 from mobile.region import axis_range, cut_inputs, region_problems
-from mobile.runner import ProgressParser, macos_sdk, run_environment
+from mobile.runner import ProgressParser, RunCancelled, Runner, RunnerBusy, macos_sdk, run_environment
+from mobile.sensitivity_results import (
+    analyse_study, cell_dataset, chance_share, complete_seeds, describe_metric, indices_table, metric_key,
+)
+from mobile.sensitivity_runs import (
+    RECORD, SAMPLES, StudyState, create_study, list_studies, read_study, run_finished, run_name, run_study, study_label, studies_dir,
+)
+from mobile.sensitivity import (
+    Metric, SampledParameter, analyse, analyse_cells, design_problems, reduce_field, run_count, run_count_formula, sample,
+)
 
 CONFIG = example_config()
 
@@ -596,6 +608,396 @@ class TestRunState(unittest.TestCase):
         self.assertEqual((outcome.status, outcome.nagent, outcome.seeds, outcome.results), ("finished", 1000, [1], []))
         outcome.results.append("result")
         self.assertEqual(Outcome(status="finished").results, [])
+
+
+class TestSensitivity(unittest.TestCase):
+    """Sampling and Sobol indices, checked against the Ishigami function, whose indices are known exactly."""
+
+    def ishigami(self, values):
+        x1, x2, x3 = values.T
+        return np.sin(x1) + 7 * np.sin(x2) ** 2 + 0.1 * x3 ** 4 * np.sin(x1)
+
+    def setUp(self):
+        self.ishigami_parameters = [SampledParameter(f"x{i}", "uniform", -math.pi, math.pi) for i in (1, 2, 3)]
+
+    def test_distributions_stay_in_bounds(self):
+        unit = np.linspace(0, 1, 1001)
+        normal = SampledParameter("a", "normal", 0.0, 1.0, mean=0.1, sd=0.2)
+        lognormal = SampledParameter("b", "lognormal", 1e-4, 1.0, mean=math.log(0.01), sd=2.0)
+        for parameter in (normal, lognormal):
+            values = parameter.from_unit(unit)
+            self.assertTrue(np.all((values >= parameter.low) & (values <= parameter.high)), parameter.name)
+        # Uniform and log-uniform: the ends and the middle
+        self.assertEqual(list(SampledParameter("c", "uniform", 2.0, 4.0).from_unit([0, 0.5, 1])), [2.0, 3.0, 4.0])
+        np.testing.assert_allclose(SampledParameter("d", "loguniform", 1e-5, 1e-1).from_unit([0, 0.5, 1]), [1e-5, 1e-3, 1e-1])
+        # Truncated where the bounds are symmetric about the mean: the median is the mean (of ln x for log-normal)
+        self.assertAlmostEqual(float(SampledParameter("e", "normal", 0.0, 1.0, mean=0.5, sd=0.3).from_unit(0.5)), 0.5)
+        self.assertAlmostEqual(float(SampledParameter("f", "lognormal", 1e-3, 1e1, mean=math.log(0.1), sd=1.0).from_unit(0.5)), 0.1)
+        # Truncation moves the mass inside: a quarter of N(0.1, 0.2) is below 0, none of the truncated one
+        self.assertGreater(float(normal.from_unit(0.25)), 0.0)
+
+    def test_problems(self):
+        good = SampledParameter("a", "uniform", 0.0, 1.0)
+        self.assertEqual(good.problems(), [])
+        for bad in (SampledParameter("a", "uniform", 1.0, 1.0), SampledParameter("a", "loguniform", 0.0, 1.0),
+                    SampledParameter("a", "normal", 0.0, 1.0, mean=2.0, sd=0.1), SampledParameter("a", "normal", 0.0, 1.0, mean=0.5, sd=0.0),
+                    SampledParameter("a", "normal", 0.0, 1.0), SampledParameter("a", "lognormal", 0.1, 1.0, mean=0.5, sd=1.0),
+                    SampledParameter("a", "gamma", 0.0, 1.0)):
+            self.assertTrue(bad.problems(), bad)
+        self.assertIn("ln(minimum)", SampledParameter("a", "lognormal", 0.1, 1.0, mean=0.5, sd=1.0).problems()[0])
+        b = SampledParameter("b", "uniform", 0.0, 1.0)
+        self.assertEqual(design_problems([good, b], 64), [])
+        self.assertTrue(design_problems([good], 64))
+        self.assertTrue(design_problems([good, b], 100))
+        self.assertTrue(design_problems([good, good], 64))
+
+    def test_run_count(self):
+        six = [SampledParameter(f"p{i}", "uniform", 0.0, 1.0) for i in range(6)]
+        self.assertEqual(run_count_formula(1024, six), "N(2D+2) = 1,024 × (2·6 + 2) = 14,336 runs")
+        self.assertEqual(run_count_formula(1024, six, second_order=False), "N(D+2) = 1,024 × (6 + 2) = 8,192 runs")
+        self.assertEqual(run_count_formula(1024, six, seeds=5), "N(2D+2) × seeds = 1,024 × (2·6 + 2) × 5 = 71,680 runs")
+        self.assertEqual(run_count(1024, six, seeds=5), 71680)
+
+    def test_sample(self):
+        parameters = [SampledParameter("a", "uniform", 2.0, 4.0), SampledParameter("b", "loguniform", 1e-5, 1e-2),
+                      SampledParameter("c", "normal", 0.0, 1.0, mean=0.1, sd=0.2)]
+        unit, values = sample(parameters, 64, seed=3)
+        self.assertEqual(values.shape, (run_count(64, parameters), 3))
+        self.assertTrue(np.all((unit >= 0) & (unit <= 1)))
+        for j, parameter in enumerate(parameters):
+            self.assertTrue(np.all((values[:, j] >= parameter.low) & (values[:, j] <= parameter.high)), parameter.name)
+        np.testing.assert_array_equal(values, sample(parameters, 64, seed=3)[1])
+        with self.assertRaises(ValueError):
+            sample(parameters[:1], 64)
+
+    def test_ishigami_indices(self):
+        # Exact: S1 = (0.3139, 0.4424, 0), ST = (0.5576, 0.4424, 0.2437), S13 = 0.2437
+        _, values = sample(self.ishigami_parameters, 4096, seed=1)
+        indices = analyse(self.ishigami_parameters, self.ishigami(values), seed=1)
+        np.testing.assert_allclose(indices["S1"], [0.3139, 0.4424, 0.0], atol=0.03)
+        np.testing.assert_allclose(indices["ST"], [0.5576, 0.4424, 0.2437], atol=0.03)
+        self.assertAlmostEqual(indices["S2"][0, 2], 0.2437, delta=0.05)
+        self.assertTrue(np.all(indices["ST_conf"] > 0))
+
+    def test_cells_as_salib(self):
+        """The indices of each cell are SALib's for that cell alone; a scaled output has the same indices, a
+        constant one none."""
+        _, values = sample(self.ishigami_parameters, 256, seed=2)
+        y = self.ishigami(values)
+        cells = analyse_cells(self.ishigami_parameters, np.column_stack([y, 2 * y + 5, np.ones_like(y)]), second_order=True)
+        alone = analyse(self.ishigami_parameters, y, num_resamples=2)
+        for key in ("S1", "ST"):
+            np.testing.assert_allclose(cells[key][:, 0], alone[key])
+            np.testing.assert_allclose(cells[key][:, 1], alone[key])
+            self.assertTrue(np.all(np.isnan(cells[key][:, 2])))
+        np.testing.assert_allclose(cells["S2"][0, 2, 0], alone["S2"][0, 2])
+
+    def test_metric(self):
+        import xarray as xr
+
+        time = np.arange("2012-01-01", "2013-01-01", dtype="datetime64[D]")
+        month = np.array([int(str(day)[5:7]) for day in time], dtype="float64")
+        field = xr.DataArray(np.broadcast_to(month[:, None, None], (time.size, 2, 3)).copy(), dims=("time", "lat", "lon"),
+                             coords={"time": time.astype("datetime64[ns]"), "lat": [10.0, 11.0], "lon": [1.0, 2.0, 3.0]})
+        field[:, 0, 0] = 100.0  # Outside the mask
+        mask = xr.DataArray(np.array([[False, True, True], [True, True, True]]), dims=("lat", "lon"), coords={"lat": [10.0, 11.0], "lon": [1.0, 2.0, 3.0]})
+        wet = Metric("EIR", time="sum", space="mean", months=(6, 7))
+        self.assertEqual(float(reduce_field(field, wet, mask)), 30 * 6 + 31 * 7)
+        self.assertEqual(float(reduce_field(field, Metric("EIR", time="max", space="sum", start="2012-03-01", end="2012-04-30"), mask)), 4 * 5)
+        cells = reduce_field(field, Metric("EIR", time="mean", space="none", months=(12,)), mask)
+        self.assertEqual(cells.dims, ("lat", "lon"))
+        self.assertTrue(np.isnan(cells[0, 0]) and float(cells[1, 2]) == 12)
+        series = reduce_field(field, Metric("EIR", time="none", space="mean", months=(1, 2)), mask)
+        self.assertEqual(series.sizes["time"], 31 + 29)
+        self.assertEqual(float(reduce_field(field.isel(time=0), Metric("EIR"), mask)), 1)  # A static field
+        with self.assertRaises(ValueError):
+            reduce_field(field, Metric("EIR", start="2013-01-01"), mask)
+        for bad in (Metric("EIR", time="none", space="none"), Metric("EIR", months=(13,)), Metric("EIR", start="2012-05-01", end="2012-04-01")):
+            self.assertTrue(bad.problems(), bad)
+
+
+class TestBuildLock(unittest.TestCase):
+    """mobile.sh changes the shared src/ while it builds, so builds take turns; built models run side by side.
+    A stand-in mobile.sh writes when its build starts and ends and when its run ends."""
+
+    FAKE = """#!/bin/bash
+run=$(basename $PWD)
+echo "$run build-start" >> $EVENTS; sleep 0.6; echo "$run build-end" >> $EVENTS
+echo '================= Running MoBILE ================='
+sleep 1.5; echo "$run run-end" >> $EVENTS
+echo 'Program finished successfully'
+"""
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        root = Path(folder.name)
+        fake = root / "MoBILE"
+        (fake / "utils").mkdir(parents=True)
+        (fake / "src").mkdir()
+        (fake / "utils" / "run_MOBILE.sh").write_text((Path(MOBILE) / "utils" / "run_MOBILE.sh").read_text())
+        (fake / "src" / "mo_namelist.f90").write_text((Path(MOBILE) / "src" / "mo_namelist.f90").read_text())
+        (fake / "mobile.sh").write_text(self.FAKE)
+        self.events = root / "events.txt"
+        self.events.touch()
+        patch = mock.patch.dict(os.environ, {"EVENTS": str(self.events)})
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(root)
+        self.config = replace(Config.load(CONFIG), mobile=fake, runs_dir=root / "runs")
+
+    def start(self, name, wait):
+        import threading
+
+        runner = Runner(self.config)
+        outcome = {}
+
+        def target():
+            try:
+                outcome["result"] = runner.run(name, wait=wait)
+            except Exception as error:
+                outcome["error"] = error
+
+        thread = threading.Thread(target=target)
+        thread.start()
+        return runner, thread, outcome
+
+    def test_builds_take_turns_and_runs_overlap(self):
+        import time
+
+        _, first, a = self.start("a", wait=True)
+        time.sleep(0.2)
+        _, second, b = self.start("b", wait=True)
+        first.join(20)
+        second.join(20)
+        self.assertEqual((a.keys(), b.keys()), ({"result"}, {"result"}))
+        events = self.events.read_text().split("\n")
+        order = {event: index for index, event in enumerate(events)}
+        self.assertLess(order["a build-end"], order["b build-start"])  # Builds do not overlap
+        self.assertLess(order["b build-start"], order["a run-end"])   # The second built while the first ran
+
+    def test_busy_or_cancelled_while_another_builds(self):
+        import time
+
+        _, first, _ = self.start("a", wait=True)
+        time.sleep(0.2)
+        with self.assertRaises(RunnerBusy):
+            Runner(self.config).run("b")
+        runner, waiting, outcome = self.start("c", wait=True)
+        time.sleep(0.2)
+        runner.cancel()
+        waiting.join(5)
+        self.assertIsInstance(outcome.get("error"), RunCancelled)
+        self.assertFalse((self.config.runs_dir / "c").exists())
+        first.join(20)
+
+
+class TestStudyRuns(unittest.TestCase):
+    """An analysis run through run_MOBILE.sh with a stand-in mobile.sh that only writes an empty output."""
+
+    FAKE = """#!/bin/bash
+sleep ${FAKE_SLEEP:-0}
+echo '================= Running MoBILE ================='
+mkdir -p output && touch output/output.nc
+echo 'Program finished successfully'
+"""
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        root = Path(folder.name)
+        fake = root / "MoBILE"
+        (fake / "utils").mkdir(parents=True)
+        (fake / "src").mkdir()
+        (fake / "utils" / "run_MOBILE.sh").write_text((Path(MOBILE) / "utils" / "run_MOBILE.sh").read_text())
+        (fake / "src" / "mo_namelist.f90").write_text((Path(MOBILE) / "src" / "mo_namelist.f90").read_text())
+        (fake / "mobile.sh").write_text(self.FAKE)
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(root)
+        self.config = replace(Config.load(CONFIG), mobile=fake, runs_dir=root / "runs", params={"e_0": 0.2}, output=("out_EIR",))
+        self.parameters = [SampledParameter("b_rate", "loguniform", 0.2, 20.0), SampledParameter("K_h", "uniform", 1e-5, 1e-3)]
+
+    def test_runs_every_sample_and_seed(self):
+        folder = create_study(self.config, self.parameters, 2, False, [7, 8], name="small", sample_seed=1)
+        self.assertEqual(folder, studies_dir(self.config.runs_dir) / "small")
+        record = run_study(folder, StudyState(), parallel=4)
+        self.assertEqual((record["status"], record["finished"], record["runs"]), ("finished", 16, 16))
+        values = np.loadtxt(folder / "samples.txt", ndmin=2)
+        self.assertEqual(values.shape, (8, 2))
+        run_dir = folder / "runs" / run_name(8, 5)
+        manifest = json.loads((run_dir / "run.json").read_text())
+        params = read_params(run_dir / "params.txt")
+        # The sampled values, the fixed parameter of the sliders, the seed and the outputs reach the run
+        self.assertEqual(float(params["b_rate"]), values[5, 0])
+        self.assertEqual(float(params["K_h"]), values[5, 1])
+        self.assertEqual(float(params["e_0"]), 0.2)
+        self.assertEqual(manifest["run"]["seed"], 8)
+        self.assertEqual(manifest["output"], ["out_EIR"])
+        self.assertIn(str(folder), list_studies(self.config.runs_dir))
+        self.assertIn("16 runs, finished", study_label(folder, read_study(folder)))
+        # Not among the single runs
+        self.assertEqual(list_runs(self.config.runs_dir), {})
+
+    def test_cancel_and_resume(self):
+        import threading
+        import time
+
+        folder = create_study(self.config, self.parameters, 2, True, [1], sample_seed=1)  # 2 x (2·2 + 2) = 12 runs
+        state = StudyState()
+        outcome = {}
+        with mock.patch.dict(os.environ, {"FAKE_SLEEP": "1"}):
+            thread = threading.Thread(target=lambda: outcome.update(record=run_study(folder, state, parallel=2)))
+            thread.start()
+            time.sleep(2.5)
+            state.cancel()
+            thread.join(30)
+        self.assertEqual(outcome["record"]["status"], "cancelled")
+        done = outcome["record"]["finished"]
+        self.assertTrue(0 < done < 12, done)
+        finished = {index for index in range(12) if run_finished(folder / "runs" / run_name(1, index))}
+        self.assertEqual(len(finished), done)
+        # Resume: only the others run again, and leftovers of cancelled runs are replaced
+        state = StudyState()
+        record = run_study(folder, state, parallel=4)
+        self.assertEqual((record["status"], record["finished"]), ("finished", 12))
+        self.assertEqual(state.done_before, done)
+
+
+def write_known_study(root, n, seeds=(1,), second_order=False, noise=0.0, days=40, shape=(4, 5), hole=(0, 0)):
+    """A sensitivity analysis on disk whose outputs come from a model with known indices, not from MoBILE: x1, x2, x3
+    uniform on [0, 1], and EIR = a·x1 + b·x2 + noise in every populated cell and day, with a = rain / 10 and b = temperature / 10
+    of the cell, so that S1 = a² / (a² + b²) for x1, b² / (a² + b²) for x2, and 0 for x3. Returns (folder, a, b)."""
+    root = Path(root).resolve()
+    lat, lon = np.linspace(-1, 1, shape[0]), np.linspace(30, 32, shape[1])
+    pop = np.full(shape, 100.0)
+    pop[hole] = np.nan  # Not simulated
+    for name, variable, values in (("pop.nc", "pop", pop), ("area.nc", "cell_area", np.ones(shape))):
+        with netCDF4.Dataset(root / name, "w") as dataset:
+            dataset.createDimension("lat", lat.size)
+            dataset.createDimension("lon", lon.size)
+            dataset.createVariable("lat", "f8", ("lat",))[:] = lat
+            dataset.createVariable("lon", "f8", ("lon",))[:] = lon
+            dataset.createVariable(variable, "f8", ("lat", "lon"), fill_value=np.nan)[:] = values
+    rain = np.linspace(1, 9, pop.size).reshape(shape)
+    temperature = np.linspace(30, 10, pop.size).reshape(shape)
+    a, b = rain / 10, temperature / 10
+    parameters = [SampledParameter(f"x{k}", "uniform", 0.0, 1.0) for k in (1, 2, 3)]
+    folder = root / "runs" / "sensitivity" / "known"
+    folder.mkdir(parents=True)
+    _, values = sample(parameters, n, second_order, seed=3)
+    np.savetxt(folder / SAMPLES, values, header="x1 x2 x3")
+    noise_of = np.random.default_rng(0)
+    for seed in seeds:
+        for index, (x1, x2, x3) in enumerate(values):
+            run_dir = folder / "runs" / run_name(seed, index)
+            (run_dir / "output").mkdir(parents=True)
+            eir = a * x1 + b * x2 + noise * noise_of.standard_normal(shape)
+            eir[hole] = 1000 * x3  # Would make x3 matter, were the cell without population counted
+            with netCDF4.Dataset(run_dir / "output" / "output.nc", "w") as dataset:
+                for name, size in (("time", days), ("lat", lat.size), ("lon", lon.size)):
+                    dataset.createDimension(name, size)
+                time = dataset.createVariable("time", "f8", ("time",))
+                time.units, time.calendar = "days since 2012-01-01", "standard"
+                time[:] = np.arange(days)
+                dataset.createVariable("lat", "f8", ("lat",))[:] = lat
+                dataset.createVariable("lon", "f8", ("lon",))[:] = lon
+                for group, name, field in (("Human", "EIR", eir), ("Climate", "rain", rain), ("Climate", "t2m", temperature)):
+                    variable = dataset.createGroup(group).createVariable(name, "f4", ("time", "lat", "lon"))
+                    variable.units = "day^-1"
+                    variable[:] = np.broadcast_to(field, (days, *shape))
+            (run_dir / "run.json").write_text(json.dumps({"status": "finished", "returncode": 0, "wall_seconds": 1, "spinup_years": 0}))
+    record = {
+        "status": "finished", "date": "2026-11-04T12:00:00", "method": "sobol", "n": n, "second_order": second_order,
+        "parameters": [{"name": p.name, "distribution": "uniform", "low": 0.0, "high": 1.0, "mean": None, "sd": None} for p in parameters],
+        "seeds": list(seeds), "sample_seed": 3, "runs": run_count(n, parameters, second_order, len(seeds)), "region": None,
+        "inputs": {"pop_file": str(root / "pop.nc"), "area_file": str(root / "area.nc")},
+    }
+    (folder / RECORD).write_text(json.dumps(record))
+    return folder, a, b
+
+
+class TestStudyResults(unittest.TestCase):
+    """The analysis of the outputs of an analysis, on outputs of a model with known indices."""
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.populated = np.ones((4, 5), bool)
+        self.populated[0, 0] = False
+
+    def test_number_per_run(self):
+        folder, a, b = write_known_study(self.root, 256, seeds=(1, 2), second_order=True, noise=0.3)
+        record = read_study(folder)
+        progress = StudyState()
+        result = analyse_study(folder, record, Metric("EIR", "mean", "mean"), progress)
+        mean_a, mean_b = a[self.populated].mean(), b[self.populated].mean()
+        expected = [mean_a**2 / (mean_a**2 + mean_b**2), mean_b**2 / (mean_a**2 + mean_b**2), 0.0]
+        np.testing.assert_allclose(result["mean"]["S1"], expected, atol=0.05)
+        np.testing.assert_allclose(result["mean"]["ST"], expected, atol=0.05)
+        self.assertEqual(result["each"]["S1"].shape, (2, 3))
+        # The noise of the mean over 19 cells against the variance from the parameters, uniform on [0, 1]
+        noise = 0.3**2 / self.populated.sum()
+        self.assertAlmostEqual(result["chance"], noise / ((mean_a**2 + mean_b**2) / 12 + noise), delta=0.004)
+        self.assertEqual(progress.snapshot()[:2], (2 * 256 * 8, 2 * 256 * 8))
+        self.assertIn("mean over the 19 populated cells", result["description"])
+        table = indices_table(result)
+        self.assertEqual(list(table["parameter"]), ["x1", "x2", "x3"])
+        self.assertIn("S2_with_x2", table)
+        self.assertIn("ST_seed_2", table)
+        for figure in (indices_figure(result), second_order_figure(result)):
+            figure.to_json()
+        # Read once: the second time, from metrics/
+        again = StudyState()
+        analyse_study(folder, record, Metric("EIR", "mean", "mean"), again)
+        self.assertEqual(again.done_before, again.total)
+
+    def test_map_per_parameter(self):
+        folder, a, b = write_known_study(self.root, 128, seeds=(1,), second_order=False)
+        metric = Metric("EIR", "sum", "none", start="2012-01-03", end="2012-01-20", months=(1,))
+        result = analyse_study(folder, read_study(folder), metric)
+        self.assertEqual(result["cells"].size, 19)  # Not the cell without population
+        expected = (a**2 / (a**2 + b**2))[self.populated]
+        np.testing.assert_allclose(result["mean"]["S1"][0], expected, atol=0.06)
+        np.testing.assert_allclose(result["climate"]["rain"][2], (np.linspace(1, 9, 20).reshape(4, 5))[self.populated], rtol=1e-5)
+        self.assertNotIn("chance", result)
+        maps = cell_dataset(result)
+        self.assertEqual(maps["ST"].shape, (3, 4, 5))
+        self.assertTrue(np.isnan(maps["ST"].values[:, 0, 0]).all())
+        for figure in (index_map_figure(result, "x2", "ST"), climate_figure(result, "x2", "S1")):
+            figure.to_json()
+
+    def test_only_seeds_with_every_run(self):
+        folder, _, _ = write_known_study(self.root, 4, seeds=(5, 6))
+        (folder / "runs" / run_name(6, 3) / "run.json").unlink()
+        record = read_study(folder)
+        self.assertEqual(complete_seeds(folder, record), [5])
+        self.assertEqual(analyse_study(folder, record, Metric("EIR", "max", "sum"))["seeds"], [5])
+
+    def test_nothing_to_analyse(self):
+        folder, _, _ = write_known_study(self.root, 4)
+        record = read_study(folder)
+        with self.assertRaisesRegex(ValueError, "No day"):
+            analyse_study(folder, record, Metric("EIR", "mean", "mean", months=(7,)))
+        with self.assertRaisesRegex(ValueError, "not in the outputs"):
+            analyse_study(folder, record, Metric("V", "mean", "mean"))
+
+    def test_cancel_while_reading(self):
+        folder, _, _ = write_known_study(self.root, 4)
+        progress = StudyState()
+        progress.cancel()
+        with self.assertRaises(InterruptedError):
+            analyse_study(folder, read_study(folder), Metric("EIR", "mean", "mean"), progress)
+        self.assertFalse(list((folder / "metrics").glob("*/seed_*.npy")))  # Nothing half read is kept
+
+    def test_chance_share_and_names(self):
+        Y = np.array([[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]])
+        self.assertEqual(float(chance_share(Y)), 0.0)  # The same for every seed
+        self.assertEqual(metric_key(Metric("EIR")), metric_key(Metric("EIR")))
+        self.assertNotEqual(metric_key(Metric("EIR")), metric_key(Metric("EIR", months=(1,))))
+        self.assertEqual(describe_metric(Metric("EIR", "max", "sum", start="2012-03-01", months=(3, 4)), 10),
+                         "EIR, maximum over the days from 2012-03-01 to the last day in Mar, Apr, sum over the 10 populated cells")
 
 
 class TestRegion(unittest.TestCase):

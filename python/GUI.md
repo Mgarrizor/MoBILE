@@ -29,7 +29,7 @@ folder in the Setup tab.
 
 The tabs follow the order of the work: **1. Setup**, **2. Parameters**, **3. Results**. The GUI opens on Setup.
 The sidebar, always visible, starts runs and loads earlier ones. The **Analysis (to come)** menu holds tabs that
-are not implemented yet (Time series, Demography, Mobility, Sensitivity analysis), and **Help** has a short
+are not implemented yet (Time series, Demography, Mobility); the sensitivity analysis is in **2. Parameters**. **Help** has a short
 guide and the documentation. Hover over ⓘ beside a setting for an explanation.
 
 **Light**, **System** and **Dark** at the top right set the colours of the page and of the plots. *System*

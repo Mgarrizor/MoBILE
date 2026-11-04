@@ -12,6 +12,8 @@ dependencies = [
     "pillow",
     "pyshp",
     "shapely",
+    "SALib",
+    "scipy",
 ]
 
 [project.scripts]
