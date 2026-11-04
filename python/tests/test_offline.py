@@ -923,6 +923,20 @@ echo 'Program finished successfully'
         # Not among the single runs
         self.assertEqual(list_runs(self.config.runs_dir), {})
 
+    def test_period_is_cut_once_for_all_runs(self):
+        import xarray as xr
+
+        config = replace(self.config, period={"start": "2013-01-01", "end": "2013-12-31"})
+        folder = create_study(config, self.parameters, 2, False, [3], name="year", sample_seed=1)
+        self.assertEqual(read_study(folder)["period"], config.period)
+        with xr.open_dataset(folder / "inputs" / "rain_file.nc") as rain:
+            self.assertEqual(rain.sizes["time"], 365)
+        run_study(folder, StudyState(), parallel=2)
+        script = (folder / "runs" / run_name(3, 0) / "run_MOBILE.sh").read_text()
+        self.assertRegex(script, r"(?m)^\s*nstep=365$")
+        self.assertIn(str(folder / "inputs" / "rain_file.nc"), script)
+        self.assertFalse((folder / "runs" / run_name(3, 0) / "inputs").exists())
+
     def test_cancel_and_resume(self):
         import threading
         import time
