@@ -59,8 +59,9 @@ Everything a run needs that is not a parameter or an output.
   checks the driving files against each other (grid, days) and for the units of rainfall (mm/day) and temperature
   (°C); any difference opens a warning window, from which the setup can still be applied.
   Problems are listed under the button. It cannot be used while a run is in progress.
-- **Region to simulate** (optional, its own card with its own map of the population density): the model runs on
-  the **Whole grid** by default, and the map then only shows the population. For a **Subregion**, type its North,
+- **Region to simulate** (optional, its own card with its own map of the population density, or of the mean
+  rainfall or temperature over the period (all year, a season such as JJA, or one month), to help choose the
+  region): the model runs on the **Whole grid** by default, and the map is then only for looking. For a **Subregion**, type its North,
   West, South and East edges in degrees (as in the Copernicus data store), or drag a rectangle on the map; a new
   rectangle replaces the one before, and the draw button of the map toolbar (dotted square) brings drawing back
   after zooming. For a **Single point**, type its latitude and longitude, or click a cell on the map. The cells of

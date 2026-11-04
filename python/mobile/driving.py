@@ -41,6 +41,26 @@ def open_field(path, key):
     return field
 
 
+def climatology(path, key, start=None, end=None, months=None):
+    """The mean over time of the field of a daily driving file, cell by cell: over its days from start to end
+    (dates, both included; all of them by default), and only those of the calendar months given (1 to 12), as
+    (6, 7, 8) for June to August.
+    Keeps the attributes of the field, as its units."""
+    field = open_field(path, key)
+    if "time" not in field.dims:
+        raise ValueError("the file has no days")
+    if not np.issubdtype(field["time"].dtype, np.datetime64):
+        raise ValueError("the dates of the file cannot be read")
+    field = field.sel(time=slice(None if start is None else str(start), None if end is None else str(end)))
+    if months is not None:
+        field = field.isel(time=np.isin(field["time"].dt.month.values, months))
+    if field.sizes["time"] == 0:
+        raise ValueError("no days in the period" + ("" if months is None else " for these months"))
+    mean = field.mean("time", keep_attrs=True).load()
+    mean.attrs["days"] = field.sizes["time"]
+    return mean
+
+
 def sample_days(field):
     """At most SAMPLE_DAYS days of a field, spread over the file."""
     if "time" in field.dims and field.sizes["time"] > SAMPLE_DAYS:

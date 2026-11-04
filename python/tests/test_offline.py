@@ -1,5 +1,6 @@
 """Checks that need no simulation: python -m unittest discover tests"""
 
+import datetime
 import json
 import math
 import os
@@ -35,7 +36,7 @@ from mobile.plots import (
 from mobile.setup_ui import AVAILABLE_MODEL, MODEL_TO_COME_NOTE, _model_select, available_model, setup_problems
 from mobile.variables import age_choices, age_groups, preferred_variable, resolve_variable, variable_choices
 from mobile.basemap import load_basemap
-from mobile.driving import field_limits, mean_age, open_field, read_age
+from mobile.driving import climatology, field_limits, mean_age, open_field, read_age
 from mobile.results import list_runs, load_run, load_seed_band, write_seed_band
 from mobile.setup import (
     create_folder, from_fields, from_manifest, list_folder, load_setup, region_from_fields, region_mode, save_setup,
@@ -352,6 +353,51 @@ class TestRunName(unittest.TestCase):
         self.assertTrue(run_label("runs/kenya_e0", manifest).startswith("kenya_e0 (2026-11-02 21:05:12): "))
         self.assertTrue(run_label("runs/20261102-210512-ab12", manifest).startswith("2026-11-02 21:05:12: "))
         self.assertTrue(run_label("runs/seed_band_20261102-210512-ab12", {**manifest, "seeds": [1, 2]}).startswith("2026-11-02 21:05:12: "))
+
+
+class TestClimatology(unittest.TestCase):
+    """The mean rainfall or temperature of the region map, on a file whose value on a day is 10 times its
+    month plus a number per cell (0 to 5): the means are known exactly."""
+
+    def setUp(self):
+        import xarray as xr
+
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.days = np.arange("2012-01-01", "2014-01-01", dtype="datetime64[D]")
+        months = (self.days.astype("datetime64[M]").astype(int) % 12 + 1).astype("float64")
+        self.cells = np.arange(6.0).reshape(2, 3)
+        rain = 10 * months[:, None, None] + self.cells
+        self.path = Path(folder.name, "rain.nc")
+        xr.Dataset({"rain": (("time", "lat", "lon"), rain, {"units": "mm/day"})},
+                   coords={"time": self.days.astype("datetime64[ns]"), "lat": [10.0, 10.1], "lon": [-16.0, -15.9, -15.8]}).to_netcdf(self.path)
+
+    def test_all_year(self):
+        mean = climatology(self.path, "rain_file")
+        months = self.days.astype("datetime64[M]").astype(int) % 12 + 1
+        np.testing.assert_allclose(mean.values, 10 * months.mean() + self.cells)
+        self.assertEqual(mean.attrs["days"], 731)
+        self.assertEqual(mean.attrs["units"], "mm/day")
+
+    def test_month_and_period(self):
+        march = climatology(self.path, "rain_file", months=(3,))
+        np.testing.assert_allclose(march.values, 30 + self.cells)
+        self.assertEqual(march.attrs["days"], 62)
+        start, end = datetime.date(2013, 2, 1), datetime.date(2013, 3, 31)
+        both = climatology(self.path, "rain_file", start, end)
+        np.testing.assert_allclose(both.values, (28 * 20 + 31 * 30) / 59 + self.cells)
+        self.assertEqual(both.attrs["days"], 59)
+        self.assertEqual(climatology(self.path, "rain_file", start, end, months=(2,)).attrs["days"], 28)
+
+    def test_season(self):
+        # December, January and February of 2012 and 2013: 62, 62 and 29 + 28 days, at 120, 10 and 20
+        winter = climatology(self.path, "rain_file", months=(12, 1, 2))
+        np.testing.assert_allclose(winter.values, (62 * 120 + 62 * 10 + 57 * 20) / 181 + self.cells)
+        self.assertEqual(winter.attrs["days"], 181)
+
+    def test_no_days(self):
+        with self.assertRaisesRegex(ValueError, "no days in the period for these months"):
+            climatology(self.path, "rain_file", datetime.date(2013, 2, 1), datetime.date(2013, 3, 31), months=(7,))
 
 
 class TestModelChoice(unittest.TestCase):
