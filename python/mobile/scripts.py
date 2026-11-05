@@ -34,8 +34,9 @@ $(document).on('shiny:sessioninitialized', applyTheme);
 """
 PAGE_STYLE = """
 .logo { background: white; border-radius: 4px; padding: 2px; }
-.sidebar-heading { font-size: 0.8rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
-                   color: var(--bs-secondary-color); margin: 0.5rem 0 0.25rem; }
+.sidebar-heading { font-size: 1.1rem; font-weight: 600;
+                   color: var(--bs-primary); margin: 0.25rem 0 0; }
+.bslib-sidebar-layout > .sidebar > .sidebar-content { gap: 0.7rem; padding: 1.1rem 1.1rem 1rem; }
 /* Run and Cancel keep the same size whatever their label, as Run shows a spinner while busy.
    Cancel is pastel red while it can be used, that is while a run is going. */
 .run-bar > * { width: 100%; white-space: nowrap; }
@@ -45,9 +46,23 @@ PAGE_STYLE = """
 .bslib-sidebar-layout input[type=number] { -moz-appearance: textfield; appearance: textfield; }
 .bslib-sidebar-layout input[type=number]::-webkit-inner-spin-button,
 .bslib-sidebar-layout input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
-/* The sidebar stays in view while the page scrolls */
+/* The header, with the tabs in its second row, stays in view while the page scrolls */
+.bslib-page-sidebar { height: auto; min-height: 100vh; }
+.bslib-page-sidebar > .navbar { position: sticky; top: 0; z-index: 1030; flex-direction: column; align-items: stretch; padding-top: 0.3rem; padding-bottom: 0; }
+.navbar .nav-tabs { flex-wrap: nowrap; border-bottom: 0; padding: 0.1rem 0.75rem 0; gap: 0.25rem; }
+.navbar .nav-tabs .nav-link { color: var(--bs-link-color); background: transparent; border: 0; border-bottom: 3px solid transparent;
+  border-radius: 0; padding: 0.3rem 1rem; font-weight: 500; }
+.navbar .nav-tabs .nav-link:hover { color: var(--bs-link-hover-color); border-bottom-color: rgba(var(--bs-primary-rgb), 0.45); }
+.navbar .nav-tabs .nav-link.active { color: var(--bs-emphasis-color); background: transparent; border-bottom-color: var(--bs-primary); }
+/* The sidebar stays in view below the header */
 @media (min-width: 992px) {
-  .bslib-sidebar-layout:not(.sidebar-collapsed) > .sidebar { position: sticky; top: 0; align-self: start; height: 100vh; overflow-y: auto; }
+  /* The collapse button stays in view below the header, at the right edge of the sidebar, or at the left edge when it is collapsed */
+  .bslib-page-sidebar .bslib-sidebar-layout > .collapse-toggle { position: sticky; top: calc(var(--header-height, 0px) + 0.5rem); right: auto;
+    align-self: start; justify-self: end; margin: 0.5rem 1rem 0 0; }
+  .bslib-page-sidebar .bslib-sidebar-layout.sidebar-collapsed > .collapse-toggle { top: calc(var(--header-height, 0px) + 0.5rem); right: auto;
+    justify-self: start; margin: 0.5rem 0 0 0.5rem; }
+  .bslib-sidebar-layout:not(.sidebar-collapsed) > .sidebar { position: sticky; top: var(--header-height, 0px); align-self: start;
+    height: calc(100vh - var(--sidebar-top, 0px)); overflow-y: auto; }
 }
 .apply-bar { display: flex; flex-direction: column; align-items: center; margin: 1rem 0; }
 /* North over West and East, South under them, as in the Copernicus data store */
@@ -377,6 +392,33 @@ $(document).on('click', '.browse-entry', function(event) {
 """
 
 
+# The tabs move into the header, a tab opens at its top, and the sidebar is as high as the visible part of its column,
+# so that one scroll reaches its last button
+SIDEBAR_FIT = """
+function fitSidebar() {
+  const layout = document.querySelector('.bslib-sidebar-layout');
+  const header = document.querySelector('.bslib-page-sidebar > .navbar');
+  if (!layout || !header) return;
+  const root = document.documentElement.style;
+  root.setProperty('--header-height', header.offsetHeight + 'px');
+  root.setProperty('--sidebar-top', Math.max(layout.getBoundingClientRect().top, header.offsetHeight) + 'px');
+}
+$(function() {
+  const header = document.querySelector('.bslib-page-sidebar > .navbar');
+  const tabs = document.querySelector('ul.nav.shiny-tab-input');
+  if (header && tabs) header.appendChild(tabs);
+  fitSidebar();
+});
+window.addEventListener('scroll', fitSidebar, {passive: true});
+window.addEventListener('resize', fitSidebar);
+// A tab opens at its top, whatever the scroll position of the one before
+document.addEventListener('shown.bs.tab', function(event) {
+  if (event.target.closest('ul.shiny-tab-input')) window.scrollTo(0, 0);
+});
+$(document).on('shiny:connected shiny:value', fitSidebar);
+"""
+
+
 PARAMETER_STYLE = """
 .param-default .irs--shiny .irs-bar, .param-default .irs--shiny .irs-single,
 .param-default .irs--shiny .irs-handle { background: #8a8984; border-color: #8a8984; }
@@ -392,6 +434,7 @@ PARAMETER_STYLE = """
 .param-label { cursor: help; }
 .tooltip-inner:has(.param-info) { max-width: 360px; text-align: left; }
 .param-source { margin-top: 0.4em; font-size: 0.85em; font-style: italic; }
-.card > .card-header { font-weight: 600; border: 2px solid var(--bs-primary); border-radius: var(--bs-card-inner-border-radius);
-  background: rgba(var(--bs-primary-rgb), 0.08); }
+.card > .card-header { font-size: 1.15rem; font-weight: 600; color: var(--bs-primary); letter-spacing: 0.02em;
+  background: transparent; border-bottom: 2px solid rgba(var(--bs-primary-rgb), 0.35); }
+.card.no-run-yet > .card-header { font-size: 1rem; }
 """

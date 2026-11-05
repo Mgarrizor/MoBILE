@@ -93,7 +93,7 @@ def no_run_yet():
         ui.card_header("No results yet"),
         ui.p("Press ", strong("Run"), " in the sidebar to simulate with the current setup and parameters, or choose an earlier "
              "run under ", strong("Earlier runs"), " and press ", strong("Load run"), ". The results then show here.", class_="mb-0"),
-        class_="border-info mb-3",
+        class_="border-info mb-3 no-run-yet",
     )
 
 
@@ -139,7 +139,7 @@ def _logo_placeholder(text, **style):
     return ui.div(
         text,
         style="display: flex; align-items: center; justify-content: center; border: 1px dashed var(--bs-border-color); "
-        "color: var(--bs-secondary-color); font-size: 0.75rem; text-align: center; width: 140px; height: 56px;",
+        "color: var(--bs-secondary-color); font-size: 0.75rem; text-align: center; width: 100px; height: 40px;",
         class_="logo-placeholder",
         **style,
     )
@@ -154,9 +154,10 @@ def page_header(config):
     """The name of the model and the project, which follow the applied setup."""
     disease = config.run["disID"]
     return ui.div(
-        ui.div("MoBILE", style="font-size: 1.4rem; font-weight: 600; line-height: 1.2;"),
-        ui.div(f"Model: {MODEL_NAMES.get(disease, f'disID {disease}')} · Project: {config.project or 'not set'}",
-               style="font-size: 0.95rem; font-weight: 400;"),
+        ui.span("MoBILE", style="font-size: 1.4rem; font-weight: 600;"),
+        ui.span(f"Model: {MODEL_NAMES.get(disease, f'disID {disease}')} · Project: {config.project or 'not set'}",
+                style="font-size: 0.95rem; font-weight: 400; opacity: 0.8;"),
+        style="display: flex; align-items: baseline; flex-wrap: wrap; column-gap: 1rem; line-height: 1.2;",
     )
 
 
@@ -180,7 +181,7 @@ def page_title(header):
         header,
         ui.div(
             theme_switch(),
-            _logo(ictp[0], "", 56) if ictp else _logo_placeholder("ICTP logo", id="ictp_logo"),
+            _logo(ictp[0], "", 40) if ictp else _logo_placeholder("ICTP logo", id="ictp_logo"),
             style="display: flex; align-items: center; gap: 1rem;",
         ),
         style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; width: 100%;",
