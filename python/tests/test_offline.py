@@ -35,7 +35,7 @@ from mobile.plots import (
 )
 from mobile.setup_ui import AVAILABLE_MODEL, MODEL_TO_COME_NOTE, _model_select, available_model, setup_problems
 from mobile.variables import age_choices, age_groups, preferred_variable, resolve_variable, variable_choices
-from mobile.basemap import load_basemap
+from mobile.basemap import cell_size, load_basemap
 from mobile.driving import climatology, field_limits, mean_age, open_field, read_age
 from mobile.results import list_runs, load_run, load_seed_band, write_seed_band
 from mobile.setup import (
@@ -48,7 +48,8 @@ from mobile.grid import pop_coordinates, read_grid
 from mobile.region import axis_range, cut_inputs, region_problems
 from mobile.runner import ProgressParser, RunCancelled, Runner, RunnerBusy, macos_sdk, run_environment
 from mobile.sensitivity_results import (
-    PERCENTILES, analyse_study, cell_dataset, chance_share, complete_seeds, describe_metric, indices_table, metric_key, monthly_table,
+    PERCENTILES, age_note, analysable_variables, analyse_study, analysis_mask, cell_dataset, chance_share, complete_seeds,
+    describe_metric, extract, first_run, indices_table, metric_from_entry, metric_key, monthly_table, output_info,
 )
 from mobile.sensitivity_runs import (
     RECORD, SAMPLES, StudyState, create_study, list_studies, read_study, run_finished, run_name, run_study, study_label, studies_dir,
@@ -1055,15 +1056,34 @@ echo 'Program finished successfully'
         self.assertEqual(state.done_before, done)
 
 
-def write_known_study(root, n, seeds=(1,), second_order=False, noise=0.0, days=40, shape=(4, 5), hole=(0, 0), swap_day=None):
+AGE_LABELS = ["0-0", "1-1", "2-2", "3-3", "4-4", "5-5", "6-6", "7-7", "8-9", "10-11", "12-14", "15-19", "20-29", "30-44", "45-59",
+              "60-79", "80+"]
+
+
+def known_age_rate(k, x1, x2, day):
+    """Rate per person of new cases in age band k of the known model: S1 of x1 is (k + 1)² / ((k + 1)² + (17 - k)²) in
+    the band, and the rate doubles on odd days."""
+    return ((k + 1) * x1 + (17 - k) * x2 + 0.1) * (1 + day % 2)
+
+
+def known_agents(k, day):
+    """Agents in age band k of the known model: under 5 years old, more on even days, against the rate; older, more on
+    odd days, with it. The share of the cases under 5 then differs from that of the mean rate times the mean agents."""
+    return (20 - k) * ((2 - day % 2) if k < 5 else (1 + day % 2))
+
+
+def write_known_study(root, n, seeds=(1,), second_order=False, noise=0.0, days=40, shape=(4, 5), hole=(0, 0), swap_day=None,
+                      ages=None):
     """A sensitivity analysis on disk whose outputs come from a model with known indices, not from MoBILE: x1, x2, x3
     uniform on [0, 1], and EIR = a·x1 + b·x2 + noise in every populated cell and day, with a = rain / 10 and b = temperature / 10
     of the cell, so that S1 = a² / (a² + b²) for x1, b² / (a² + b²) for x2, and 0 for x3. From day swap_day on, x1 and
-    x2 swap their weights. Returns (folder, a, b)."""
+    x2 swap their weights. With ages, new cases by age band too (group Inew, known_age_rate), and with ages="agents"
+    the agents by age band (group Na, known_agents). Returns (folder, a, b)."""
     root = Path(root).resolve()
     lat, lon = np.linspace(-1, 1, shape[0]), np.linspace(30, 32, shape[1])
     pop = np.full(shape, 100.0)
-    pop[hole] = np.nan  # Not simulated
+    if hole is not None:
+        pop[hole] = np.nan  # Not simulated
     for name, variable, values in (("pop.nc", "pop", pop), ("area.nc", "cell_area", np.ones(shape))):
         with netCDF4.Dataset(root / name, "w") as dataset:
             dataset.createDimension("lat", lat.size)
@@ -1085,11 +1105,13 @@ def write_known_study(root, n, seeds=(1,), second_order=False, noise=0.0, days=4
             run_dir = folder / "runs" / run_name(seed, index)
             (run_dir / "output").mkdir(parents=True)
             eir = a * x1 + b * x2 + noise * noise_of.standard_normal(shape)
-            eir[hole] = 1000 * x3  # Would make x3 matter, were the cell without population counted
+            if hole is not None:
+                eir[hole] = 1000 * x3  # Would make x3 matter, were the cell without population counted
             daily = np.broadcast_to(eir, (days, *shape)).copy()
             if swap_day is not None:
                 daily[swap_day:] = b * x1 + a * x2
-                daily[swap_day:, hole[0], hole[1]] = 1000 * x3
+                if hole is not None:
+                    daily[swap_day:, hole[0], hole[1]] = 1000 * x3
             with netCDF4.Dataset(run_dir / "output" / "output.nc", "w") as dataset:
                 for name, size in (("time", days), ("lat", lat.size), ("lon", lon.size)):
                     dataset.createDimension(name, size)
@@ -1102,6 +1124,20 @@ def write_known_study(root, n, seeds=(1,), second_order=False, noise=0.0, days=4
                     variable = dataset.createGroup(group).createVariable(name, "f4", ("time", "lat", "lon"))
                     variable.units = "day^-1"
                     variable[:] = np.broadcast_to(field, (days, *shape))
+                by_age = []
+                if ages:
+                    by_age += [("Inew", f"Ia_new_{label}", "Age-disaggregated NEW symptomatic population per person", "fraction",
+                                lambda k, day: known_age_rate(k, x1, x2, day)) for k, label in enumerate(AGE_LABELS)]
+                    by_age.append(("Inew", "Inew_bulk", "NEW symptomatic population per person", "fraction", lambda k, day: 0.0))
+                if ages == "agents":
+                    by_age += [("Na", f"N_a_{label}", "Number of agents", "[agents]", lambda k, day: known_agents(k, day))
+                               for k, label in enumerate(AGE_LABELS)]
+                for k, (group, name, long_name, units, value) in enumerate(by_age):
+                    k = AGE_LABELS.index(name.rsplit("_", 1)[1]) if not name.endswith("bulk") else 0
+                    group = dataset[group] if group in dataset.groups else dataset.createGroup(group)
+                    variable = group.createVariable(name, "f4", ("time", "lat", "lon"))
+                    variable.units, variable.long_name = units, long_name
+                    variable[:] = np.array([np.full(shape, value(k, day)) for day in range(days)])
             (run_dir / "run.json").write_text(json.dumps({"status": "finished", "returncode": 0, "wall_seconds": 1, "spinup_years": 0}))
     record = {
         "status": "finished", "date": "2026-11-04T12:00:00", "method": "sobol", "n": n, "second_order": second_order,
@@ -1157,12 +1193,98 @@ class TestStudyResults(unittest.TestCase):
         expected = (a**2 / (a**2 + b**2))[self.populated]
         np.testing.assert_allclose(result["mean"]["S1"][0], expected, atol=0.06)
         np.testing.assert_allclose(result["climate"]["rain"][2], (np.linspace(1, 9, 20).reshape(4, 5))[self.populated], rtol=1e-5)
+        label, _, density = result["climate"]["pop"]  # From the population file of the analysis: 100 in every cell
+        self.assertEqual(label, "Population density")
+        np.testing.assert_array_equal(density, np.full(19, 100.0))
         self.assertNotIn("chance", result)
         maps = cell_dataset(result)
         self.assertEqual(maps["ST"].shape, (3, 4, 5))
         self.assertTrue(np.isnan(maps["ST"].values[:, 0, 0]).all())
         for figure in (index_map_figure(result, "x2", "ST"), climate_figure(result, "x2", "S1")):
             figure.to_json()
+        self.assertEqual(climate_figure(result, "x2", "S1").layout.xaxis3.type, "log")  # Population density
+
+    def test_age_bands(self):
+        folder, _, _ = write_known_study(self.root, 128, days=4, ages="agents")
+        record = read_study(folder)
+        info = output_info(first_run(folder, record))
+        choices = analysable_variables(info["variables"])
+        self.assertIn("age:Inew", choices["By age band"])
+        self.assertIn("Inew_bulk", choices["By age band"])
+        self.assertEqual(set(choices["Age profile"]), {"under5:Inew", "meanage:Inew"})
+        self.assertFalse(any(name.startswith("Ia_new_") for group in choices.values() for name in group))
+        self.assertIsNone(age_note(info["variables"]))
+        metric = metric_from_entry("age:Inew", "mean", "mean", None, None, None, False)
+        self.assertEqual((metric.variable, metric.space, metric.age), ("Inew", "none", "bands"))
+        result = analyse_study(folder, record, metric)
+        self.assertEqual(result["kind"], "ages")
+        self.assertEqual(list(result["ages"]), ["0", "1", "2", "3", "4", "5", "6", "7", "8–9", "10–11", "12–14", "15–19", "20–29",
+                                                "30–44", "45–59", "60–79", "80+"])
+        k = np.arange(17)
+        expected = (k + 1) ** 2 / ((k + 1) ** 2 + (17 - k) ** 2)  # S1 of x1 in each band; x2 the rest
+        np.testing.assert_allclose(result["line"]["S1"][:, 0], expected, atol=0.05)
+        np.testing.assert_allclose(result["line"]["S1"][:, 1], 1 - expected, atol=0.05)
+        np.testing.assert_allclose(result["spread"]["S1"][:, 0, 2], expected, atol=0.05)  # Every cell alike
+        self.assertIn("in each age band", result["description"])
+        table = monthly_table(result)
+        self.assertEqual(table["age_band"].iloc[0], "0")
+        self.assertEqual(len(table), 17 * 3 * 2)
+        monthly_figure(result, "x1", "S1").to_json()
+
+    def test_age_profile(self):
+        # The cases of a band are rate × agents day by day: the share under 5 and the mean age of the known model,
+        # computed here from the formulas, for every run
+        folder, _, _ = write_known_study(self.root, 8, days=10, ages="agents")
+        record = read_study(folder)
+        info = output_info(first_run(folder, record))
+        values = np.loadtxt(folder / SAMPLES, ndmin=2)
+        middles = np.array([0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5, 9, 11, 13.5, 17.5, 25, 37.5, 52.5, 70, 85])
+        mask = analysis_mask(record, info)
+        for entry, of_cases in (("under5:Inew", lambda cases: cases[:5].sum() / cases.sum()),
+                                ("meanage:Inew", lambda cases: (cases * middles).sum() / cases.sum())):
+            metric = metric_from_entry(entry, "sum", "mean", None, None, None, False)
+            got, _, _ = extract(folder, record, metric, [1], info, mask)
+            expected = [of_cases(np.array([sum(known_age_rate(k, x1, x2, day) * known_agents(k, day) for day in range(10))
+                                           for k in range(17)])) for x1, x2, _ in values]
+            np.testing.assert_allclose(got[1], expected, rtol=1e-5)
+        self.assertEqual(analyse_study(folder, record, metric_from_entry("under5:Inew", "sum", "none", None, None, None, False))["kind"], "cells")
+
+    def test_age_outputs_missing(self):
+        folder, _, _ = write_known_study(self.root, 8, ages="rates")  # No agents by age
+        info = output_info(first_run(folder, read_study(folder)))
+        self.assertNotIn("Age profile", analysable_variables(info["variables"]))
+        self.assertIn("Agents under Human, by age", age_note(info["variables"]))
+        with self.assertRaisesRegex(ValueError, "agents by age band"):
+            analyse_study(folder, read_study(folder), metric_from_entry("under5:Inew", "sum", "mean", None, None, None, False))
+        (self.root / "plain").mkdir()
+        folder, _, _ = write_known_study(self.root / "plain", 8)
+        self.assertIn("tick an output under Human, by age", age_note(output_info(first_run(folder, read_study(folder)))["variables"]))
+        self.assertIn("age band", Metric("Inew", "mean", "mean", age="bands").problems()[0])
+
+    def test_map_single_cell(self):
+        # A point simulation has no map: the reason, not a crash of the basemap, and month by month still works
+        folder, _, _ = write_known_study(self.root, 64, days=4, shape=(1, 1), hole=None)
+        with self.assertRaisesRegex(ValueError, "single grid cell"):
+            analyse_study(folder, read_study(folder), Metric("EIR", "sum", "none"))
+        result = analyse_study(folder, read_study(folder), Metric("EIR", "sum", "none", by_month=True))
+        self.assertEqual(result["cells_used"].tolist(), [1])
+        np.testing.assert_allclose(result["line"]["ST"][0], [0.01 / 9.01, 9 / 9.01, 0], atol=0.03)  # Only cell: a = 0.1, b = 3
+
+    def test_map_stripe(self):
+        # A stripe one cell wide is still a map: each direction one cell of the grid's size, not one degree or none
+        for shape, (lat_range, lon_range) in (((1, 5), ([-1.25, -0.75], [30, 32])), ((4, 1), ([-1, 1], [30 - 1 / 3, 30 + 1 / 3]))):
+            root = self.root / f"stripe{shape[0]}x{shape[1]}"
+            root.mkdir()
+            folder, _, _ = write_known_study(root, 8, days=4, shape=shape, hole=None)
+            result = analyse_study(folder, read_study(folder), Metric("EIR", "sum", "none"))
+            self.assertEqual(len(result["cells"]), shape[0] * shape[1])
+            figure = index_map_figure(result, "x2", "ST")
+            np.testing.assert_allclose(figure.layout.yaxis.range, lat_range)
+            np.testing.assert_allclose(figure.layout.xaxis.range, lon_range)
+            heatmap = figure.data[0]
+            self.assertEqual((heatmap.dy, heatmap.dx), (0.5, None) if shape[0] == 1 else (None, 2 / 3))
+        self.assertEqual(cell_size([0.0], [30.0, 30.5]), (0.5, 0.5))
+        self.assertEqual(cell_size([0.0, 0.25], [30.0]), (0.25, 0.25))
 
     def test_month_by_month(self):
         # x1 and x2 swap their weights on 1 February: the indices of January and February swap too

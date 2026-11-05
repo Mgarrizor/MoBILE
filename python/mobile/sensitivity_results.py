@@ -19,15 +19,23 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from .driving import RAIN_NAMES, TEMP_NAMES
+from .driving import RAIN_NAMES, TEMP_NAMES, open_field
 from .grid import mask_like, read_grid
 from .results import load_run
 from .sensitivity import Metric, analyse, analyse_cells, reduce_field
 from .sensitivity_runs import RUNS, SAMPLES, run_finished, run_name, study_parameters
+from .variables import ALL_AGES, age_groups
 
 METRICS = "metrics"
 CLIMATE_GROUP = "Climate"
 MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+# Groups of outputs by age band, as the model writes them: rates per person in each band, and the agents in it
+AGE_CASES = {"I": "symptomatic infections", "Inew": "new symptomatic cases", "A": "asymptomatic infections"}
+AGENTS_BY_AGE = "Na"
+OPEN_BAND_MIDDLE = 85.0  # Age taken for the last band (80 years and over) in the mean age
+UNDER = 5  # Years: the share of the cases under this age
+# Prefixes of the entries of the Variable menu for the outputs by age band
+AGE_ENTRIES = {"age:": "bands", "under5:": "under5", "meanage:": "mean_age"}
 
 
 def sample_count(folder):
@@ -58,13 +66,79 @@ def output_info(run_dir):
     return {"variables": result.variables(), **coords}
 
 
+def age_bands(variables, group):
+    """[(label, variable, lowest age, highest age or None)] of the bands of a group of outputs by age, youngest first,
+    without the field for all ages. The model names a band <name>_<from>-<to> in whole years, both included."""
+    bands = []
+    for age, name in age_groups(variables).get(group, {}).items():
+        if age == ALL_AGES:
+            continue
+        if age.endswith("+"):
+            bands.append((age, name, int(age[:-1]), None))
+        else:
+            low, high = (int(part) for part in age.split("-"))
+            bands.append((str(low) if low == high else f"{low}–{high}", name, low, high))
+    return sorted(bands, key=lambda band: band[2])
+
+
+def band_middle(low, high):
+    """The mean age of a band, its people being spread over its years: 0.5 for age 0, 9 for 8 to 9 years old."""
+    return OPEN_BAND_MIDDLE if high is None else (low + high + 1) / 2
+
+
+def age_label(variables, group):
+    """What a group of outputs by age holds, from the long name of its bands."""
+    name = age_bands(variables, group)[0][1]
+    return variables[name]["long_name"].replace("Age-disaggregated ", "")
+
+
 def analysable_variables(variables):
-    """{group: {name: label}} of the fields that change from run to run: not the climate, which every run reads."""
+    """{heading: {entry: label}} of the fields that change from run to run: not the climate, which every run reads.
+    The outputs by age band are one entry each ('age:<group>'), and with the agents by age, the age profile of the
+    cases ('under5:<group>', 'meanage:<group>')."""
+    by_age = {group for group in age_groups(variables) if age_bands(variables, group)}
     choices = {}
     for name, info in variables.items():
-        if info["group"] != CLIMATE_GROUP:
+        if info["group"] != CLIMATE_GROUP and info["group"] not in by_age:
             choices.setdefault(info["group"], {})[name] = f"{info['long_name']} ({name})"
+    if by_age:
+        heading = choices.setdefault("By age band", {})
+        for group in sorted(by_age):
+            heading[f"age:{group}"] = f"{age_label(variables, group)}, by age band ({group})"
+            everyone = age_groups(variables)[group].get(ALL_AGES)
+            if everyone:
+                heading[everyone] = f"{variables[everyone]['long_name']}, all ages ({everyone})"
+    if AGENTS_BY_AGE in by_age:
+        profile = {}
+        for group, cases in AGE_CASES.items():
+            if group in by_age:
+                profile[f"under5:{group}"] = f"Share of the {cases} under {UNDER} years old ({group})"
+                profile[f"meanage:{group}"] = f"Mean age of the {cases} ({group})"
+        if profile:
+            choices["Age profile"] = profile
     return choices
+
+
+def age_note(variables):
+    """What to tick in Outputs for the analyses by age that these outputs cannot give; None if they can give all."""
+    by_age = {group for group in age_groups(variables) if age_bands(variables, group)}
+    if not by_age:
+        return ("For indices by age band, tick an output under Human, by age (e.g. New symptomatic cases) in Outputs before "
+                "running the analysis, and Agents there too for the age profile of the cases.")
+    if AGENTS_BY_AGE not in by_age and by_age & set(AGE_CASES):
+        return "For the age profile of the cases, tick Agents under Human, by age in Outputs too before running the analysis."
+    return None
+
+
+def metric_from_entry(entry, time, space, start, end, months, by_month):
+    """The Metric of an entry of the Variable menu, with the reductions chosen."""
+    for prefix, age in AGE_ENTRIES.items():
+        if entry.startswith(prefix):
+            group = entry[len(prefix):]
+            if age == "bands":
+                return Metric(group, time, "none", start, end, months, False, age="bands")
+            return Metric(group, time, space, start, end, months, by_month, age=age)
+    return Metric(entry, time, space, start, end, months, by_month)
 
 
 def metric_key(metric):
@@ -79,7 +153,10 @@ def describe_metric(metric, cells=None):
         window = f" from {metric.start or 'the first day'} to {metric.end or 'the last day'}"
     months = f" in {', '.join(MONTHS[month - 1] for month in sorted(metric.months))}" if metric.months else ""
     days = "the days of each month" if metric.by_month else "the days"
-    text = metric.variable + (f", {time} over {days}{window}{months}" if time else f", every day{window}{months}")
+    variable = {None: metric.variable, "bands": f"{metric.variable} in each age band",
+                "under5": f"share of the {AGE_CASES.get(metric.variable, metric.variable)} under {UNDER} years old",
+                "mean_age": f"mean age of the {AGE_CASES.get(metric.variable, metric.variable)}"}[metric.age]
+    text = variable + (f", {time} over {days}{window}{months}" if time else f", every day{window}{months}")
     where = f"the {cells:,} populated cells" if cells else "the populated cells"
     if metric.space in ("mean", "sum"):
         text += f", {metric.space} over {where}"
@@ -89,11 +166,18 @@ def describe_metric(metric, cells=None):
 
 
 def _read(path, group, name, coords, first, last):
-    """A field of a run output as a DataArray on the coordinates of the analysis, its days from first to last only."""
+    """A field of a run output as a DataArray on the coordinates of the analysis, its days from first to last only.
+    path may be an open netCDF4.Dataset, to read several fields of a run with one opening."""
+    if isinstance(path, netCDF4.Dataset):
+        return _field(path, group, name, coords, first, last)
     with netCDF4.Dataset(path) as dataset:
-        variable = dataset[f"{group}/{name}" if group else name]
-        static = "time" not in variable.dimensions
-        values = variable[:] if static else variable[first:last]
+        return _field(dataset, group, name, coords, first, last)
+
+
+def _field(dataset, group, name, coords, first, last):
+    variable = dataset[f"{group}/{name}" if group else name]
+    static = "time" not in variable.dimensions
+    values = variable[:] if static else variable[first:last]
     values = np.ma.filled(np.ma.asarray(values, dtype="float64"), np.nan)
     if static:
         return xr.DataArray(values, dims=("lat", "lon"), coords={"lat": coords["lat"], "lon": coords["lon"]})
@@ -133,9 +217,9 @@ def analysis_mask(record, info):
 
 def extract(folder, record, metric, seeds, info, mask, progress=None):
     """({seed: values of every run, one row per run in the order of the samples}, the flat indices of the cells for a
-    map or month by month (None for a number per run), the first day of each month (None but month by month)), from
-    the outputs or, if read before, from metrics/. Month by month, the values of a seed are (runs, months, cells),
-    left on disk until used.
+    map, month by month or by age band (None for a number per run), the first day of each month or the label of each
+    age band (None otherwise)), from the outputs or, if read before, from metrics/. Month by month and by age band,
+    the values of a seed are (runs, months or bands, cells), left on disk until used.
 
     progress, a StudyState, counts the runs read and is checked for a cancel between runs."""
     problems = metric.problems()
@@ -143,21 +227,50 @@ def extract(folder, record, metric, seeds, info, mask, progress=None):
         problems.append("Reduce over time: a series of days per run is not analysed yet.")
     if problems:
         raise ValueError(" ".join(problems))
-    if metric.variable not in info["variables"]:
+    if metric.age is None and metric.variable not in info["variables"]:
         raise ValueError(f"{metric.variable} is not in the outputs of this analysis.")
+    bands = age_bands(info["variables"], metric.variable) if metric.age else None
+    if metric.age and not bands:
+        raise ValueError(f"The outputs of this analysis have no {metric.variable} by age band.")
+    agents = None
+    if metric.age in ("under5", "mean_age"):
+        agents = {band[2]: band[1] for band in age_bands(info["variables"], AGENTS_BY_AGE)}
+        if any(band[2] not in agents for band in bands):
+            raise ValueError("The age profile needs the agents by age band (Agents under Human, by age in Outputs).")
     store = Path(folder) / METRICS / metric_key(metric)
     store.mkdir(parents=True, exist_ok=True)
     (store / "metric.json").write_text(json.dumps(asdict(metric), indent=2, default=list) + "\n")
     cells = np.flatnonzero(mask.values) if metric.space == "none" else None
     if cells is not None:
         np.save(store / "cells.npy", cells)
-    group = info["variables"][metric.variable]["group"]
     first, last = _days(info["time"], metric)
     months = _month_starts(info["time"], metric, first, last) if metric.by_month else None
     if months is not None:
         if months.size == 0:
             raise ValueError("No day of the output is in the months chosen.")
         np.save(store / "months.npy", months)
+    # Month by month, or age band by age band: the values of a run are (layers, cells)
+    layers = months if months is not None else np.array([band[0] for band in bands]) if metric.age == "bands" else None
+
+    def reduced(path):
+        if metric.age is None:
+            group = info["variables"][metric.variable]["group"]
+            return reduce_field(_read(path, group, metric.variable, info, first, last), metric, mask)
+        if metric.age == "bands":
+            each = Metric(metric.variable, metric.time, "none", metric.start, metric.end, metric.months)
+            return xr.concat([reduce_field(_read(path, info["variables"][name]["group"], name, info, first, last), each, mask)
+                              for _, name, _, _ in bands], "band")
+        # The cases of a band are its rate per person times its agents, day by day, then reduced as asked: the share and
+        # the mean age are those of the cases summed (or averaged) over the days and cells, not means of shares
+        cases, weighted = 0, 0
+        for _, name, low, high in bands:
+            rate = _read(path, info["variables"][name]["group"], name, info, first, last)
+            count = _read(path, info["variables"][agents[low]]["group"], agents[low], info, first, last)
+            band = reduce_field((rate * count).where(count > 0, 0.0), metric, mask)  # No agents: no cases, not 0/0
+            cases = cases + band
+            weighted = weighted + band * (float(high is not None and high < UNDER) if metric.age == "under5" else band_middle(low, high))
+        with np.errstate(invalid="ignore", divide="ignore"):
+            return weighted / cases
     count = sample_count(folder)
     todo = [seed for seed in seeds if not (store / f"seed_{seed}.npy").is_file()]
     if progress is not None:
@@ -165,9 +278,9 @@ def extract(folder, record, metric, seeds, info, mask, progress=None):
         progress.update(total=count * len(seeds), done=done, done_before=done, failed=0, started=time.time(), message="Reading")
     for seed in todo:
         temporary = store / f"seed_{seed}.tmp.npy"
-        if months is not None:
-            # Runs × months × cells can be gigabytes: written to disk as it is read
-            values = np.lib.format.open_memmap(temporary, mode="w+", dtype="float32", shape=(count, months.size, cells.size))
+        if layers is not None:
+            # Runs × months (or age bands) × cells can be gigabytes: written to disk as it is read
+            values = np.lib.format.open_memmap(temporary, mode="w+", dtype="float32", shape=(count, layers.size, cells.size))
         else:
             values = []
         for index in range(count):
@@ -176,21 +289,25 @@ def extract(folder, record, metric, seeds, info, mask, progress=None):
                 temporary.unlink(missing_ok=True)
                 raise InterruptedError("Reading cancelled.")
             path = Path(folder) / RUNS / run_name(seed, index) / "output" / "output.nc"
-            reduced = reduce_field(_read(path, group, metric.variable, info, first, last), metric, mask)
-            if months is not None:
-                values[index] = reduced.values.reshape(months.size, -1)[:, cells]
+            if metric.age is None:
+                field = reduced(path)
             else:
-                values.append(reduced.values.ravel()[cells] if cells is not None else float(reduced))
+                with netCDF4.Dataset(path) as dataset:  # Every band of the run with one opening
+                    field = reduced(dataset)
+            if layers is not None:
+                values[index] = field.values.reshape(layers.size, -1)[:, cells]
+            else:
+                values.append(field.values.ravel()[cells] if cells is not None else float(field))
             if progress is not None:
                 progress.count("done")
-        if months is not None:
+        if layers is not None:
             values.flush()
             del values
         else:
             np.save(temporary, np.asarray(values, dtype="float32" if cells is not None else "float64"))
         temporary.replace(store / f"seed_{seed}.npy")  # Only whole seeds are kept
-    if months is not None:
-        return {seed: np.load(store / f"seed_{seed}.npy", mmap_mode="r") for seed in seeds}, cells, months
+    if layers is not None:
+        return {seed: np.load(store / f"seed_{seed}.npy", mmap_mode="r") for seed in seeds}, cells, layers
     return {seed: np.load(store / f"seed_{seed}.npy").astype("float64") for seed in seeds}, cells, None
 
 
@@ -234,7 +351,8 @@ PERCENTILES = (10, 25, 50, 75, 90)
 
 
 def monthly_analysis(parameters, values, second_order, seed=None):
-    """Indices month by month. values is a list over the seeds of (runs, months, cells). For each month, the indices of
+    """Indices month by month, or age band by age band (each 'month' below then being a band).
+    values is a list over the seeds of (runs, months, cells). For each month, the indices of
     each cell for the mean over seeds, summed up by their PERCENTILES across the cells ('spread', (months, parameters,
     percentiles)); the indices of the mean over the cells with bootstrap confidence intervals ('line', (months,
     parameters)); with several seeds, those of each seed alone ('each', (months, seeds, parameters)); and the cells
@@ -285,6 +403,31 @@ def climate_maps(run_dir, info, metric, cells):
     return maps
 
 
+def population_map(record, info, cells):
+    """{"pop": (label, units, values at the cells)} of the population density the analysis was run with: that of the
+    population file cut to its region, the same in every run. Empty if it cannot be read."""
+    inputs = record.get("run_inputs") or record["inputs"]
+    try:
+        field = open_field(inputs["pop_file"], "pop_file").sel(lat=info["lat"], lon=info["lon"], method="nearest")
+    except (OSError, ValueError, KeyError, StopIteration, TypeError, RuntimeError):
+        return {}
+    return {"pop": ("Population density", field.attrs.get("units", ""), np.asarray(field.values, dtype="float64").ravel()[cells])}
+
+
+def _units(info, metric):
+    if metric.age == "under5":
+        return "fraction"
+    if metric.age == "mean_age":
+        return "years"
+    if metric.age == "bands":
+        return info["variables"][age_bands(info["variables"], metric.variable)[0][1]]["units"]
+    return info["variables"][metric.variable]["units"]
+
+
+SINGLE_CELL_MAP = ("these runs have a single grid cell (a point simulation), so there is no map to draw: choose Mean or Sum "
+                   "over the populated cells, which for one cell both give the number of that cell.")
+
+
 def analyse_study(folder, record, metric, progress=None):
     """Read the outputs (or what was read before) and compute the indices; the result for the page."""
     seeds = complete_seeds(folder, record)
@@ -292,12 +435,17 @@ def analyse_study(folder, record, metric, progress=None):
         raise ValueError("No seed has all its runs finished: resume the analysis first.")
     run_dir = first_run(folder, record)
     info = output_info(run_dir)
+    if metric.space == "none" and not metric.by_month and metric.age != "bands" and info["lat"].size * info["lon"].size == 1:
+        raise ValueError(SINGLE_CELL_MAP)
     mask = analysis_mask(record, info)
-    values, cells, months = extract(folder, record, metric, seeds, info, mask, progress)
+    values, cells, layers = extract(folder, record, metric, seeds, info, mask, progress)
     parameters = study_parameters(record)
-    if months is not None:
+    if layers is not None:
         result = monthly_analysis(parameters, [values[seed] for seed in seeds], record["second_order"], seed=record["sample_seed"])
-        result["months"] = months
+        if metric.age == "bands":
+            result.update(kind="ages", ages=layers)
+        else:
+            result["months"] = layers
         result["cells"] = cells
     elif cells is None:
         result = scalar_analysis(parameters, np.array([values[seed] for seed in seeds]), record["second_order"], seed=record["sample_seed"])
@@ -306,12 +454,13 @@ def analyse_study(folder, record, metric, progress=None):
         result = cell_analysis(parameters, Y, record["second_order"])
         result["cells"] = cells
         result["climate"] = climate_maps(run_dir, info, metric, cells)
+        result["climate"].update(population_map(record, info, cells))
         result["lat"], result["lon"] = info["lat"], info["lon"]
     populated = int(mask.values.sum())
     result.update(
         parameters=[parameter.name for parameter in parameters], seeds=seeds, all_seeds=list(record["seeds"]),
         second_order=record["second_order"], description=describe_metric(metric, populated), metric=metric,
-        units=info["variables"][metric.variable]["units"],
+        units=_units(info, metric),
     )
     return result
 
@@ -335,12 +484,13 @@ def indices_table(result):
 
 
 def monthly_table(result):
-    """The indices month by month as rows of a CSV: one per month, parameter and index."""
+    """The indices month by month, or age band by age band, as rows of a CSV: one per month (or band), parameter and index."""
     rows = []
-    for m, month in enumerate(result["months"]):
+    column, layers = ("age_band", result["ages"]) if result["kind"] == "ages" else ("month", [str(month)[:7] for month in result["months"]])
+    for m, layer in enumerate(layers):
         for j, name in enumerate(result["parameters"]):
             for key in ("S1", "ST"):
-                row = {"month": str(month)[:7], "parameter": name, "index": key}
+                row = {column: str(layer), "parameter": name, "index": key}
                 row.update({f"p{p}_across_cells": value for p, value in zip(PERCENTILES, result["spread"][key][m, j])})
                 row.update({"of_spatial_mean": result["line"][key][m, j], "of_spatial_mean_conf95": result["line"][f"{key}_conf"][m, j],
                             "cells": result["cells_used"][m]})

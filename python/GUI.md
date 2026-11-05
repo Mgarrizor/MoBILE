@@ -121,13 +121,25 @@ one: they would all fail alike. Fix the cause and press Resume.
   - *Mean* or *Sum over the populated cells*: one number per run. Bars of S1 (alone) with ST − S1 (with the others)
     stacked on top, so that the whole bar is ST, with 95% confidence intervals; S2 for each pair; a table and a CSV.
   - *None: a map of the indices*: indices cell by cell, a tab for each parameter, and the index of each cell against
-    its mean rainfall and temperature over the same days; netCDF.
+    its mean rainfall and temperature over the same days and its population density (log scale); netCDF.
   - *None, month by month*: the days of each month reduced apart and the indices computed in each cell. For each
     month, a box of the indices of the cells (10th to 90th percentile, with the 25th, 50th and 75th) and a line
     for the indices of the mean over the cells, with 95% intervals; CSV.
 - With several seeds, the indices are those of the mean over the seeds, and each seed alone shows as dots (or as
   its range across seeds, on the maps). The share of the variance from chance is the variance across the seeds of
   the same sample over the variance of all the runs.
+
+**Sensitivity by age.** The runs must write at least **Agents** and one more output under *Human, by age* in the
+Outputs card (e.g. *New symptomatic cases*): tick them before running the analysis. The Variable menu then has two
+more groups:
+
+- *By age band*: an output by age band (the model writes them as rates per person of each band), analysed
+  *age band by age band*: the indices in each cell for each of the 17 bands (0, 1, … 8–9, … 80 and over), shown
+  as month by month; CSV.
+- *Age profile*: the share of the cases under 5 years old, and their mean age, as numbers per run that can be
+  analysed in any of the ways above. The cases of a band are its rate times its agents, day by day.
+
+**How the age sensitivities are calculated**, below How the indices are calculated, gives the details.
 
 The first analysis of a variable reads every run, which for thousands of runs takes minutes; what is read is kept,
 so analysing it again is quick. **How the indices are calculated**, under the choices, says what the numbers mean.

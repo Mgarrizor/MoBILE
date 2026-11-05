@@ -231,7 +231,9 @@ function updateCellGrid(plot) {
   const index = plot._fullData.findIndex(trace => trace.type === 'heatmap');
   if (index < 0) return;
   const trace = plot._fullData[index];
-  const pixels = Math.abs(trace.x[1] - trace.x[0]) * plot._fullLayout.xaxis._m;
+  // A stripe one cell wide east-west has a start and a cell size instead of its single longitude
+  const width = trace.x && trace.x.length > 1 ? Math.abs(trace.x[1] - trace.x[0]) : trace.dx;
+  const pixels = width * plot._fullLayout.xaxis._m;
   const gap = pixels >= GRID_MIN_PIXELS ? 1 : 0;
   if ((trace.xgap || 0) !== gap) Plotly.restyle(plot, {xgap: gap, ygap: gap}, [index]);
 }
@@ -250,7 +252,7 @@ function placeColourBar(plot) {
 // A plot drawn while its tab was hidden has no size: fit the plots when their tab is shown again.
 // A map playing in a tab that is now hidden stops.
 $(document).on('shown.bs.tab', function() {
-  for (const id of ['map', 'cell_plot', 'envelope_plot', 'preview_map', 'preview_cell_plot', 'region_map', 'sa_indices', 'sa_pairs', 'sa_map', 'sa_climate', 'sa_monthly']) {
+  for (const id of ['map', 'cell_plot', 'envelope_plot', 'preview_map', 'preview_cell_plot', 'region_map', 'sa_indices', 'sa_pairs', 'sa_map', 'sa_climate', 'sa_monthly', 'sa_ages']) {
     const plot = document.getElementById(id);
     if (plot && plot.data && plot.offsetParent !== null) Plotly.Plots.resize(plot);
   }
@@ -411,9 +413,9 @@ $(function() {
 });
 window.addEventListener('scroll', fitSidebar, {passive: true});
 window.addEventListener('resize', fitSidebar);
-// A tab opens at its top, whatever the scroll position of the one before
+// A main tab opens at its top, whatever the scroll position of the one before
 document.addEventListener('shown.bs.tab', function(event) {
-  if (event.target.closest('ul.shiny-tab-input')) window.scrollTo(0, 0);
+  if (event.target.closest('ul#tab')) window.scrollTo(0, 0);
 });
 $(document).on('shiny:connected shiny:value', fitSidebar);
 """
