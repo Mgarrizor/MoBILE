@@ -16,9 +16,10 @@ from .config import ConfigError, SLIDER_GROUPS
 from .layout import HA_BELOW_ONE, OUTPUT_FLAGS, SALIB_URL, parameter_label, with_tip
 from .outcome import run_name_problem
 from .plots import climate_figure, index_map_figure, indices_figure, monthly_figure, second_order_figure, send_figure
-from .sensitivity import DISTRIBUTIONS, Metric, SampledParameter, design_problems, run_count_formula
+from .sensitivity import DISTRIBUTIONS, SampledParameter, design_problems, run_count_formula
 from .sensitivity_results import (
-    MONTHS, analysable_variables, analyse_study, cell_dataset, first_run, indices_table, monthly_table, output_info,
+    MONTHS, OPEN_BAND_MIDDLE, UNDER, age_note, analysable_variables, analyse_study, cell_dataset, first_run, indices_table,
+    metric_from_entry, monthly_table, output_info,
 )
 from .sensitivity_runs import (
     StudyState, create_study, describe_parameter, list_studies, read_study, run_study, studies_dir, study_label, study_parameters,
@@ -55,6 +56,7 @@ SPACE_CHOICES = {
     "mean": "Mean over the populated cells", "sum": "Sum over the populated cells", "none": "None: a map of the indices",
     "months": "None, month by month: the indices across the cells",
 }
+AGE_SPACE_CHOICES = {"ages": "None, age band by age band: the indices across the cells"}  # For an output by age band
 
 
 def _fields_header():
@@ -96,6 +98,36 @@ def _parameter_row(name, spec, value):
     )
 
 
+AGE_OUTPUTS_NEEDED = ("For the sensitivity by age, the runs must write at least Agents (Na) and one more output under Human, "
+                      "by age in the Outputs card, e.g. New symptomatic cases: tick them before running the analysis.")
+
+
+def _how_age_calculated():
+    """How the indices by age band and the age profile are computed: folded away until opened."""
+    strong = ui.tags.strong
+    return ui.tags.details(
+        ui.tags.summary("How the age sensitivities are calculated"),
+        ui.tags.ul(
+            ui.tags.li(strong("Outputs needed. "), AGE_OUTPUTS_NEEDED),
+            ui.tags.li(strong("Age bands. "), "The model writes the outputs by age band as a rate per person of each band (e.g. "
+                       "the new symptomatic cases of the band over its agents), in bands of 0, 1, 2, 3, 4, 5, 6, 7, 8–9, 10–11, "
+                       "12–14, 15–19, 20–29, 30–44, 45–59, 60–79 and 80 years and over."),
+            ui.tags.li(strong("Age band by age band. "), "The rate of each band is reduced over the days as chosen, and the indices "
+                       "computed in each cell for each band. A box spans the 10th to the 90th percentile of the indices across "
+                       "the cells, its middle part the 25th to the 75th, with the median; the line is the index of the mean over "
+                       "the cells, with its 95% interval, as month by month."),
+            ui.tags.li(strong("Age profile. "), f"The cases of a band are its rate per person times its agents, day by day. The "
+                       f"share of the cases under {UNDER} years old, and their mean age, are those of the cases summed (or "
+                       f"averaged) over the days and cells chosen, not averages of shares. A band counts at the middle of its "
+                       f"years (0.5 for age 0, 9 for 8–9), the last one at {OPEN_BAND_MIDDLE:g}. These are numbers per run, "
+                       "analysed as any other: one number, a map, or month by month."),
+            ui.tags.li(strong("Agents and people. "), "The agents of a cell stand for the same number of people (HA), so shares of "
+                       "agents are shares of people."),
+        ),
+        class_="sa-how small text-muted mt-2",
+    )
+
+
 def _how_calculated():
     """What the indices are and how they are estimated: folded away until opened."""
     strong = ui.tags.strong
@@ -125,7 +157,8 @@ def _how_calculated():
                        "with its 95% interval."),
             ui.tags.li(strong("Maps. "), "The same in each cell, without confidence intervals (a bootstrap for every cell would "
                        "take too long). A cell whose number is the same in every run has no index. The scatter plots compare the "
-                       "index of each cell with its mean rainfall and temperature over the same days, as written in the runs."),
+                       "index of each cell with its mean rainfall and temperature over the same days, as written in the runs, "
+                       "and with its population density, from the population file of the analysis."),
         ),
         class_="sa-how small text-muted mt-2",
     )
@@ -141,6 +174,7 @@ def _results_section():
         ui.layout_columns(
             ui.div(
                 ui.input_select("sa_variable", "Variable", {}),
+                ui.output_ui("sa_age_note"),
                 ui.input_date_range("sa_window", with_tip("Days", "From the first to the last day, both included."), separator=" to "),
             ),
             ui.input_checkbox_group("sa_months", with_tip("Months", "Only the days of these months, e.g. those of the wet season."),
@@ -160,6 +194,7 @@ def _results_section():
             col_widths=(3, 3, 3, 3),
         ),
         _how_calculated(),
+        _how_age_calculated(),
         ui.output_ui("sa_summary"),
         ui.output_ui("sa_map_tabs"),
         ui.navset_hidden(
@@ -187,6 +222,12 @@ def _results_section():
                 ui.div(id="sa_monthly", style="height: 460px;"),
                 ui.download_button("sa_download_months", "Download the indices by month (CSV)", class_="btn-sm mt-2"),
                 value="months",
+            ),
+            ui.nav_panel(
+                "ages",
+                ui.div(id="sa_ages", style="height: 460px;"),
+                ui.download_button("sa_download_ages", "Download the indices by age band (CSV)", class_="btn-sm mt-2"),
+                value="ages",
             ),
             id="sa_view", selected="none",
         ),
@@ -348,7 +389,7 @@ def sensitivity_server(input, output, session, setup, slider_setup, overrides, s
         labels = {flag: label for flags in OUTPUT_FLAGS.values() for flag, label, _ in flags}
         chosen_outputs = [labels[flag] for flag in selected_output()]
         return ui.p(f"Each run writes the outputs chosen in the Outputs card ({', '.join(chosen_outputs) or 'none'}): "
-                    "only these can be analysed afterwards.", class_="small text-muted mb-0")
+                    "only these can be analysed afterwards. " + AGE_OUTPUTS_NEEDED, class_="small text-muted mb-0")
 
     @ui.bind_task_button(button_id="sa_run")
     @reactive.extended_task
@@ -525,6 +566,21 @@ def sensitivity_server(input, output, session, setup, slider_setup, overrides, s
         first, last_day = str(info["time"][0])[:10], str(info["time"][-1])[:10]
         ui.update_date_range("sa_window", start=first, end=last_day, min=first, max=last_day)
 
+    @render.ui
+    def sa_age_note():
+        info = study_info()
+        note = age_note(info["variables"]) if info is not None else None
+        return ui.p(note, class_="small text-muted mb-2") if note else None
+
+    @reactive.effect
+    def space_choices():
+        """Age band by age band for an output by age band, and only that; the other choices for the rest."""
+        by_age = (input.sa_variable() or "").startswith("age:")
+        choices = AGE_SPACE_CHOICES if by_age else SPACE_CHOICES
+        with reactive.isolate():
+            current = input.sa_space()
+        ui.update_radio_buttons("sa_space", choices=choices, selected=current if current in choices else next(iter(choices)))
+
     @ui.bind_task_button(button_id="sa_analyse")
     @reactive.extended_task
     async def analysis_task(folder, metric):
@@ -558,8 +614,8 @@ def sensitivity_server(input, output, session, setup, slider_setup, overrides, s
         first, last_day = str(info["time"][0])[:10], str(info["time"][-1])[:10]
         start, end = (str(day) if day else None for day in (input.sa_window() or (None, None)))
         by_month = input.sa_space() == "months"
-        metric = Metric(
-            input.sa_variable(), input.sa_time(), "none" if by_month else input.sa_space(),
+        metric = metric_from_entry(
+            input.sa_variable(), input.sa_time(), "none" if input.sa_space() in ("months", "ages") else input.sa_space(),
             None if start in (None, first) else start, None if end in (None, last_day) else end, None if len(months) == 12 else months,
             by_month,
         )
@@ -627,8 +683,9 @@ def sensitivity_server(input, output, session, setup, slider_setup, overrides, s
                 lines.append(f"Chance (the seed) makes {_percent(np.nanmedian(chance))} of the variance of the number of a cell over "
                              f"all the runs in the median cell, from {_percent(np.nanquantile(chance, 0.1))} to "
                              f"{_percent(np.nanquantile(chance, 0.9))} in 80% of the cells: see its map.")
-        if outcome["kind"] == "months":
-            lines.append(f"{len(outcome['months'])} months. Boxes: the index of each cell, from the 10th to the 90th percentile across "
+        if outcome["kind"] in ("months", "ages"):
+            layers = f"{len(outcome['months'])} months" if outcome["kind"] == "months" else f"{len(outcome['ages'])} age bands"
+            lines.append(f"{layers}. Boxes: the index of each cell, from the 10th to the 90th percentile across "
                          "the cells; line: the index of the mean over the cells.")
             if np.any(outcome["cells_used"] < len(outcome["cells"])):
                 lines.append("Cells whose number is the same in every run have no index and are left out of the boxes: hover "
@@ -648,9 +705,9 @@ def sensitivity_server(input, output, session, setup, slider_setup, overrides, s
 
     @render.ui
     def sa_map_tabs():
-        """A tab for each parameter and the index to show, for maps and month by month."""
+        """A tab for each parameter and the index to show, for maps, month by month and age band by age band."""
         outcome = result()
-        if not outcome or outcome.get("kind") not in ("cells", "months"):
+        if not outcome or outcome.get("kind") not in ("cells", "months", "ages"):
             return None
         choices = {"ST": "ST", "S1": "S1"}
         if "range" in outcome:
@@ -667,14 +724,15 @@ def sensitivity_server(input, output, session, setup, slider_setup, overrides, s
     @reactive.effect
     async def show_map():
         outcome = result()
-        if not outcome or outcome.get("kind") not in ("cells", "months") or "sa_map_index" not in input:
+        if not outcome or outcome.get("kind") not in ("cells", "months", "ages") or "sa_map_index" not in input:
             return
         name = input.sa_map_param() if "sa_map_param" in input else None
         key = input.sa_map_index()
         if name not in outcome["parameters"]:
             name = outcome["parameters"][0]
-        if outcome["kind"] == "months":
-            await send_figure(session, "sa_monthly", monthly_figure(outcome, name, key if key in ("ST", "S1") else "ST"))
+        if outcome["kind"] in ("months", "ages"):
+            plot = "sa_monthly" if outcome["kind"] == "months" else "sa_ages"
+            await send_figure(session, plot, monthly_figure(outcome, name, key if key in ("ST", "S1") else "ST"))
             return
         if key not in ("ST", "S1") and "range" not in outcome:
             key = "ST"
@@ -721,6 +779,12 @@ def sensitivity_server(input, output, session, setup, slider_setup, overrides, s
     def sa_download_months():
         outcome = result()
         if outcome and outcome.get("kind") == "months":
+            yield f"# {outcome['description']}\n" + monthly_table(outcome).to_csv(index=False)
+
+    @render.download(filename=lambda: _download_name("indices_by_age.csv"))
+    def sa_download_ages():
+        outcome = result()
+        if outcome and outcome.get("kind") == "ages":
             yield f"# {outcome['description']}\n" + monthly_table(outcome).to_csv(index=False)
 
     @render.download(filename=lambda: _download_name("index_maps.nc"))

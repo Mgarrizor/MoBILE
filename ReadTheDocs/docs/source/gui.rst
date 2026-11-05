@@ -172,6 +172,11 @@ repeated for several seeds with the same samples.
 The runs are kept: a cancelled analysis resumes where it stopped, and a finished one can be analysed again, for
 another variable, period, months or reduction, without running again. The indices can be those of one number per
 run (the variable summed, averaged or at its maximum over the days, then averaged or summed over the populated
-cells), maps of the indices cell by cell compared with the rainfall and temperature of each cell, or indices month
-by month across the cells. **How the indices are calculated**, in the card, explains the numbers. ``python/GUI.md``
-in the repository describes every control.
+cells), maps of the indices cell by cell compared with the rainfall, temperature and population density of each
+cell, or indices month by month across the cells. **How the indices are calculated**, in the card, explains the numbers.
+
+For the sensitivity by age, the runs must write at least **Agents** and one more output under *Human, by age* in the
+Outputs card, e.g. *New symptomatic cases*. The indices can then be computed age band by age band (17 bands, from
+age 0 to 80 and over), or for the age profile of the cases: their share under 5 years old and their mean age, from
+the rate of each band times its agents, day by day. **How the age sensitivities are calculated**, in the card,
+explains them. ``python/GUI.md`` in the repository describes every control.

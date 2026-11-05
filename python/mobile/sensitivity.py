@@ -25,6 +25,9 @@ DISTRIBUTIONS = {
 }
 TIME_REDUCTIONS = ("sum", "mean", "max", "none")
 SPACE_REDUCTIONS = ("mean", "sum", "none")
+# Of the outputs by age band: each band analysed apart, or the age profile of the cases (counts from the rates
+# per person in each band times the agents in it)
+AGE_ANALYSES = ("bands", "under5", "mean_age")
 
 
 @dataclass(frozen=True)
@@ -132,7 +135,10 @@ class Metric:
 
     The time window is the days from start to end (ISO dates, either open) and, if months is given, only those
     months of the year (1 to 12), so that wet and dry seasons can be analysed apart. With by_month, the days are
-    reduced within each month of the window instead of over all of them, giving a value per month."""
+    reduced within each month of the window instead of over all of them, giving a value per month.
+
+    With age, variable is a group of outputs by age band: "bands" analyses each band apart, keeping every cell;
+    "under5" and "mean_age" analyse the share of the cases under 5 years old and their mean age."""
 
     variable: str
     time: str = "sum"
@@ -141,9 +147,16 @@ class Metric:
     end: str | None = None
     months: tuple | None = None
     by_month: bool = False
+    age: str | None = None
 
     def problems(self):
         problems = []
+        if self.age is not None and self.age not in AGE_ANALYSES:
+            problems.append(f"Unknown analysis by age {self.age!r}.")
+        if self.age == "bands" and (self.time == "none" or self.space != "none" or self.by_month):
+            problems.append("Age band by age band reduces the days and keeps every cell.")
+        if self.age in ("under5", "mean_age") and self.time not in ("sum", "mean"):
+            problems.append("The age profile of the cases needs their sum or mean over the days.")
         if self.time not in TIME_REDUCTIONS:
             problems.append(f"Unknown time reduction {self.time!r}.")
         if self.space not in SPACE_REDUCTIONS:

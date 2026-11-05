@@ -8,7 +8,7 @@ import plotly.graph_objects as go
 import xarray as xr
 from plotly.subplots import make_subplots
 
-from .basemap import PADDING_DEGREES
+from .basemap import PADDING_DEGREES, cell_size
 from .driving import mean_age
 from .grid import mask_like
 
@@ -179,6 +179,14 @@ def _add_basemap(figure, basemap, terrain=None):
         figure.add_trace(go.Scatter(x=lines["x"], y=lines["y"], mode="lines", line={"color": color, "width": width}, hoverinfo="skip", showlegend=False))
 
 
+def _cells(lat, lon):
+    """The coordinates of a heatmap of the grid. A stripe one cell wide gives its single coordinate as a start and a cell
+    size, as Plotly would otherwise make that cell one degree wide."""
+    size = dict(zip("yx", cell_size(lat, lon)))
+    return {key: value for axis, values in (("y", lat), ("x", lon))
+            for key, value in ({axis: values} if len(values) > 1 else {f"{axis}0": float(values[0]), f"d{axis}": size[axis]}).items()}
+
+
 def _grid_step(lat, lon):
     return grid_step(max(float(lon.max() - lon.min()), float(lat.max() - lat.min())))
 
@@ -204,13 +212,19 @@ def _axes(figure, lat, lon):
     def allowed(values):
         return {"minallowed": float(values.min()) - PADDING_DEGREES, "maxallowed": float(values.max()) + PADDING_DEGREES}
 
+    def shown(values, size):
+        """From the first to the last cell centre; a stripe one cell wide, that cell."""
+        half = 0 if len(values) > 1 else size / 2
+        return [float(values.min()) - half, float(values.max()) + half]
+
+    size_lat, size_lon = cell_size(lat, lon)
     ticks = {"tick0": 0, "dtick": _grid_step(lat, lon), "tickfont": {"size": AXIS_FONT}, "showgrid": False, "zeroline": False}
     figure.update_xaxes(
-        title_text="Longitude [°E]", range=[float(lon.min()), float(lon.max())],
+        title_text="Longitude [°E]", range=shown(lon, size_lon),
         constrain="domain", constraintoward="center", **ticks, **allowed(lon),
     )
     figure.update_yaxes(
-        title_text="Latitude [°N]", range=[float(lat.min()), float(lat.max())],
+        title_text="Latitude [°N]", range=shown(lat, size_lat),
         scaleanchor="x", scaleratio=1, constrain="domain", **ticks, **allowed(lat),
     )
 
@@ -219,7 +233,7 @@ def grid_figure(grid, basemap=None, terrain=None):
     """The fixed grid before the first run."""
     z = np.where(grid["mask"], 1.0, np.nan)
     figure = go.Figure(
-        go.Heatmap(x=grid["lon"], y=grid["lat"], z=z, colorscale=[[0, SEQUENTIAL[1]], [1, SEQUENTIAL[1]]], showscale=False, hoverinfo="skip"),
+        go.Heatmap(**_cells(grid["lat"], grid["lon"]), z=z, colorscale=[[0, SEQUENTIAL[1]], [1, SEQUENTIAL[1]]], showscale=False, hoverinfo="skip"),
         layout=_base_layout(title="Simulated cells (red) on the fixed grid. Press Run to see results."),
     )
     _add_basemap(figure, basemap, terrain)
@@ -245,8 +259,7 @@ def map_figure(data, grid, description, day, limits, cells=(), basemap=None, ter
     colours = COLOUR_MAPS[colour_map]
     figure = go.Figure(
         go.Heatmap(
-            x=data["lon"].values,
-            y=data["lat"].values,
+            **_cells(data["lat"].values, data["lon"].values),
             z=z,
             customdata=values,
             zmin=zmin,
@@ -504,15 +517,17 @@ def index_map_figure(result, name, key, basemap=None):
 
 
 def climate_figure(result, name, key):
-    """The index of a map in each cell against the mean rainfall and temperature of the cell over the same days,
-    with the median of the index in each tenth of the cells: how the sensitivity follows the climate."""
+    """The index of a map in each cell against the mean rainfall and temperature of the cell over the same days, and its
+    population density (on a log scale), with the median of the index in each tenth of the cells: how the sensitivity
+    follows the climate and the population."""
     values, title, _, _ = index_values(result, name, key)
     short = title.split(":")[0]
     climate = result["climate"]
     figure = make_subplots(rows=1, cols=max(1, len(climate)), shared_yaxes=True, horizontal_spacing=0.06)
-    figure.update_layout(_base_layout(title=f"{title}, in each cell against its climate over the same days"))
-    for column, (label, units, x) in enumerate(climate.values(), start=1):
-        usable = np.isfinite(x) & np.isfinite(values)
+    figure.update_layout(_base_layout(title=f"{title}, in each cell against its climate over the same days and its population"))
+    for column, (name_x, (label, units, x)) in enumerate(climate.items(), start=1):
+        log = name_x == "pop"
+        usable = np.isfinite(x) & np.isfinite(values) & ((x > 0) if log else True)
         # WebGL only when SVG would be slow: some browsers have none
         points = go.Scattergl if usable.sum() > 5000 else go.Scatter
         figure.add_trace(points(
@@ -529,22 +544,25 @@ def climate_figure(result, name, key):
                 name="Median in each tenth of the cells", showlegend=column == 1,
                 hovertemplate=f"{label}: %{{x:.3g}}<br>median {short} = %{{y:.3f}}<extra></extra>",
             ), row=1, col=column)
-        figure.update_xaxes(title_text=_with_units(label, units), gridcolor=GRID, row=1, col=column)
+        figure.update_xaxes(title_text=_with_units(label, units) + (" (log scale)" if log else ""), type="log" if log else "linear",
+                            gridcolor=GRID, row=1, col=column)
     figure.update_yaxes(title_text=short, gridcolor=GRID, row=1, col=1)
     figure.update_layout(plot_bgcolor="white", legend={"orientation": "h", "y": -0.25})
     if not climate:
-        figure.add_annotation(text="The outputs have no rainfall or temperature to compare with.", showarrow=False, x=0.5, y=0.5, xref="paper", yref="paper")
+        figure.add_annotation(text="The outputs have no rainfall, temperature or population to compare with.", showarrow=False, x=0.5, y=0.5, xref="paper", yref="paper")
     return figure
 
 
 def monthly_figure(result, name, key):
-    """An index of one parameter month by month: a box of its value in each cell, from the 10th to the 90th percentile
-    across the cells with the 25th, 50th and 75th, and the index of the mean over the cells with its 95% confidence
-    interval; with several seeds, that of each seed alone as dots."""
+    """An index of one parameter month by month, or age band by age band: a box of its value in each cell, from the
+    10th to the 90th percentile across the cells with the 25th, 50th and 75th, and the index of the mean over the cells
+    with its 95% confidence interval; with several seeds, that of each seed alone as dots."""
     j = result["parameters"].index(name)
-    labels = [str(month)[:7] for month in result["months"]]
+    by_age = result["kind"] == "ages"
+    labels = [str(age) for age in result["ages"]] if by_age else [str(month)[:7] for month in result["months"]]
     spread = result["spread"][key][:, j]
-    figure = go.Figure(layout=_base_layout(title=f"{key} of {name}, month by month: {result['description']}"))
+    how = "age band by age band" if by_age else "month by month"
+    figure = go.Figure(layout=_base_layout(title=f"{key} of {name}, {how}: {result['description']}"))
     figure.add_trace(go.Box(
         x=labels, lowerfence=spread[:, 0], q1=spread[:, 1], median=spread[:, 2], q3=spread[:, 3], upperfence=spread[:, 4],
         name="Cells: 10th, 25th, 50th, 75th, 90th percentiles", fillcolor=AMBER_FILL, line={"color": AMBER, "width": 1.5},
@@ -575,7 +593,8 @@ def monthly_figure(result, name, key):
     high = float(np.nanmax(np.r_[spread[:, 4], line + conf, 1.0]))
     figure.update_layout(
         plot_bgcolor="white", legend={"orientation": "h", "y": -0.18},
-        xaxis={"type": "category", "showgrid": False, "tickfont": {"size": AXIS_FONT}},
+        xaxis={"type": "category", "showgrid": False, "tickfont": {"size": AXIS_FONT},
+               **({"title_text": "Age band [years]"} if by_age else {})},
         yaxis={"title_text": f"{key}: share of the variance", "gridcolor": GRID, "zeroline": True, "zerolinecolor": INTERVAL,
                "range": [low - 0.02, high + 0.02]},
     )
