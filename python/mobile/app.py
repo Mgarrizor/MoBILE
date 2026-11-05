@@ -30,7 +30,7 @@ from .region import region_problems
 from .results import list_runs
 from .sensitivity_ui import sensitivity_card, sensitivity_server
 from .scripts import (
-    BROWSER_HANDLER, CLOSED_HANDLER, DOTS_HANDLER, PARAMETER_STYLE, PLAYER, PLOT_HANDLER, SLIDER_FORMAT, THEME, PAGE_STYLE,
+    BROWSER_HANDLER, CLOSED_HANDLER, DOTS_HANDLER, PARAMETER_STYLE, PLAYER, PLOT_HANDLER, SIDEBAR_FIT, SLIDER_FORMAT, THEME, PAGE_STYLE,
 )
 from .setup import (
     OPTIONAL_FILES, REQUIRED_FILES, from_fields, from_manifest, create_folder, list_folder, region_from_fields, region_mode,
@@ -64,13 +64,13 @@ def create_app(config):
 
     app_ui = ui.page_sidebar(
         ui.sidebar(
-            ui.div("Run", class_="sidebar-heading"),
+            ui.div("Run simulation", class_="sidebar-heading"),
             ui.input_numeric(
                 "ha", with_tip("Humans per agent (HA)", "People represented by one agent, which sets the number of agents. "
                                "Close to 1 is best for reliable results: more agents is slower but closer to the real population."),
                 value=None, min=0, step="any",
             ),
-            ui.div(ui.output_ui("humans_per_agent"), class_="small text-muted mb-3"),
+            ui.div(ui.output_ui("humans_per_agent"), class_="small text-muted mb-2"),
             ui.input_numeric(
                 "seed", with_tip("Seed", "Starting point of the random numbers. The same seed and threads give the same results."),
                 value=config.run["seed"], min=1, step=1,
@@ -90,7 +90,7 @@ def create_app(config):
             ui.input_select("previous_run", "Runs in the results folder", {}),
             ui.div(ui.output_text("runs_folder"), class_="small text-muted text-break mb-2"),
             ui.input_action_button("load", "Load run", class_="w-100"),
-            ui.input_action_button("close", "Close GUI", class_="btn-sm w-100 mt-5"),
+            ui.input_action_button("close", "Close GUI", class_="btn-sm w-100 mt-4"),
             width=300,
         ),
         ui.head_content(
@@ -104,6 +104,7 @@ def create_app(config):
             ui.tags.style(PARAMETER_STYLE),
             ui.tags.script(ui.HTML(SLIDER_FORMAT)),
             ui.tags.script(ui.HTML(BROWSER_HANDLER)),
+            ui.tags.script(ui.HTML(SIDEBAR_FIT)),
             ui.tags.script(ui.HTML(DOTS_HANDLER)),
         ),
         ui.output_ui("status"),
