@@ -27,10 +27,10 @@ folder in the Setup tab.
 
 ## The page
 
-The tabs follow the order of the work: **1. Setup**, **2. Parameters**, **3. Results**. The GUI opens on Setup.
+The tabs follow the order of the work: **1. Setup**, **2. Parameters & SA**, **3. Results**. The GUI opens on Setup.
 The sidebar, always visible, starts runs and loads earlier ones. The **Analysis (to come)** menu and the **Calibration (to come)** tab hold
 work that is not implemented yet (Analysis: Time series, Demography, Mobility; Calibration: with the
-[Optuna](https://optuna.org/) parameter optimisation suite); the sensitivity analysis is in **2. Parameters**. **Help** has a short
+[Optuna](https://optuna.org/) parameter optimisation suite); the sensitivity analysis is in **2. Parameters & SA**. **Help** has a short
 guide and the documentation. Hover over ⓘ beside a setting for an explanation.
 
 **Light**, **System** and **Dark** at the top right set the colours of the page and of the plots. *System*
@@ -55,7 +55,7 @@ Everything a run needs that is not a parameter or an output.
   forcing, counterfactual demography) are under *Optional files*. The files filled in at first are the
   example that comes with MoBILE (`utils/test_run` in the GitHub repository): Senegal, 2012 to 2014, on a 0.05°
   grid (rainfall CHIRPS, temperature CHIRTS, population WorldPop 2020). A note says so while they are in use.
-- **Apply setup**, centred above the region card, checks the settings and switches to the Parameters tab. It also
+- **Apply setup**, centred above the region card, checks the settings and switches to the Parameters & SA tab. It also
   checks the driving files against each other (grid, days) and for the units of rainfall (mm/day) and temperature
   (°C); any difference opens a warning window, from which the setup can still be applied.
   Problems are listed under the button. It cannot be used while a run is in progress.
@@ -79,7 +79,7 @@ Everything a run needs that is not a parameter or an output.
 
 The settings are remembered for the next session in `~/.config/mobile/last_setup.json`.
 
-### 2. Parameters tab
+### 2. Parameters & SA tab
 
 - **Parameters for single runs**: sliders by group (Human, Vector, Hydro, Climate). A blue slider starts at its value in
   the parameter file, a grey one (marked *default*) at the model default. Only sliders you move are changed for
