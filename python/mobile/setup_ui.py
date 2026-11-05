@@ -103,7 +103,7 @@ def setup_tab(config):
     )
     return ui.div(
         ui.p("Choose the model, the period to simulate, the driving data and, if not the whole grid, the region to simulate, then press ",
-             ui.tags.strong("Apply setup"), ". Next, set the parameters in the Parameters tab and press Run in the sidebar.",
+             ui.tags.strong("Apply setup"), ". Next, set the parameters in the Parameters & SA tab and press Run in the sidebar.",
              class_="text-muted"),
         ui.layout_columns(run_box, files_box, col_widths=(5, 7)),
         ui.div(

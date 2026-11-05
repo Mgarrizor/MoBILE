@@ -110,7 +110,7 @@ def create_app(config):
         ui.navset_tab(
             ui.nav_panel("1. Setup", setup_tab(config), value="setup"),
             ui.nav_panel(
-                "2. Parameters",
+                "2. Parameters & SA",
                 ui.layout_columns(
                     ui.card(
                         ui.card_header("Parameters for single runs"),
