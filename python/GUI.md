@@ -28,7 +28,8 @@ folder in the Setup tab.
 ## The page
 
 The tabs follow the order of the work: **1. Setup**, **2. Parameters & SA**, **3. Results**. The GUI opens on Setup.
-The sidebar, always visible, starts runs and loads earlier ones. The **Analysis (to come)** menu and the **Calibration (to come)** tab hold
+The header with the tabs stays in view while the page scrolls, and a tab opens at its top.
+The sidebar, always visible below the header, starts runs and loads earlier ones. The **Analysis (to come)** menu and the **Calibration (to come)** tab hold
 work that is not implemented yet (Analysis: Time series, Demography, Mobility; Calibration: with the
 [Optuna](https://optuna.org/) parameter optimisation suite); the sensitivity analysis is in **2. Parameters & SA**. **Help** has a short
 guide and the documentation. Hover over ⓘ beside a setting for an explanation.
@@ -146,7 +147,7 @@ so analysing it again is quick. **How the indices are calculated**, under the ch
 
 ### Sidebar
 
-- **Run**: **HA** (humans per agent) and **Seed**. The number of agents follows from HA: the people of the simulated
+- **Run simulation**: **HA** (humans per agent) and **Seed**. The number of agents follows from HA: the people of the simulated
   region over HA, shown under it. Results depend on HA, so keep it fixed when comparing runs. Below 1 there are more
   agents than people and the model stops at once: the line turns red, and Run and Run analysis refuse to start.
   **Seed band** runs several consecutive seeds with the

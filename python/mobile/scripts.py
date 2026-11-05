@@ -62,7 +62,7 @@ PAGE_STYLE = """
   .bslib-page-sidebar .bslib-sidebar-layout.sidebar-collapsed > .collapse-toggle { top: calc(var(--header-height, 0px) + 0.5rem); right: auto;
     justify-self: start; margin: 0.5rem 0 0 0.5rem; }
   .bslib-sidebar-layout:not(.sidebar-collapsed) > .sidebar { position: sticky; top: var(--header-height, 0px); align-self: start;
-    height: calc(100vh - var(--sidebar-top, 0px)); overflow-y: auto; }
+    height: calc(100vh - var(--sidebar-top, 0px)); overflow-y: auto; overflow-x: hidden; }
 }
 .apply-bar { display: flex; flex-direction: column; align-items: center; margin: 1rem 0; }
 /* North over West and East, South under them, as in the Copernicus data store */
