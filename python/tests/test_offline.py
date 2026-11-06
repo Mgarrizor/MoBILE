@@ -43,7 +43,7 @@ from mobile.setup import (
     start_folder,
 )
 from mobile.checks import driving_days, driving_problems
-from mobile.period import day_range, length_text, period_days, period_problems
+from mobile.period import SPIN_UP_DAYS, day_range, length_text, period_days, period_problems
 from mobile.grid import pop_coordinates, read_grid
 from mobile.region import axis_range, cut_inputs, region_problems
 from mobile.runner import ProgressParser, RunCancelled, Runner, RunnerBusy, macos_sdk, run_environment
@@ -151,6 +151,24 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(final["e_0"], "0.25")
         del base["e_0"], final["e_0"]
         self.assertEqual(base, final)
+
+    def test_spin_up_needs_a_year(self):
+        # mo_spinup.f90 stops with less than 365 simulated days (ndays_year): 364 must be refused, 365 accepted
+        self.assertEqual(SPIN_UP_DAYS, 365)
+        source = Path(MOBILE, "src", "mo_spinup.f90").read_text()
+        self.assertRegex(source, r"ndays_year\s*=\s*365")
+
+        def setup(spin_up, end=None, nstep=0):
+            period = None if end is None else {"start": "2012-01-01", "end": end}
+            return replace(self.config, run={**self.config.run, "spin_up": spin_up, "nstep": nstep}, period=period)
+
+        with self.assertRaisesRegex(ConfigError, "at least 365 days"):
+            setup(1, "2012-12-29").validate()  # 364 days, a leap year
+        setup(1, "2012-12-30").validate()  # 365
+        setup(0, "2012-01-30").validate()  # Without spin-up, any length
+        with self.assertRaisesRegex(ConfigError, "at least 365 days"):
+            setup(1, nstep=200).validate()
+        setup(1).validate()  # nstep 0: the length of the driving data, not known here
 
     def test_template_failure_is_loud(self):
         with self.assertRaises(ValueError):

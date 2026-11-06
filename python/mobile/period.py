@@ -9,6 +9,10 @@ import datetime
 import numpy as np
 
 PERIOD_KEYS = ("start", "end")
+# ndays_year in mo_spinup.f90: the spin-up climatology is built from whole years of the simulated days
+SPIN_UP_DAYS = 365
+SPIN_UP_TOO_SHORT = (f"with spin-up, the model needs at least {SPIN_UP_DAYS} days to build its spin-up climatology: choose a "
+                     "period of at least a year, or turn spin-up off.")
 
 
 def parse_day(value):
@@ -35,6 +39,11 @@ def period_problems(period):
     if end < start:
         return ["period: the end must not be before the start"]
     return []
+
+
+def spin_up_problem(spin_up, days):
+    """Why a run of so many days cannot spin up, or None; days 0 or None, the days of the driving data, are not known here."""
+    return SPIN_UP_TOO_SHORT if spin_up == 1 and days and days < SPIN_UP_DAYS else None
 
 
 def period_days(period):
