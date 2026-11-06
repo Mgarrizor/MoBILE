@@ -25,7 +25,7 @@ from .plots import (
     MAX_DOTS, DOT_COLOURS, add_dot, default_dot, dot_label, move_dot, next_cells, remove_dot, send_figure, sig,
 )
 from .checks import driving_days, driving_problems
-from .period import length_text, parse_day, period_days
+from .period import length_text, parse_day, period_days, spin_up_problem
 from .region import region_problems
 from .results import list_runs
 from .sensitivity_ui import sensitivity_card, sensitivity_server
@@ -545,6 +545,11 @@ def create_app(config):
             if typed is not None and typed[2]:
                 setup_problem.set([f"Period: {typed[2]}"])
                 return
+            # Also the whole driving data, which the configuration does not count
+            spin_up = spin_up_problem(int(input.setup_spin_up()), typed and (typed[1] - typed[0]).days + 1)
+            if spin_up:
+                setup_problem.set([f"Period: {spin_up}"])
+                return
             period = None
             if typed is not None and (typed[0], typed[1]) != tuple(parse_day(day) for day in driving_span()):
                 period = {"start": typed[0].isoformat(), "end": typed[1].isoformat()}
@@ -623,6 +628,17 @@ def create_app(config):
             ui.update_date("setup_start", value=start, min=span[0], max=span[1])
             ui.update_date("setup_end", value=end, min=span[0], max=span[1])
 
+        @reactive.effect
+        @reactive.event(input.setup_period_reset)
+        def reset_period():
+            """Back to the default period: all the days of the rainfall file in the box."""
+            span = driving_span()
+            if span is None:
+                ui.notification_show("The days of the rainfall file cannot be read.", type="warning")
+                return
+            ui.update_date("setup_start", value=span[0])
+            ui.update_date("setup_end", value=span[1])
+
         @reactive.calc
         def typed_days():
             """(start, end, problem) as dates, of the period in the boxes of the Setup tab; None without driving days."""
@@ -646,7 +662,10 @@ def create_app(config):
             start, end, problem = typed
             if problem:
                 return ui.p(problem.capitalize(), class_="small text-danger mb-3")
-            return ui.p(ui.tags.strong("Total simulation time: "), length_text((end - start).days + 1), class_="small mb-3")
+            days = (end - start).days + 1
+            spin_up = spin_up_problem(int(input.setup_spin_up()), days)
+            total = ui.p(ui.tags.strong("Total simulation time: "), length_text(days), class_="small " + ("mb-1" if spin_up else "mb-3"))
+            return ui.TagList(total, ui.p(spin_up.capitalize(), class_="small text-danger mb-3")) if spin_up else total
 
         @render.ui
         def example_note():

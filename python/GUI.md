@@ -43,7 +43,8 @@ are the same in both.
 Everything a run needs that is not a parameter or an output.
 
 - **Run parameters**: project name, model (VECTRI-ABM malaria or cholera), the period to simulate (a start and
-  an end date, by default the first and last day of the rainfall file; the total time is printed below them),
+  an end date, by default the first and last day of the rainfall file, to which **Reset** returns; the total time is
+  printed below them),
   spin-up to equilibrium and threads. A period shorter than the driving data is run on copies of the
   rainfall, temperature and immunity forcing files cut to it, kept in the run folder.
 - **Results folder**: where the runs are saved. It does not have to be the folder you started from. Type a path
@@ -193,8 +194,8 @@ the runs for each way of analysing them).
 - A run compiles the model, then simulates: the example takes minutes, large grids hours.
 - `mobile.sh` modifies the shared `src/` while it compiles, so runs from the same MoBILE source tree compile one at
   a time; once compiled, the runs of an analysis go on side by side.
-- With spin-up (`spin_up: 1`), the model needs at least a full year of driving data: a shorter period stops at
-  *Cannot build spin-up climatology*.
+- With spin-up (`spin_up: 1`), the model needs at least 365 simulated days to build its spin-up climatology: the Setup
+  tab says so under the period, and refuses a shorter one, until spin-up is turned off.
 - Results depend on the seed and on the number of threads. Keep both fixed to compare runs.
 - Mobility is not functional in the model yet.
 
@@ -215,6 +216,6 @@ the runs for each way of analysing them).
 - *The run failed*: the end of its log is shown in the page, the whole log is `<results folder>/<run>/run.log`.
 - *Analysis stopped: its first 3 runs all failed twice*: the end of the log of one is shown; the logs are in
   `runs/seed_<seed>/sample_<index>/run.log` of the analysis folder. Common causes: HA below 1 (*More agents than
-  people*), or a period under a year with spin-up.
+  people*).
 - *Terrain could not be downloaded*: check the connection and turn the switch on again.
 - `mobile help` lists all commands, and the Python interface (`mobile.Runner`, `mobile.load_run`).

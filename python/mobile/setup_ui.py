@@ -76,7 +76,12 @@ def setup_tab(config):
         ui.card_header("Run parameters"),
         ui.input_text("setup_project", "Project", value=config.project, width="100%"),
         _model_select(str(run["disID"])),
-        ui.tags.label("Period to simulate (default: all the driving data)", class_="form-label mb-1"),
+        ui.div(
+            ui.tags.label("Period to simulate (default: all the driving data)", class_="form-label mb-0"),
+            ui.input_action_button("setup_period_reset", "Reset", class_="btn-sm btn-outline-primary ms-2",
+                                   title="Back to the default: all the days of the rainfall file"),
+            class_="d-flex align-items-center mb-1",
+        ),
         ui.layout_columns(
             ui.input_date("setup_start", "Start", value=start, min=first, max=last, format="yyyy-mm-dd"),
             ui.input_date("setup_end", "End", value=end, min=first, max=last, format="yyyy-mm-dd"),

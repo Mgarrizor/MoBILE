@@ -8,7 +8,7 @@ from pathlib import Path
 
 import yaml
 
-from .period import period_problems
+from .period import period_days, period_problems, spin_up_problem
 from .region import region_problems
 
 # The keys of a configuration file. Parameters, outputs and sliders are set in the GUI.
@@ -153,7 +153,13 @@ class Config:
                 errors.append(f"run: {key} must be an integer, got {value!r}")
 
         errors += region_problems(self.region)
-        errors += period_problems(self.period)
+        problems = period_problems(self.period)
+        errors += problems
+        if not problems:
+            days = period_days(self.period) if self.period is not None else self.run.get("nstep")
+            problem = spin_up_problem(self.run.get("spin_up"), days)
+            if problem:
+                errors.append(f"run: {problem}")
 
         allowed = REQUIRED_INPUTS | OPTIONAL_INPUTS | set(OPTIONAL_DEFAULTS)
         unknown = set(self.inputs) - allowed
