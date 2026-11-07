@@ -1,0 +1,108 @@
+# Publications on the models, shown in the Help tab of the GUI.
+# pinned: shown first, in this order. The others follow by year, oldest first.
+# region: where the model was evaluated or applied.
+# domain: Spatial (a grid of cells) or Point (one site).
+# side: Vector, Human or Both - where the model was developed - or Application, for a study that uses the model;
+# introduced then says what was studied. In introduced, *text* is in italics, as for a species.
+publications:
+  - authors: Tompkins & Ermert
+    year: 2013
+    title: A regional-scale, high resolution dynamical malaria model that accounts for population density, climate and surface hydrology
+    venue: Malaria Journal 12, 65
+    doi: 10.1186/1475-2875-12-65
+    region: East Africa
+    domain: Spatial
+    side: Both
+    introduced: "VECTRI: the original model"
+    pinned: 1
+  - authors: Garrido Zornoza, Caminade, Dieng, Chitnis & Tompkins
+    year: 2026
+    title: "Impact of climate and acquired immunity on malaria burden in Senegal and The Gambia: an agent-based modeling study"
+    venue: medRxiv (preprint)
+    doi: 10.64898/2026.09.18.26363423
+    region: Senegal and The Gambia
+    domain: Spatial
+    side: Human
+    introduced: "VECTRI-ABM: humans as agents, each with their own acquired immunity"
+    pinned: 2
+  - authors: Garrido Zornoza, Caminade & Tompkins
+    year: 2024
+    title: "The effect of climate change and temperature extremes on Aedes albopictus populations: a regional case study for Italy"
+    venue: Journal of The Royal Society Interface 21, 20240319
+    doi: 10.1098/rsif.2024.0319
+    region: Italy
+    domain: Spatial
+    side: Vector
+    introduced: "*Aedes albopictus* parametrization; urban scheme for breeding-site availability"
+  - authors: Tompkins & Thomson
+    year: 2018
+    title: "Uncertainty in malaria simulations in the highlands of Kenya: Relative contributions of model parameter setting, driving climate and initial condition errors"
+    venue: PLOS ONE 13, e0200638
+    doi: 10.1371/journal.pone.0200638
+    region: Kenya (Kericho, highlands)
+    domain: Point
+    side: Both
+    introduced: Genetic algorithm to calibrate the model parameters
+  - authors: Asare, Tompkins & Bomblies
+    year: 2016
+    title: A Regional Model for Malaria Vector Developmental Habitats Evaluated Using Explicit, Pond-Resolving Surface Hydrology Simulations
+    venue: PLOS ONE 11, e0150626
+    doi: 10.1371/journal.pone.0150626
+    region: Niger (Banizoumbou village)
+    domain: Point
+    side: Vector
+    introduced: "Updated hydrology scheme: breeding sites evaluated against pond-resolving surface hydrology simulations"
+  - authors: Asare, Tompkins, Amekudzi & Ermert
+    year: 2016
+    title: A breeding site model for regional, dynamical malaria simulations evaluated using in situ temporary ponds observations
+    venue: Geospatial Health 11(1s), 390
+    doi: 10.4081/gh.2016.390
+    region: Ghana (Kumasi)
+    domain: Point
+    side: Vector
+    introduced: "Updated hydrology scheme: breeding sites evaluated against observed temporary ponds"
+  - authors: Mbouna, Tamoffo, Asare, Lenouo & Tchawoua
+    year: 2022
+    title: "Malaria metrics distribution under global warming: assessment of the VECTRI malaria model over Cameroon"
+    venue: International Journal of Biometeorology 67, 93-105
+    doi: 10.1007/s00484-022-02388-x
+    region: Cameroon
+    domain: Spatial
+    side: Application
+    introduced: Evaluation of VECTRI, and malaria metrics under global warming
+  - authors: Parihar, Bal, Saini, Mishra & Thapliyal
+    year: 2022
+    title: Potential future malaria transmission in Odisha due to climate change
+    venue: Scientific Reports 12, 9048
+    doi: 10.1038/s41598-022-13166-5
+    region: India (Odisha)
+    domain: Spatial
+    side: Application
+    introduced: Future malaria transmission under climate change (RCP8.5), district by district
+  - authors: Peri
+    year: 2024
+    title: Influence of future climate scenarios using CMIP 5 data on malaria transmission in India
+    venue: Malaria Journal 23, 301
+    doi: 10.1186/s12936-024-05129-0
+    region: India
+    domain: Spatial
+    side: Application
+    introduced: Malaria transmission (EIR) under future climate scenarios (CMIP5, RCP2.6 to RCP8.5), 2020-2029
+  - authors: Talib et al.
+    year: 2024
+    title: The effect of explicit convection on simulated malaria transmission across Africa
+    venue: PLOS ONE 19, e0297744
+    doi: 10.1371/journal.pone.0297744
+    region: Africa
+    domain: Spatial
+    side: Application
+    introduced: Effect of explicit convection in the driving climate simulations, compared with the Liverpool Malaria Model
+  - authors: Dieng et al.
+    year: 2026
+    title: High resolution physically based modelling reveals malaria incidence reduction by vector control measures
+    venue: Scientific Reports 16, 1288
+    doi: 10.1038/s41598-025-33539-w
+    region: Kenya (western)
+    domain: Spatial
+    side: Application
+    introduced: Effect of insecticide-treated nets, with VECTRI coupled to WRF/WRF-Hydro at 1 km and 50 m and a new compartment for net coverage

@@ -32,7 +32,8 @@ The header with the tabs stays in view while the page scrolls, and a tab opens a
 The sidebar, always visible below the header, starts runs and loads earlier ones. The **Analysis (to come)** menu and the **Calibration (to come)** tab hold
 work that is not implemented yet (Analysis: Time series, Demography, Mobility; Calibration: with the
 [Optuna](https://optuna.org/) parameter optimisation suite); the sensitivity analysis is in **2. Parameters & SA**. **Help** has a short
-guide and the documentation. Hover over ⓘ beside a setting for an explanation.
+guide, the documentation and the publications on VECTRI and VECTRI-ABM (listed in `mobile/publications.yaml`, where
+new ones are added). Hover over ⓘ beside a setting for an explanation.
 
 **Light**, **System** and **Dark** at the top right set the colours of the page and of the plots. *System*
 follows the setting of the computer. The choice is kept by the browser. The colours of the data and of the map

@@ -27,7 +27,7 @@ from mobile.config import (
 )
 from mobile.rundir import create_run_dir, fill_template
 from mobile.app import free_port
-from mobile.layout import OUTPUT_FLAGS, logo_files
+from mobile.layout import OUTPUT_FLAGS, logo_files, publications
 from mobile.outcome import Outcome, RunState, run_label, run_name_problem
 from mobile.plots import (
     MAX_DOTS, add_dot, age_figure, cell_envelope, climate_figure, colour_values, default_dot, grid_step, index_map_figure,
@@ -88,6 +88,23 @@ def fortran_defaults(mobile):
                 continue
     return values
 MOBILE = os.environ["MOBILE"]
+
+
+class TestPublications(unittest.TestCase):
+    def test_pinned_first_then_by_year(self):
+        entries = publications()
+        self.assertEqual([entry["introduced"].split(":")[0] for entry in entries[:2]], ["VECTRI", "VECTRI-ABM"])
+        rest = [entry["year"] for entry in entries if not entry.get("pinned")]
+        self.assertEqual(rest, sorted(rest))
+        for entry in entries:
+            self.assertEqual(set(entry) - {"pinned"}, {"authors", "year", "title", "venue", "doi", "region", "domain", "side", "introduced"})
+            self.assertIn(entry["domain"], ("Spatial", "Point"))
+            self.assertIn(entry["side"], ("Vector", "Human", "Both", "Application"))
+            self.assertRegex(entry["doi"], r"^10\.\d+/")
+        # Whatever the order in the file
+        shuffled = [{"year": 2030}, {"year": 2026, "pinned": 2}, {"year": 2020}, {"year": 2013, "pinned": 1}, {"year": 2024}]
+        self.assertEqual([(entry["year"], entry.get("pinned")) for entry in publications(shuffled)],
+                         [(2013, 1), (2026, 2), (2020, None), (2024, None), (2030, None)])
 
 
 class TestConfig(unittest.TestCase):
