@@ -31,7 +31,6 @@ MODULE mo_const
                             !                          6 - Immunity ; 7 - New Cases (Inew)        
     integer :: TempVarID, ncTempID
     integer :: RainVarID, ncRainID
-    integer :: AreaVarID, ncAreaID
     integer :: ImmVarID, ncImmID   ! IDs for immunity forcing file
 
 
@@ -45,6 +44,7 @@ MODULE mo_const
     double precision :: FillValue_temp ! Temperature Fill Value
     real, parameter :: pi = 4*atan(1.) ! Pi 
     real, parameter :: Re = 6371.009   ! Mean radius of the Earth [km]
+    double precision, parameter :: Re_area = 6371000.d0 ! Radius of the Earth for the cell areas [m], as in cdo gridarea
 
     !********** Mobility and people **************************
 

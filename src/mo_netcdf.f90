@@ -1120,6 +1120,9 @@ MODULE mo_netcdf
         ! Local use only
         integer :: status, LatDimID, LonDimID, LatVarID, LonVarID, PopVarID
         integer :: numdims, indx_lat=1, indx_lon=1, indx    !indx_pop, indx_rain
+        integer :: ilat, ilon
+        double precision, allocatable :: lat_lo(:), lat_hi(:), lon_lo(:), lon_hi(:) ! Cell edges [degrees]
+        double precision, parameter :: d2r = 4*atan(1.d0)/180.d0                    ! Degrees to radians
 
 
 
@@ -1451,32 +1454,24 @@ MODULE mo_netcdf
 
         if (agents) then
 
-              ! We need to extract the dates of the forcing and its total length, ntime, so that
-              ! nsteps <= ntime.
-
-              ! Open file
-              status = nf90_open(path = area_file, mode = nf90_nowrite, ncid = ncAreaID)        
-      
-              ! Inquire about rainfall and get its VarID
-              do indx=1,size(area_names)
-                  status = nf90_inq_varid(ncid=ncAreaID, name=area_names(indx), varid=AreaVarID)
-                  
-                  ! If name is found exit do loop
-                  if (status == nf90_noerr) then
-                    print *, 'NetCDF Status: found area variable of name --> ', area_names(indx)
-                    !
-                    exit
-                  else if((indx == size(area_names)) .and. (status /= nf90_noerr)) then
-                    print *, 'NetCDF Status: area variable not indentified'
-                    STOP
-                  end if
-              end do
+              ! Cell areas [m^2] from the grid of the population file, on a sphere of radius Re_area: from the
+              ! cell bounds of its coordinates if it has them, else with the edges halfway between the centres
+              ! (as cdo gridarea)
+              allocate(lat_lo(nlat), lat_hi(nlat), lon_lo(nlon), lon_hi(nlon))
+              call cell_bounds(ncid_in, LatVarID, lat_coord, 'latitude', lat_lo, lat_hi)
+              call cell_bounds(ncid_in, LonVarID, lon_coord, 'longitude', lon_lo, lon_hi)
               !
-              ! Get cell area values
-              status = nf90_get_var(ncid=ncAreaID, varid=AreaVarID, values=grid)
+              do ilat=1,nlat
+                do ilon=1,nlon
+                  grid(ilon,ilat) = real(Re_area**2*abs(sin(lat_hi(ilat)*d2r) - sin(lat_lo(ilat)*d2r)) &
+                                                   *abs(lon_hi(ilon) - lon_lo(ilon))*d2r)
+                end do
+              end do
               !
               allocate(A_cell(nxy))
               A_cell = reshape(grid, (/nxy/))
+              print '("Cell areas from the population grid -- total: ",f14.1," km2")', sum(dble(A_cell))*1.d-6
+              deallocate(lat_lo, lat_hi, lon_lo, lon_hi)
               !
 
         else  ! If not rainfall input set to zero 
@@ -1490,6 +1485,56 @@ MODULE mo_netcdf
         
 
       end subroutine netcdf_read_grid
+
+
+      subroutine cell_bounds(ncid, VarID, coord, axis, lower, upper)
+      ! Edges of the cells along one coordinate [degrees]: the cell bounds of the coordinate if the file has
+      ! them (CF "bounds" attribute, e.g. lat_bnds), else halfway between the centres, the ends extrapolated.
+      ! A coordinate with a single value and no bounds gives no cell size --> STOP
+        implicit none
+        integer, intent(in) :: ncid, VarID
+        real, intent(in) :: coord(:)
+        character(len=*), intent(in) :: axis
+        double precision, intent(out) :: lower(:), upper(:)
+
+        ! Local use only
+        character(len=100) :: bounds_name
+        double precision, allocatable :: bnds(:,:), c(:)
+        integer :: status, BndsVarID, n
+
+        n = size(coord)
+        bounds_name = ''
+        status = nf90_get_att(ncid=ncid, varid=VarID, name="bounds", values=bounds_name)
+
+        if (status == nf90_noerr) then
+          status = nf90_inq_varid(ncid=ncid, name=trim(bounds_name), varid=BndsVarID)
+          if (status /= nf90_noerr) then
+            print *, 'NetCDF Status: bounds of the ', axis, ' not found --> ', trim(bounds_name)
+            STOP
+          end if
+          allocate(bnds(2,n))
+          status = nf90_get_var(ncid=ncid, varid=BndsVarID, values=bnds)
+          if (status /= nf90_noerr) then
+            print *, 'NetCDF Status: bounds of the ', axis, ' not read --> ', trim(bounds_name)
+            STOP
+          end if
+          print *, 'NetCDF Status: cell bounds of the ', axis, ' --> ', trim(bounds_name)
+          lower = bnds(1,:)
+          upper = bnds(2,:)
+          deallocate(bnds)
+        else if (n >= 2) then
+          c = dble(coord)
+          upper(1:n-1) = 0.5d0*(c(1:n-1) + c(2:n))
+          lower(2:n)   = upper(1:n-1)
+          lower(1)     = c(1) - (upper(1) - c(1))
+          upper(n)     = c(n) + (c(n) - lower(n))
+        else
+          print *, 'The population file has a single ', axis, ' and no cell bounds: the cell area cannot be known.'
+          print *, 'Add the bounds of the coordinate (CF "bounds" attribute, e.g. lat_bnds, lon_bnds) --> STOP'
+          STOP
+        end if
+
+      end subroutine cell_bounds
 
 
 

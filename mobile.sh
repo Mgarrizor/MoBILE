@@ -32,7 +32,6 @@ usage() { echo "Usage:              \n
                 -u: Spin up [0: no SI ; 1: SU to threshold] \n
                 -v: VECTRI coupling [0: No, 1: Yes] \n
                 -?: Vector ID [0: gambiae, ...] \n
-                -x: Area of grid cells \n
                 -i: Immunity forcing file \n
                 -M: Age-specific mortality-rate file (Optional; blank = scalar mu) \n
                 -B: Time-varying birth-rate file (Optional; blank = scalar birth_rate) \n
@@ -53,7 +52,7 @@ mortality_time_file=""
 demog_counterfactual=".false."
 output_file=""
 
-while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:x:i:l:M:B:T:C:O:" flag; do
+while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:i:l:M:B:T:C:O:" flag; do
  case $flag in
    h) # Handle the -h flag
    # Display script help information
@@ -96,10 +95,7 @@ while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:x:i:l:M:B:T:C:O:" flag; do
    v) # Handle the -v flag
    vectri=$OPTARG
    ;;
-   x) # Handle the -x flag
-   area_file=$OPTARG
-   ;;
-   l) # Handle the -x flag
+   l) # Handle the -l flag
    name_list=$OPTARG
    ;;
    #i) # Handle the -i flag -> argument is not required (no colon after the 'i' flag)
@@ -311,8 +307,7 @@ spin_up=${spin_up}
 /
 &CLIMA
 rain_file='${rain_file}',
-t2m_file='${temp_file}',
-area_file='${area_file}'
+t2m_file='${temp_file}'
 /
 &HUMAN
 pop_file='${pop_file}',
