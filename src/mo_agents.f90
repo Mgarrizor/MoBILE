@@ -355,10 +355,11 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             ! Standard distribution of agents:
             ! For this, build a biased dice (see functions below) with weights 
-            ! prop. to pop_dens(:)*A_cell(:) and throw it.
+            ! prop. to pop_dens(:)*A_cell(:) and throw it. Weights are zero in the cells not
+            ! simulated (mask_pop = .false.), so only simulated cells can be drawn.
             !
-            norm = sum(max(pop_dens(:)*A_cell(:)-npeop(:), 0.)) ! Weighted by cell area
-            cdf(:) = cumsum(max(pop_dens(:)*A_cell(:)-npeop(:), 0.))/norm
+            norm = sum(max(pop_dens(:)*A_cell(:)-npeop(:), 0.), mask=mask_pop) ! Weighted by cell area
+            cdf(:) = cumsum(merge(max(pop_dens(:)*A_cell(:)-npeop(:), 0.), 0., mask_pop))/norm
             !
             ! Re-scaled distribution of agents:
             ! Add the correction factor "-npeop(:)" to avoid having a human/agent ratio
