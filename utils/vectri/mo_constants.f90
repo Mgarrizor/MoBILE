@@ -566,12 +566,12 @@ CONTAINS
   ! default water fraction of permanent water bodies used if
   ! Sentinel maps are not read in, and also used as minimum if > sentinel
   ! otherwise wperm set to this everywhere
-  wperm_default=1.e-6 
+  wperm_default=0.00001 ! (calibrated, Senegal)
   ! END TYPE c_wperm
  
   ! TYPE c_wpond 
   wpond_evap=5       ! evaporation rate in mm/day (*Lv/86400 gives units of Wm^-2) 1.728=50w/m2
-  wpond_max=0.2      ! max default water fraction def=0.2 - also used in v130
+  wpond_max=1.0      ! max default water fraction def=0.2 - also used in v130 (calibrated, Senegal)
 
   ! infiltration rates using the GLDAS soil texture map:
   ! default values from Annex 2 of FAO soil management training methods : 
@@ -586,7 +586,7 @@ CONTAINS
   wpond_rate=1./1000.      ! increase rate (m^-1)
 
   ! constants specific for npud_vers=2 (Asare et al. 2016a,b)
-  wpond_CN=85         ! 25400/CN-254 curve number 85 (range 80 - 90)
+  wpond_CN=86.78      ! 25400/CN-254 curve number 85 (range 80 - 90) (calibrated, Senegal)
   wpond_min=1.e-6     ! min default water fraction
   wpond_shapep2=1.0   ! shape factor p DIVIDED BY 2 (default p=1, range=0.5-2.0)
   wpond_S=25400/wpond_CN-254 ! 
@@ -677,13 +677,13 @@ CONTAINS
   rtgono=7.7 ! threshold temperature for egg development in vector
                   ! Detinova (1962) gives 4.5 9.9 and 7.7 at RH=30-40,70-80 and 90-100
                   ! this will be implemented in an interpolation scheme
-  dgono=37.1
+  dgono=44.18 ! (calibrated, Senegal)
                   ! Detinova (1962) gives 65.4,36.5,37.1 at RH=30-40,70-80 and 90-100
                   ! this will be implemented in an interpolation scheme
 
   ! Sporogonic cycle from Detinova (1962) - 18.0 used by HM04, 16.0 by Ermert
   rtsporo=16.0 ! threshold temperature for parasite development
-  dsporo=111.0
+  dsporo=122.35623077325249 ! (calibrated, Senegal)
 
 
   ! MOVE this to initialization ?
@@ -726,9 +726,8 @@ CONTAINS
   ! ANOPHELES GAMBIAE (S.S. and S.L.)
   !-------------------
   CASE(0)
-    wpond_ratio=1.0   ! ratio of temporary ponds selected by vector 
-    wperm_ratio=0.01   ! ratio of permanent features, higher for anoph. funestus 
-    wperm_ratio=0.007
+    wpond_ratio=0.48  ! ratio of temporary ponds selected by vector (calibrated, Senegal)
+    wperm_ratio=0.006 ! ratio of permanent features, higher for anoph. funestus (calibrated, Senegal)
     wurbn_ratio=0.01   ! ratio of urban sites (gutters, tires etc),
     rbeta_indoor=0.2
 
