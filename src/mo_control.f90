@@ -86,7 +86,6 @@ MODULE mo_control
     character(len=200) :: pop_file   ! Name of population file
     character(len=200) :: rain_file  ! Name of rain/precipitation file
     character(len=200) :: t2m_file   ! Name of temperature file
-    character(len=200) :: area_file  ! Name of cell area file
     character(len=200) :: imm_file   ! Name of immunity forcing file
     character(len=200) :: mortality_file = '' ! Name of age-specific mortality-rate file; blank = scalar mu
     character(len=200) :: birthrate_file = '' ! Name of yearly birth-rate file; blank = scalar birth_rate
@@ -114,7 +113,6 @@ MODULE mo_control
     character(len=100) ::  pop_names(4) = [character(len=20) :: "pop", "population", "population density", "Band1"]
     character(len=100) ::  rain_names(5)= [character(len=20) :: "rain", "rainfall", "precipitation", "tp", "precip"]
     character(len=100) ::  temp_names(2)= [character(len=20) :: "temperature","t2m"]
-    character(len=100) ::  area_names(1)= [character(len=20) :: "cell_area"]
     character(len=100) ::  imm_names(2)= [character(len=20) :: "imm","imm_bulk"]
 
     ! Attribute names

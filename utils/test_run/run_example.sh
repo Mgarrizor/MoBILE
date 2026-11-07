@@ -21,5 +21,5 @@ export OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}"
 bash "${MOBILE}/mobile.sh" \
     -o example -d 1 -n 365 -s 12345 -u 1 -a 1000000 -m 0 \
     -r "${DATA}/rain.nc" -t "${DATA}/t2m.nc" \
-    -p "${DATA}/pop.nc" -x "${DATA}/area.nc" \
+    -p "${DATA}/pop.nc" \
     -c params.txt -l namelist.nml -i NONE -v 1

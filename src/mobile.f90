@@ -227,7 +227,7 @@ itime = 1
                           demog_counterfactual)
       !
       !--Climate input
-      call namelist_clima(rain_file,t2m_file,area_file)
+      call namelist_clima(rain_file,t2m_file)
       !
       !--Init namelist constants, overriding default --> New parameter values from input
       !call namelist_const()

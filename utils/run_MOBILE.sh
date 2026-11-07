@@ -74,9 +74,6 @@ fi
 
 #           -t Temperature file
             temp_file='path_to_temp_file/temp_file.nc'
-
-#           -x Area file
-            area_file='path_to_area_file/area_file.nc'
         # ===================================
 
 #           -M Age-specific mortality-rate file (Optional; blank/NONE = scalar mu)
@@ -125,7 +122,6 @@ fi
             #rain_file=$MOBILE'/utils/test_run/rain.nc'  #  -r
             #pop_file=$MOBILE'/utils/test_run/pop.nc'    #  -p
             #temp_file=$MOBILE'/utils/test_run/t2m.nc'   #  -t
-            #area_file=$MOBILE'/utils/test_run/area.nc'  #  -x
 
 # Environmental variables
 #--------------------------------
@@ -149,7 +145,6 @@ var_15="-l ${name_list}"
 # CLIMA
 var_20="-r ${rain_file}"
 var_21="-t ${temp_file}"
-var_22="-x ${area_file}"
 
 # HUMAN
 var_30="-p ${pop_file}"
@@ -182,7 +177,6 @@ $var_15
 
 $var_20
 $var_21
-$var_22
 
 $var_30
 $var_31
