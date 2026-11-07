@@ -13,7 +13,6 @@ REQUIRED_FILES = (
     ("rain_file", "Rainfall", "netcdf"),
     ("temp_file", "Temperature", "netcdf"),
     ("pop_file", "Population density", "netcdf"),
-    ("area_file", "Cell area", "netcdf"),
     ("age_file", "Age structure (cumulative)", "text"),
 )
 OPTIONAL_FILES = (

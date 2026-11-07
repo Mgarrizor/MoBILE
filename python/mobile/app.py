@@ -13,6 +13,7 @@ from shiny import App, reactive, render, run_app, ui
 from .basemap import load_basemap, load_terrain
 from .config import ConfigError
 from .driving import climatology, field_limits, open_field, read_age
+from .cells import CellSizeError
 from .grid import extent_key, load_grid, mask_like, read_grid
 from .layout import (
     ANALYSIS_TABS, ASSETS, GUI_OUTPUT, HA_BELOW_ONE, OPTUNA_URL, OUTPUT_FLAGS, funders, help_tab, no_run_yet, output_groups, output_switch_id,
@@ -499,7 +500,7 @@ def create_app(config):
             setup_problem.set(None)
             if new == old:
                 return
-            grid_changed = (old.inputs["pop_file"], old.inputs["area_file"], old.region) != (new.inputs["pop_file"], new.inputs["area_file"], new.region)
+            grid_changed = (old.inputs["pop_file"], old.region) != (new.inputs["pop_file"], new.region)
             setup.set(new)
             save_setup(replace(new, run={**new.run, "nagent": agents() or new.run["nagent"], "seed": input.seed() or new.run["seed"]}))
             show_setup_fields(new)
@@ -680,9 +681,12 @@ def create_app(config):
             if problems:
                 return region, None, problems[0].removeprefix("region: ").capitalize() + "."
             try:
-                region_grid = read_grid(typed_path(input.setup_pop_file()), typed_path(input.setup_area_file()), region)
+                region_grid = read_grid(typed_path(input.setup_pop_file()), region, typed_path(input.setup_rain_file()),
+                                        typed_path(input.setup_temp_file()))
+            except CellSizeError as error:
+                return region, None, str(error)
             except (OSError, ValueError, KeyError, StopIteration, RuntimeError):
-                return region, None, "The population or cell area file cannot be read."
+                return region, None, "The population, rainfall or temperature file cannot be read."
             if region_grid is None:
                 return region, None, "It is outside the grid of the population file."
             if not region_grid["populated"]:
@@ -704,7 +708,7 @@ def create_app(config):
                 text = f": {people}."
             else:
                 place = "Whole grid" if region is None else "Subregion"
-                text = f": {columns} × {rows} cells, {region_grid['populated']:,} of them populated, {people}."
+                text = f": {columns} × {rows} cells, {region_grid['simulated']:,} of them simulated, {people}."
             applied = region == setup().region
             return ui.div(
                 ui.p(ui.tags.strong(place), text, class_="small mb-1"),

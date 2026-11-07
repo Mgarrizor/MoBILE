@@ -208,7 +208,7 @@ def _month_starts(times, metric, first, last):
 
 def analysis_mask(record, info):
     """The simulated cells of the analysis on the coordinates of its outputs (lat, lon), as booleans."""
-    grid = read_grid(record["inputs"]["pop_file"], record["inputs"]["area_file"], record["region"])
+    grid = read_grid(record["inputs"]["pop_file"], record["region"])
     if grid is None:
         raise ValueError("The region of the analysis is not on its population file any more.")
     template = xr.DataArray(np.zeros((info["lat"].size, info["lon"].size)), dims=("lat", "lon"), coords={"lat": info["lat"], "lon": info["lon"]})

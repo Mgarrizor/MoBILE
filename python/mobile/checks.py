@@ -9,8 +9,8 @@ from .period import as_days
 
 READ_ERRORS = (OSError, ValueError, KeyError, StopIteration, TypeError, RuntimeError)
 LABELS = {"rain_file": "Rainfall", "temp_file": "Temperature", "pop_file": "Population density",
-          "area_file": "Cell area", "imm_forcing": "Immunity forcing"}
-GRIDDED = ("rain_file", "temp_file", "area_file", "imm_forcing")
+          "imm_forcing": "Immunity forcing"}
+GRIDDED = ("rain_file", "temp_file", "imm_forcing")
 
 RAIN_UNITS = {"mm/day", "mmday-1", "mm/d", "mmd-1"}
 # Units met in rainfall and temperature files, with what to do to get those the model expects
@@ -21,7 +21,6 @@ RAIN_HINTS = {
 }
 CELSIUS = ("celsius", "celcius", "degc", "°c", "degreec", "degree_c")
 TEMP_HINTS = {"k": "subtract 273.15", "kelvin": "subtract 273.15", "degf": "convert to °C", "fahrenheit": "convert to °C"}
-AREA_UNITS = ("m2", "m^2", "m**2", "km2", "km^2", "km**2", "ha", "hectare")
 
 
 def normal_units(units):
@@ -150,13 +149,4 @@ def driving_problems(inputs):
                 problems += [f"{LABELS[key]}: {text}." for text in value_problems(key, inputs[key])]
             except READ_ERRORS as error:
                 problems.append(f"{LABELS[key]}: {error}{wrong_file_hint(key, inputs[key])}.")
-    area = inputs.get("area_file", "NONE")
-    if "area_file" in axes:
-        try:
-            with xr.open_dataset(area) as data:
-                units = normal_units(data["cell_area"].attrs.get("units", ""))
-            if units and units not in AREA_UNITS:
-                problems.append(f"Cell area: in {units!r}, not an area unit (m2).")
-        except READ_ERRORS:
-            problems.append("Cell area: has no variable named cell_area.")
     return problems

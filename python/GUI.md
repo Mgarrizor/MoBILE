@@ -53,8 +53,9 @@ Everything a run needs that is not a parameter or an output.
   **Create and open**. It then opens, and **Use this folder** selects it. Names use letters, digits, `.`, `_`
   and `-` only (no spaces), and the folder cannot be inside the MoBILE repository. It takes effect with
   **Apply setup**, and *Earlier runs* in the sidebar then lists the runs in that folder.
-- **Driving files**: rainfall, temperature, population density, cell area and cumulative age structure. There is no
-  parameter file: the parameters are set in tab 2. Type a path or use **Browse**. Optional files (mortality, birth rate, immunity
+- **Driving files**: rainfall, temperature, population density and cumulative age structure. There is no
+  parameter file: the parameters are set in tab 2, and no cell-area file: the model computes the cell areas from the
+  grid of the population file. Type a path or use **Browse**. Optional files (mortality, birth rate, immunity
   forcing, counterfactual demography) are under *Optional files*. The files filled in at first are the
   example that comes with MoBILE (`utils/test_run` in the GitHub repository): Senegal, 2012 to 2014, on a 0.05°
   grid (rainfall CHIRPS, temperature CHIRTS, population WorldPop 2020). A note says so while they are in use.
@@ -69,8 +70,11 @@ Everything a run needs that is not a parameter or an output.
   rectangle replaces the one before, and the draw button of the map toolbar (dotted square) brings drawing back
   after zooming. For a **Single point**, type its latitude and longitude, or click a cell on the map. The cells of
   the region are those with their centre inside it; a point, or a box narrower than a cell, gives the cell it falls
-  in. The map outlines these cells (a ring marks a point), and the line under the choice gives their number and
-  their people. The region is part of the setup, applied with **Apply setup**, and the humans per agent in the
+  in. The map outlines these cells (a ring marks a point), and the line under the choice gives their number, how many
+  are simulated (with population, and rain and temperature on the first day) and the people in those, as the model counts
+  them. The run of a region gets copies of the driving files cut to it; the cut population file keeps the cell bounds
+  of the whole grid (`lat_bnds`, `lon_bnds`), from which the model computes the area of the cells of a point or a
+  row. The region is part of the setup, applied with **Apply setup**, and the humans per agent in the
   sidebar are then those of the region.
 - **Preview driving files** draws a file as a map (rainfall and temperature by day, population density, age
   structure) before you apply it, so mismatched grids show up early. **Dots on the map** mark cells whose daily
