@@ -44,8 +44,9 @@ from mobile.setup import (
 )
 from mobile.checks import driving_days, driving_problems
 from mobile.period import SPIN_UP_DAYS, day_range, length_text, period_days, period_problems
+from mobile.cells import EARTH_RADIUS, CellSizeError, cell_areas
 from mobile.grid import pop_coordinates, read_grid
-from mobile.region import axis_range, cut_inputs, region_problems
+from mobile.region import axis_range, cut_file, cut_inputs, region_problems
 from mobile.runner import ProgressParser, RunCancelled, Runner, RunnerBusy, macos_sdk, run_environment
 from mobile.sensitivity_results import (
     PERCENTILES, age_note, analysable_variables, analyse_study, analysis_mask, cell_dataset, chance_share, complete_seeds,
@@ -195,6 +196,10 @@ class TestConfig(unittest.TestCase):
     def test_refuses_a_parameter_file(self):
         with self.assertRaisesRegex(ConfigError, "const is no longer used"):
             replace(self.config, inputs={**self.config.inputs, "const": str(CONFIG)}).validate()
+
+    def test_refuses_an_area_file(self):
+        with self.assertRaisesRegex(ConfigError, "area_file is no longer used"):
+            replace(self.config, inputs={**self.config.inputs, "area_file": str(CONFIG)}).validate()
 
     def test_fortran_defaults_detects_a_change(self):
         # Control: a default changed in a copy of the source is found
@@ -1193,13 +1198,12 @@ def write_known_study(root, n, seeds=(1,), second_order=False, noise=0.0, days=4
     pop = np.full(shape, 100.0)
     if hole is not None:
         pop[hole] = np.nan  # Not simulated
-    for name, variable, values in (("pop.nc", "pop", pop), ("area.nc", "cell_area", np.ones(shape))):
-        with netCDF4.Dataset(root / name, "w") as dataset:
-            dataset.createDimension("lat", lat.size)
-            dataset.createDimension("lon", lon.size)
-            dataset.createVariable("lat", "f8", ("lat",))[:] = lat
-            dataset.createVariable("lon", "f8", ("lon",))[:] = lon
-            dataset.createVariable(variable, "f8", ("lat", "lon"), fill_value=np.nan)[:] = values
+    with netCDF4.Dataset(root / "pop.nc", "w") as dataset:
+        dataset.createDimension("lat", lat.size)
+        dataset.createDimension("lon", lon.size)
+        dataset.createVariable("lat", "f8", ("lat",))[:] = lat
+        dataset.createVariable("lon", "f8", ("lon",))[:] = lon
+        dataset.createVariable("pop", "f8", ("lat", "lon"), fill_value=np.nan)[:] = pop
     rain = np.linspace(1, 9, pop.size).reshape(shape)
     temperature = np.linspace(30, 10, pop.size).reshape(shape)
     a, b = rain / 10, temperature / 10
@@ -1252,7 +1256,7 @@ def write_known_study(root, n, seeds=(1,), second_order=False, noise=0.0, days=4
         "status": "finished", "date": "2026-11-04T12:00:00", "method": "sobol", "n": n, "second_order": second_order,
         "parameters": [{"name": p.name, "distribution": "uniform", "low": 0.0, "high": 1.0, "mean": None, "sd": None} for p in parameters],
         "seeds": list(seeds), "sample_seed": 3, "runs": run_count(n, parameters, second_order, len(seeds)), "region": None,
-        "inputs": {"pop_file": str(root / "pop.nc"), "area_file": str(root / "area.nc")},
+        "inputs": {"pop_file": str(root / "pop.nc")},
     }
     (folder / RECORD).write_text(json.dumps(record))
     return folder, a, b
@@ -1490,15 +1494,63 @@ class TestRegion(unittest.TestCase):
         self.assertEqual([region_mode(region) for region in (None, self.box, point)], ["all", "box", "point"])
 
     def test_grid_of_a_region(self):
-        whole = read_grid(self.config.inputs["pop_file"], self.config.inputs["area_file"])
-        part = read_grid(self.config.inputs["pop_file"], self.config.inputs["area_file"], self.box)
+        inputs = self.config.inputs
+        climate = (inputs["rain_file"], inputs["temp_file"])
+        whole = read_grid(inputs["pop_file"], None, *climate)
+        part = read_grid(inputs["pop_file"], self.box, *climate)
         self.assertEqual(part["mask"].shape, (12, 16))
         self.assertTrue(0 < part["people"] < whole["people"])
-        point = read_grid(self.config.inputs["pop_file"], self.config.inputs["area_file"],
-                          {"north": 14.69, "west": -17.44, "south": 14.69, "east": -17.44})
+        point = read_grid(inputs["pop_file"], {"north": 14.69, "west": -17.44, "south": 14.69, "east": -17.44}, *climate)
         self.assertEqual(point["mask"].shape, (1, 1))
-        self.assertIsNone(read_grid(self.config.inputs["pop_file"], self.config.inputs["area_file"],
-                                    {"north": 5.0, "west": 0.0, "south": 4.0, "east": 1.0}))
+        self.assertIsNone(read_grid(inputs["pop_file"], {"north": 5.0, "west": 0.0, "south": 4.0, "east": 1.0}, *climate))
+        # Without the climate files, the populated cells only (for the masks of the maps)
+        self.assertNotIn("people", read_grid(inputs["pop_file"], self.box))
+
+    def test_people_as_the_model_counts_them(self):
+        # The model (main, PR #76) printed "Number of people in simulated region 13943334.0" on the example,
+        # summed in single precision, and placed agents in 6472 cells
+        inputs = self.config.inputs
+        grid = read_grid(inputs["pop_file"], None, inputs["rain_file"], inputs["temp_file"])
+        self.assertLess(abs(grid["people"] / 13943334.0 - 1), 1e-6)
+        self.assertEqual(grid["simulated"], 6472)
+        # Control: the populated cells without rain or temperature data hold people that would be counted otherwise
+        # (15426841 printed by the model before, a single-precision sum with the areas of cdo: within 1e-5)
+        self.assertEqual(grid["populated"], 6502)
+        with netCDF4.Dataset(inputs["pop_file"]) as data:
+            pop = np.ma.filled(data["pop"][:].astype("f8"), np.nan)
+        everyone = float(np.nansum(pop * cell_areas(inputs["pop_file"])))
+        self.assertLess(abs(everyone / 15426841.0 - 1), 1e-5)
+        self.assertGreater(everyone / grid["people"], 1.1)
+
+    def test_cell_areas_as_cdo(self):
+        # cdo gridarea pop.nc, the area.nc of the example before the model computed it (git 5f04270)
+        areas = cell_areas(self.config.inputs["pop_file"])
+        cdo = {(0, 0): 30233882.400677443, (-1, -1): 29558652.66170948, (54, 10): 29896944.170571003}
+        for cell, value in cdo.items():
+            self.assertLess(abs(areas[cell] / value - 1), 1e-7, cell)
+        self.assertLess(abs(areas.sum() / 418833.56920419214e6 - 1), 1e-7)
+        # Control: the mean radius of the Earth in src/mo_const.f90 (6371.009 km) is off by 2.8e-6
+        with mock.patch("mobile.cells.EARTH_RADIUS", 6371009.0):
+            self.assertGreater(abs(cell_areas(self.config.inputs["pop_file"])[54, 10] / cdo[54, 10] - 1), 1e-6)
+        self.assertEqual(EARTH_RADIUS, 6371000.0)
+
+    def test_a_cut_keeps_the_cell_size(self):
+        inputs = self.config.inputs
+        whole = cell_areas(inputs["pop_file"])
+        lon, lat = (np.asarray(axis, dtype="float64") for axis in pop_coordinates(inputs["pop_file"]))
+        point = {"north": float(lat[54]), "west": float(lon[10]), "south": float(lat[54]), "east": float(lon[10])}
+        row = {**point, "west": float(lon[0]), "east": float(lon[-1])}
+        column = {**point, "south": float(lat.min()), "north": float(lat.max())}
+        for name, region, cells in (("point", point, (54, 10)), ("row", row, (54, slice(None))),
+                                    ("column", column, (slice(None), 10))):
+            paths = cut_inputs(inputs, region, self.folder / name, (lon, lat))
+            with netCDF4.Dataset(paths["pop_file"]) as cut:
+                self.assertEqual((cut["latitude"].bounds, cut["longitude"].bounds), ("lat_bnds", "lon_bnds"), name)
+            self.assertTrue(np.allclose(cell_areas(paths["pop_file"]).ravel(), np.ravel(whole[cells]), rtol=1e-12), name)
+        # Control: a cut of one cell without the bounds gives no cell size
+        cut_file(inputs["pop_file"], self.folder / "bare.nc", *((float(c), float(c)) for c in (lon[10], lat[54])))
+        with self.assertRaisesRegex(CellSizeError, "single latitude"):
+            cell_areas(self.folder / "bare.nc")
 
     def test_files_cut_to_a_region(self):
         import netCDF4
@@ -1506,7 +1558,7 @@ class TestRegion(unittest.TestCase):
         import xarray as xr
 
         paths = cut_inputs(self.config.inputs, self.box, self.folder / "inputs", pop_coordinates(self.config.inputs["pop_file"]))
-        self.assertEqual(set(paths), {"rain_file", "temp_file", "pop_file", "area_file"})
+        self.assertEqual(set(paths), {"rain_file", "temp_file", "pop_file"})
         for key, path in paths.items():
             with xr.open_dataset(self.config.inputs[key]) as whole, xr.open_dataset(path) as part:
                 name = next(iter(whole.data_vars))

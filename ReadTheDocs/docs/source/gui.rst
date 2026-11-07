@@ -95,7 +95,6 @@ What to fill in
      rain_file: data/rain.nc
      temp_file: data/t2m.nc
      pop_file: data/pop.nc
-     area_file: data/area.nc
      age_file: data/cumm_age.txt
 
 ``run``

@@ -21,5 +21,4 @@ inputs:
   rain_file: $MOBILE/utils/test_run/rain.nc
   temp_file: $MOBILE/utils/test_run/t2m.nc
   pop_file: $MOBILE/utils/test_run/pop.nc
-  area_file: $MOBILE/utils/test_run/area.nc
   age_file: $MOBILE/utils/test_run/age_structure/cumm_age.txt

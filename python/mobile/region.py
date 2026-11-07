@@ -9,12 +9,13 @@ from pathlib import Path
 import netCDF4
 import numpy as np
 
+from .cells import add_bounds
 from .driving import LAT_NAMES, LON_NAMES, TIME_NAMES
 
 # In the order of the Copernicus data store
 REGION_KEYS = ("north", "west", "south", "east")
 # The driving files on the grid of the population file
-GRIDDED_INPUTS = ("rain_file", "temp_file", "pop_file", "area_file", "imm_forcing")
+GRIDDED_INPUTS = ("rain_file", "temp_file", "pop_file", "imm_forcing")
 # The driving files with a day to a step in time
 DAILY_INPUTS = ("rain_file", "temp_file", "imm_forcing")
 
@@ -103,7 +104,8 @@ def cut_file(source, target, lon_limits, lat_limits, steps=None):
 
 def cut_inputs(inputs, region, folder, pop_grid, steps=None):
     """Copies of the driving files cut to a region and, if `steps` is (first, last), to those steps in
-    time, in folder: {key: path}. Without a region, only the files with time are copied.
+    time, in folder: {key: path}. Without a region, only the files with time are copied. The cut population
+    file gets the cell bounds of the whole grid, from which the model computes the cell areas.
 
     pop_grid is (lon, lat) of the population file, on which the region is chosen. Raises ValueError if a
     file is not on that grid.
@@ -130,5 +132,7 @@ def cut_inputs(inputs, region, folder, pop_grid, steps=None):
         cells = cut_file(source, target, *limits, steps=steps if key in DAILY_INPUTS else None)
         if expected is not None and cells != expected:
             raise ValueError(f"{Path(source).name} is not on the grid of the population file")
+        if key == "pop_file":
+            add_bounds(source, target)  # The model computes the cell areas from them
         paths[key] = str(target)
     return paths

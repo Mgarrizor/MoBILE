@@ -15,10 +15,12 @@ from .region import region_problems
 # The keys of a configuration file. Parameters, outputs and sliders are set in the GUI.
 CONFIG_KEYS = {"mobile", "runs_dir", "project", "run", "inputs", "region", "period"}
 RUN_KEYS = {"disID", "mob", "nstep", "spin_up", "nagent", "seed", "threads"}
-REQUIRED_INPUTS = {"rain_file", "temp_file", "pop_file", "area_file", "age_file"}
+REQUIRED_INPUTS = {"rain_file", "temp_file", "pop_file", "age_file"}
 # A parameter file is no longer an input: the parameters, their defaults and ranges are in parameters.yaml
 NO_CONST = ("inputs: const is no longer used: the parameters are set in the GUI, or with `mobile run --set`, and start at "
             "the defaults compiled into the model. Remove `const` from the configuration.")
+NO_AREA = ("inputs: area_file is no longer used: the model computes the cell areas from the grid of the population "
+           "file. Remove `area_file` from the configuration.")
 OPTIONAL_INPUTS = {"mortality_file", "birthrate_file", "mortality_time_file", "imm_forcing"}
 OPTIONAL_DEFAULTS = {"counterfactual": 0}
 
@@ -152,7 +154,9 @@ class Config:
 
         if "const" in self.inputs:
             errors.append(NO_CONST)
-        allowed = REQUIRED_INPUTS | OPTIONAL_INPUTS | set(OPTIONAL_DEFAULTS) | {"const"}
+        if "area_file" in self.inputs:
+            errors.append(NO_AREA)
+        allowed = REQUIRED_INPUTS | OPTIONAL_INPUTS | set(OPTIONAL_DEFAULTS) | {"const", "area_file"}
         unknown = set(self.inputs) - allowed
         if unknown:
             errors.append(f"inputs: unknown {sorted(unknown)}")

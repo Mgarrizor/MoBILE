@@ -91,7 +91,6 @@ def create_run_dir(config, name=None):
         "pop_file": f"'{inputs['pop_file']}'",
         "rain_file": f"'{inputs['rain_file']}'",
         "temp_file": f"'{inputs['temp_file']}'",
-        "area_file": f"'{inputs['area_file']}'",
         "mortality_file": f"'{inputs.get('mortality_file', 'NONE')}'",
         "birthrate_file": f"'{inputs.get('birthrate_file', 'NONE')}'",
         "mortality_time_file": f"'{inputs.get('mortality_time_file', 'NONE')}'",

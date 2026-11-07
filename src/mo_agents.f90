@@ -133,8 +133,10 @@ USE, INTRINSIC :: ISO_C_BINDING
             ! Calculate number of agents per grid cell for a given total, nagent, and
             ! the input human population density, pop_dens
             !
-            norm_check = sum(pop_dens(:)*A_cell(:)) ! Weighted by cell area
-            norm = sum(log(pop_dens(:)*A_cell(:)+1.)) ! Re-scaled weights
+            ! People and weights in simulated cells only (mask_pop = .true.: population, rain and
+            ! temperature data), the only cells that get agents
+            norm_check = sum(pop_dens(:)*A_cell(:), mask=mask_pop) ! Weighted by cell area
+            norm = sum(log(pop_dens(:)*A_cell(:)+1.), mask=mask_pop) ! Re-scaled weights, simulated cells only
             !
             allocate(scale(nxy))
             allocate(scaleI(nxy))
@@ -144,10 +146,18 @@ USE, INTRINSIC :: ISO_C_BINDING
             print *, 'Average scale factor = ', sum(scale(:))/size(scale(:))
             print *, 'Number of people in simulated region', norm_check
             !
+            ! Agents are only placed in simulated cells, i.e. where mask_pop is .true.: cells with
+            ! population AND rain AND temperature data. mask_pop is .false. where rain or temperature
+            ! is missing (e.g. a coastal cell outside the rainfall product), even if people live there.
+            ! norm_check counts the people in simulated cells only: had it counted all cells, this check
+            ! could pass with fewer people in the simulated cells than nagent, and the loop placing the
+            ! remaining agents (do while below) would never end. Example: a 1x1 domain whose only cell
+            ! has people but no rain data -- no agent can be placed, and the run would hang.
             if (norm_check < nagent) then
-                print *, 'More agents than people! --> STOP'
-                STOP 
-            end if 
+                print *, 'More agents than people in simulated cells (with rain and temperature data):', &
+                         norm_check, '< nagent =', nagent, ' --> STOP'
+                STOP
+            end if
             !
             P_a = norm_check/nagent
             !
@@ -345,10 +355,11 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             ! Standard distribution of agents:
             ! For this, build a biased dice (see functions below) with weights 
-            ! prop. to pop_dens(:)*A_cell(:) and throw it.
+            ! prop. to pop_dens(:)*A_cell(:) and throw it. Weights are zero in the cells not
+            ! simulated (mask_pop = .false.), so only simulated cells can be drawn.
             !
-            norm = sum(max(pop_dens(:)*A_cell(:)-npeop(:), 0.)) ! Weighted by cell area
-            cdf(:) = cumsum(max(pop_dens(:)*A_cell(:)-npeop(:), 0.))/norm
+            norm = sum(max(pop_dens(:)*A_cell(:)-npeop(:), 0.), mask=mask_pop) ! Weighted by cell area
+            cdf(:) = cumsum(merge(max(pop_dens(:)*A_cell(:)-npeop(:), 0.), 0., mask_pop))/norm
             !
             ! Re-scaled distribution of agents:
             ! Add the correction factor "-npeop(:)" to avoid having a human/agent ratio
