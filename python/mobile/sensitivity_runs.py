@@ -22,6 +22,7 @@ import numpy as np
 
 from .config import MAX_PATH_LENGTH, Config, ConfigError
 from .grid import pop_coordinates
+from .parameters import to_model
 from .region import cut_inputs
 from .rundir import OUTPUT_NAME, new_run_id, period_steps
 from .runner import RunCancelled, Runner
@@ -101,8 +102,14 @@ def create_study(config, parameters, n, second_order, seeds, name=None, sample_s
     return folder
 
 
+OLD_STUDY = ("This analysis was made by an earlier version of the GUI, with a parameter file (const), which is no longer "
+             "used: its runs cannot be resumed. Start a new analysis.")
+
+
 def study_config(folder, record):
     """The configuration of the runs of an analysis, before the values of its samples and seeds."""
+    if "const" in record["run_inputs"]:
+        raise ConfigError(f"{folder}: {OLD_STUDY}")
     return Config(
         mobile=Path(record["mobile"]), runs_dir=Path(folder) / RUNS, run=dict(record["run"]), inputs=dict(record["run_inputs"]),
         params=dict(record["params"]), output=tuple(record["output"]) if record["output"] is not None else None,
@@ -198,7 +205,8 @@ def run_study(folder, state, parallel=1, threads=None):
         seed, index = job
         run_config = replace(
             config,
-            params={**config.params, **{name: float(value) for name, value in zip(names, values[index])}},
+            # Sampled in the units shown on the sliders, written in those of the model
+            params={**config.params, **{name: to_model(name, float(value)) for name, value in zip(names, values[index])}},
             run={**config.run, "seed": seed},
         )
         result = None

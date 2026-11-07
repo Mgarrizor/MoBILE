@@ -43,7 +43,7 @@ def main():
 
     run = commands.add_parser("run", help="run the model once")
     run.add_argument("config", nargs="?", help="YAML configuration file (default: the bundled example)")
-    run.add_argument("--set", nargs="*", default=[], metavar="NAME=VALUE", help="&CONST parameter, instead of its value in `const`")
+    run.add_argument("--set", nargs="*", default=[], metavar="NAME=VALUE", help="&CONST parameter, in the units of the model, instead of its compiled default")
     run.add_argument("--run", nargs="*", default=[], metavar="NAME=VALUE", help="run setting, e.g. seed=1")
     run.add_argument("--name", help="run folder name (default: date and random suffix)")
 

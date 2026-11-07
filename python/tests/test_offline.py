@@ -16,14 +16,14 @@ import netCDF4
 import numpy as np
 
 from mobile.config import (
-    SLIDER_GROUPS,
     Config,
     ConfigError,
-    default_params,
-    default_sliders,
     example_config,
     namelist_names,
     read_params,
+)
+from mobile.parameters import (
+    PARAMETER_GROUPS, all_parameters, run_parameters, shown_parameters, slider_start, to_model, to_shown,
 )
 from mobile.rundir import create_run_dir, fill_template
 from mobile.app import free_port
@@ -53,6 +53,7 @@ from mobile.sensitivity_results import (
 )
 from mobile.sensitivity_runs import (
     RECORD, SAMPLES, StudyState, create_study, list_studies, read_study, run_finished, run_name, run_study, study_label, studies_dir,
+    write_study,
 )
 from mobile.sensitivity import (
     Metric, SampledParameter, analyse, analyse_cells, design_problems, reduce_field, run_count, run_count_formula, sample,
@@ -61,9 +62,10 @@ from mobile.sensitivity import (
 CONFIG = example_config()
 
 
-def fortran_defaults(mobile):
-    """Compiled-in values of the slider parameters: the malaria case of const_disease, then VECTRI's
-    init_constants for the default vector (ivec=0). Each assignment is evaluated in order."""
+def fortran_defaults(mobile, model="malaria"):
+    """Compiled-in values of the &CONST parameters, in the order the model sets them: the initial values of the
+    declarations, const_disease before and in the case of the model, VECTRI's init_constants for the default vector
+    (ivec=0), and the defaults set in namelist_const. Each assignment is evaluated in order."""
     def assignments(text):
         for line in text.splitlines():
             code = line.split("!")[0].strip()
@@ -71,17 +73,35 @@ def fortran_defaults(mobile):
             if match:
                 yield match.group(1), match.group(2)
 
+    def declarations(text):
+        for line in text.splitlines():
+            code = line.split("!")[0]
+            match = re.match(r"^\s*(?:real|integer)\b[^:]*::(.*)$", code, re.I)
+            if match:
+                for part in re.split(r",(?![^(]*\))", match.group(1)):
+                    if "=" in part and "=>" not in part:
+                        name, expression = part.split("=", 1)
+                        yield name.strip(), expression.strip()
+
     const = Path(mobile, "src", "mo_const.f90").read_text()
-    malaria = const[const.index("subroutine const_disease"):]
-    malaria = malaria[re.search(r"case\s*\(1\)", malaria).end():re.search(r"case\s*\(2\)", malaria).start()]
+    disease = const[const.index("subroutine const_disease"):]
+    select = re.search(r"select\s+case\s*\(\s*idis\s*\)", disease, re.I)
+    case = re.search(rf"case\s*\(\s*{ {'cholera': 0, 'malaria': 1}[model] }\s*\)", disease[select.end():], re.I)
+    chosen = disease[select.end() + case.end():]
+    chosen = chosen[:re.search(r"^\s*case\s*\(", chosen, re.I | re.M).start()]
     vectri = Path(mobile, "utils", "vectri", "mo_constants.f90").read_text()
-    vectri = vectri[vectri.index("SUBROUTINE init_constants") if "SUBROUTINE init_constants" in vectri else vectri.lower().index("subroutine init_constants"):]
+    vectri = vectri[vectri.lower().index("subroutine init_constants"):]
     start = re.search(r"SELECT\s+CASE\s*\(\s*ivec\s*\)", vectri, re.I)
     case0 = vectri[start.end():]
     case0 = case0[re.search(r"CASE\s*\(\s*0\s*\)", case0, re.I).end():re.search(r"CASE\s*\(\s*1\s*\)", case0, re.I).start()]
+    namelist = Path(mobile, "src", "mo_namelist.f90").read_text()
+    namelist = namelist[namelist.lower().index("subroutine namelist_const"):]
+    namelist = namelist[:re.search(r"read\s*\(\s*nml\s*=\s*CONST", namelist, re.I).start()]  # Defaults set before the read
     values = {}
-    for text in (malaria, vectri[:start.start()], case0):
-        for name, expression in assignments(text):
+    steps = (declarations(const[:const.lower().index("contains")]), assignments(disease[:select.start()]), assignments(chosen),
+             assignments(vectri[:start.start()]), assignments(case0), assignments(namelist))
+    for step in steps:
+        for name, expression in step:
             try:
                 values[name] = float(eval(expression.replace("log(", "math.log("), {"math": math}, dict(values)))
             except Exception:
@@ -131,25 +151,55 @@ class TestConfig(unittest.TestCase):
         with self.assertRaises(ConfigError):
             self.config.with_run(unknown=1)
 
-    def test_standard_sliders(self):
-        sliders = default_sliders()
-        self.assertEqual(len(sliders), 12)
-        self.assertTrue(set(sliders) <= namelist_names(MOBILE, "CONST"))
-        self.assertTrue(all(spec["group"] in SLIDER_GROUPS for spec in sliders.values()))
-        self.assertTrue(all(spec["min"] < spec["max"] for spec in sliders.values()))
-        # Each is explained on hovering over it
-        self.assertTrue(all(spec.get("info") and spec.get("source") for spec in sliders.values()))
+    def test_parameter_file(self):
+        parameters = all_parameters()
+        # Every parameter of &CONST, and only those: one added to the model must be added here too
+        self.assertEqual(set(parameters), namelist_names(MOBILE, "CONST"))
+        self.assertEqual(sum(spec["curated"] for spec in parameters.values()), 12)
+        for name, spec in parameters.items():
+            self.assertIn(spec["group"], (*PARAMETER_GROUPS, "Cholera", "Mobility"), name)
+            self.assertLess(spec["min"], spec["max"], name)
+            # Each is explained on hovering over it
+            self.assertTrue(spec.get("info") and spec.get("source"), name)
+        for name in shown_parameters():
+            spec = parameters[name]
+            self.assertTrue(spec["min"] <= slider_start(name) <= spec["max"], f"{name}: starts outside its range")
+            self.assertAlmostEqual(to_shown(name, to_model(name, slider_start(name))), slider_start(name), msg=name)
+        self.assertEqual(len(shown_parameters()), 48)
 
-    def test_default_params_match_the_source(self):
-        self.assertEqual(set(default_params()), set(default_sliders()))
-        source = fortran_defaults(MOBILE)
-        for name, value in default_params().items():
-            self.assertAlmostEqual(float(value), source[name], msg=f"{name}: default_params.txt {value}, source {source[name]}")
+    def test_parameter_file_matches_the_source(self):
+        malaria, cholera = fortran_defaults(MOBILE), fortran_defaults(MOBILE, "cholera")
+        for name, spec in all_parameters().items():
+            source = (cholera if spec["group"] == "Cholera" else malaria).get(name)
+            self.assertIsNotNone(source, f"{name}: no default found in the source")
+            self.assertTrue(math.isclose(spec["value"], source, rel_tol=1e-9, abs_tol=1e-12),
+                            f"{name}: parameters.yaml {spec['value']}, source {source}")
+
+    def test_run_parameters(self):
+        written = run_parameters({})
+        self.assertEqual(set(written), set(shown_parameters()))
+        self.assertEqual(written["tau_chr"], "730")  # An integer in Fortran: 730.0 would stop the namelist read
+        self.assertEqual(written["birth_rate"], "-1.0")  # The flag: equal to mu, whatever mu is
+        self.assertEqual(float(written["mu"]), 0.0291 / 365)
+        # Shown per year, written per day; shown as log10, written as the value
+        self.assertAlmostEqual(slider_start("mu"), 0.0291)
+        self.assertAlmostEqual(slider_start("birth_rate"), 0.0291)
+        self.assertAlmostEqual(to_model("mu", 0.0365), 0.0001)
+        self.assertAlmostEqual(to_model("wpond_min", -5.0), 1e-5)
+        self.assertEqual(run_parameters({"tau_chr": 400.4})["tau_chr"], "400")
+        # A parameter of the cholera model is not set for a malaria run
+        self.assertNotIn("mu_B", written)
+        with self.assertRaises(ValueError):
+            run_parameters({"mu_B": 0.3})
+
+    def test_refuses_a_parameter_file(self):
+        with self.assertRaisesRegex(ConfigError, "const is no longer used"):
+            replace(self.config, inputs={**self.config.inputs, "const": str(CONFIG)}).validate()
 
     def test_fortran_defaults_detects_a_change(self):
         # Control: a default changed in a copy of the source is found
         with tempfile.TemporaryDirectory() as copy:
-            for path in ("src/mo_const.f90", "utils/vectri/mo_constants.f90"):
+            for path in ("src/mo_const.f90", "utils/vectri/mo_constants.f90", "src/mo_namelist.f90"):
                 (Path(copy) / path).parent.mkdir(parents=True, exist_ok=True)
                 text = Path(MOBILE, path).read_text()
                 if "mo_const.f90" in path:
@@ -167,12 +217,14 @@ class TestConfig(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "set in the GUI"):
             Config.load(path)
 
-    def test_override_keeps_other_values_verbatim(self):
-        base = read_params(self.config.inputs["const"])
+    def test_override_keeps_other_values_at_default(self):
+        base = self.config.final_params()
         final = self.config.with_params(e_0=0.25).final_params()
         self.assertEqual(final["e_0"], "0.25")
         del base["e_0"], final["e_0"]
         self.assertEqual(base, final)
+        with self.assertRaisesRegex(ConfigError, "not available for this model"):
+            self.config.with_params(mu_B=0.3)
 
     def test_spin_up_needs_a_year(self):
         # mo_spinup.f90 stops with less than 365 simulated days (ndays_year): 364 must be refused, 365 accepted
@@ -1045,6 +1097,23 @@ echo 'Program finished successfully'
         self.assertIn("16 runs, finished", study_label(folder, read_study(folder)))
         # Not among the single runs
         self.assertEqual(list_runs(self.config.runs_dir), {})
+
+    def test_samples_in_the_units_shown(self):
+        # mu is sampled per year, as on its slider, and reaches the run per day
+        parameters = [SampledParameter("mu", "uniform", 0.02, 0.04), SampledParameter("K_h", "uniform", 1e-5, 1e-3)]
+        folder = create_study(self.config, parameters, 2, False, [3], name="units", sample_seed=1)
+        run_study(folder, StudyState(), parallel=2)
+        values = np.loadtxt(folder / "samples.txt", ndmin=2)
+        params = read_params(folder / "runs" / run_name(3, 2) / "params.txt")
+        self.assertTrue(0.02 <= values[2, 0] <= 0.04)
+        self.assertAlmostEqual(float(params["mu"]), values[2, 0] / 365)
+
+    def test_old_analysis_is_refused(self):
+        folder = create_study(self.config, self.parameters, 2, False, [3], name="old", sample_seed=1)
+        record = read_study(folder)
+        write_study(folder, {**record, "run_inputs": {**record["run_inputs"], "const": "/old/params.txt"}})
+        with self.assertRaisesRegex(ConfigError, "parameter file"):
+            run_study(folder, StudyState(), parallel=2)
 
     def test_period_is_cut_once_for_all_runs(self):
         import xarray as xr

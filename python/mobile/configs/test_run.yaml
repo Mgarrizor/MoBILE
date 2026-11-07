@@ -23,4 +23,3 @@ inputs:
   pop_file: $MOBILE/utils/test_run/pop.nc
   area_file: $MOBILE/utils/test_run/area.nc
   age_file: $MOBILE/utils/test_run/age_structure/cumm_age.txt
-  const: $MOBILE/utils/test_run/params.txt

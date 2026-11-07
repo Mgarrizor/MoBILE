@@ -97,7 +97,6 @@ What to fill in
      pop_file: data/pop.nc
      area_file: data/area.nc
      age_file: data/cumm_age.txt
-     const: params.txt
 
 ``run``
    As the flags of ``run_MOBILE.sh``. Two of them deserve care:
@@ -110,9 +109,9 @@ What to fill in
 ``inputs``
    The four driving fields must follow the units and variable names in the README of MoBILE
    (`Driving data <https://github.com/Mgarrizor/MoBILE#driving-data>`_).
-   ``age_file`` is the cumulative age distribution. ``const`` is your parameter file, as
-   ``params.txt``: the GUI's parameter sliders start at its values, and a parameter not in it starts
-   at the model's default, shown in grey. Optional: ``mortality_file``, ``birthrate_file``,
+   ``age_file`` is the cumulative age distribution. There is no parameter file: the parameters start at
+   the defaults compiled into the model and are changed on the sliders of the GUI, or with
+   ``mobile run --set NAME=VALUE``; a configuration with ``const`` is refused. Optional: ``mortality_file``, ``birthrate_file``,
    ``mortality_time_file``, ``imm_forcing`` (``NONE`` when not used) and ``counterfactual`` (0 or 1).
 
 ``period``

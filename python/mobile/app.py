@@ -5,21 +5,21 @@ import os
 import signal
 import socket
 from dataclasses import replace
-from pathlib import Path
 
 import plotly.graph_objects as go
 import plotly.offline
 from shiny import App, reactive, render, run_app, ui
 
 from .basemap import load_basemap, load_terrain
-from .config import ConfigError, default_params, default_sliders, read_params
+from .config import ConfigError
 from .driving import climatology, field_limits, open_field, read_age
 from .grid import extent_key, load_grid, mask_like, read_grid
 from .layout import (
     ANALYSIS_TABS, ASSETS, GUI_OUTPUT, HA_BELOW_ONE, OPTUNA_URL, OUTPUT_FLAGS, funders, help_tab, no_run_yet, output_groups, output_switch_id,
-    page_header, page_title, parameter_legend, player_controls, slider_grid, slider_groups, with_tip,
+    page_header, page_title, player_controls, slider_grid, slider_tabs, with_tip,
 )
 from .outcome import RunState, load_outcome, run_label, run_model, run_name_problem
+from .parameters import shown_parameters, slider_start, to_model, to_shown
 from .plots import (
     BOX, COLOUR_MAPS, LAND, age_figure, cell_figure, envelope_figure, grid_figure, map_figure, message_figure,
     MAX_DOTS, DOT_COLOURS, add_dot, default_dot, dot_label, move_dot, next_cells, remove_dot, send_figure, sig,
@@ -30,7 +30,7 @@ from .region import region_problems
 from .results import list_runs
 from .sensitivity_ui import sensitivity_card, sensitivity_server
 from .scripts import (
-    BROWSER_HANDLER, CLOSED_HANDLER, DOTS_HANDLER, PARAMETER_STYLE, PLAYER, PLOT_HANDLER, SIDEBAR_FIT, SLIDER_FORMAT, THEME, PAGE_STYLE,
+    BROWSER_HANDLER, CLOSED_HANDLER, DOTS_HANDLER, PARAMETER_MARKS, PARAMETER_STYLE, PLAYER, PLOT_HANDLER, SIDEBAR_FIT, SLIDER_FORMAT, THEME, PAGE_STYLE,
 )
 from .setup import (
     OPTIONAL_FILES, REQUIRED_FILES, from_fields, from_manifest, create_folder, list_folder, region_from_fields, region_mode,
@@ -58,9 +58,6 @@ def create_app(config):
     config, model_note = available_model(config)
     default_output = {flag for flags in OUTPUT_FLAGS.values() for flag, _, on in flags if on}
     initial_output = set(config.output) if config.output is not None else set(GUI_OUTPUT)
-    missing = set(default_sliders()) - set(default_params())
-    if missing:
-        raise ConfigError(f"default_params.txt in the package has no value for the sliders {sorted(missing)}")
 
     app_ui = ui.page_sidebar(
         ui.sidebar(
@@ -102,6 +99,7 @@ def create_app(config):
             ui.tags.script(ui.HTML(CLOSED_HANDLER)),
             ui.tags.style("#shiny-disconnected-overlay { display: none; }"),
             ui.tags.style(PARAMETER_STYLE),
+            ui.tags.script(ui.HTML(PARAMETER_MARKS)),
             ui.tags.script(ui.HTML(SLIDER_FORMAT)),
             ui.tags.script(ui.HTML(BROWSER_HANDLER)),
             ui.tags.script(ui.HTML(SIDEBAR_FIT)),
@@ -202,17 +200,14 @@ def create_app(config):
 
         @reactive.calc
         def slider_setup():
-            """A slider starts at the value in the `const` file, or else at the value compiled into the model.
-            Its range includes that value: a slider cannot start outside it."""
-            in_const = read_params(setup().inputs["const"])
-            compiled = default_params()
-            defaults = {name: float(in_const.get(name, compiled.get(name))) for name in default_sliders()}
-            sources = {name: "const" if name in in_const else "default" for name in default_sliders()}
+            """A slider starts at the default compiled into the model, in the units shown. Its range includes that
+            value: a slider cannot start outside it."""
+            defaults = {name: slider_start(name) for name in shown_parameters()}
             sliders = {
                 name: {**spec, "min": min(spec["min"], defaults[name]), "max": max(spec["max"], defaults[name])}
-                for name, spec in default_sliders().items()
+                for name, spec in shown_parameters().items()
             }
-            return {"sliders": sliders, "defaults": defaults, "sources": sources, "const": Path(setup().inputs["const"]).name}
+            return {"sliders": sliders, "defaults": defaults}
 
         # Made also while their tab is hidden: a run takes the values of the sliders, and those of a loaded
         # run are set on them, before the tab is ever opened
@@ -220,10 +215,7 @@ def create_app(config):
         @render.ui
         def parameter_sliders():
             sliders = slider_setup()
-            return ui.TagList(
-                parameter_legend(sliders["const"]),
-                *slider_groups(sliders["sliders"], sliders["defaults"], sliders["sources"]),
-            )
+            return slider_tabs(sliders["sliders"], sliders["defaults"])
 
         @reactive.effect
         async def send_slider_decimals():
@@ -239,7 +231,7 @@ def create_app(config):
             return tuple(flag for flag in flags if input[output_switch_id(flag)]())
 
         def overrides():
-            """Sliders moved from their value in the `const` file; the others keep it as written there."""
+            """Sliders moved from their start, in the units of the model; the others keep the compiled default."""
             moved = {}
             sliders = slider_setup()
             for name, spec in sliders["sliders"].items():
@@ -247,9 +239,9 @@ def create_app(config):
                     continue
                 value = input[f"param_{name}"]()
                 _, _, step, decimals = slider_grid(spec)
-                # A slider starts at the value of the `const` file snapped to its step
+                # A slider starts at the default snapped to its step
                 if abs(value - round(sliders["defaults"][name], decimals)) >= step / 2:
-                    moved[name] = round(float(value), decimals)
+                    moved[name] = to_model(name, round(float(value), decimals))
             return moved
 
         def grid_key():
@@ -499,7 +491,7 @@ def create_app(config):
             with reactive.isolate():
                 pending_sliders.set(None)
             for name, value in sliders["defaults"].items():
-                ui.update_slider(f"param_{name}", value=moved.get(name, value))
+                ui.update_slider(f"param_{name}", value=to_shown(name, moved[name]) if name in moved else value)
 
         def adopt(new, keep_outcome=False):
             """Apply a setup: the grid, map, sliders and runs follow it, and it is remembered."""

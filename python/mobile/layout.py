@@ -8,7 +8,7 @@ from pathlib import Path
 import yaml
 from shiny import ui
 
-from .config import SLIDER_GROUPS
+from .parameters import PARAMETER_GROUPS
 
 
 MODEL_NAMES = {0: "Cholera", 1: "VECTRI-ABM"}  # By disID
@@ -113,7 +113,7 @@ def slider_grid(spec):
 
 
 def parameter_label(text, spec):
-    """The label of a slider, which explains its parameter on hover or focus, from `info` and `source` in sliders.yaml."""
+    """The label of a slider, which explains its parameter on hover or focus, from `info` and `source` in parameters.yaml."""
     if "info" not in spec:
         return text
     source = ui.div(f"Source: {spec['source']}", class_="param-source") if "source" in spec else None
@@ -122,10 +122,15 @@ def parameter_label(text, spec):
     return ui.tooltip(trigger, explanation, placement="right")
 
 
-def _slider(name, spec, value, source="const"):
-    low, high, step, _ = slider_grid(spec)
-    label = parameter_label(spec.get("label", name) + (" (default)" if source == "default" else ""), spec)
-    return ui.input_slider(f"param_{name}", label, min=low, max=high, value=value, step=step)
+UNIT_LABELS = {"per_year": " [per year]", "log10": " [log10]"}
+
+
+def _slider(name, spec, value):
+    low, high, step, decimals = slider_grid(spec)
+    label = parameter_label(spec.get("label", name) + UNIT_LABELS.get(spec.get("display"), ""), spec)
+    # The browser marks the slider, its section and its tab when the value leaves its start
+    return ui.div(ui.input_slider(f"param_{name}", label, min=low, max=high, value=value, step=step),
+                  class_="param-slider", data_start=f"{round(value, decimals)}", data_step=f"{step}")
 
 
 def logo_files(folder, stem=None):
@@ -301,29 +306,26 @@ def output_groups(selected):
     ]
 
 
-PARAMETER_SOURCES = {
-    "const": ("#007bc2", "from {const}"),  # The colour of the sliders of the theme
-    "default": ("#8a8984", "model default"),
-}
+def sections(parameters):
+    """{group: {section: [names]}} of parameters, in the order of the tabs and of the file."""
+    grouped = {group: {} for group in PARAMETER_GROUPS}
+    for name, spec in parameters.items():
+        grouped[spec["group"]].setdefault(spec["section"], []).append(name)
+    return {group: found for group, found in grouped.items() if found}
 
 
-def parameter_legend(const):
-    """What the two colours of the sliders mean; the labels also say it, so not by colour alone."""
-    items = [
-        ui.span(ui.span(class_="param-swatch", style=f"background: {colour};"), text.format(const=const), class_="me-3")
-        for colour, text in PARAMETER_SOURCES.values()
-    ]
-    return ui.div(*items, class_="small mb-2")
-
-
-def slider_groups(sliders, values, sources):
-    """A heading per group that has sliders, with the sliders side by side."""
-    groups = []
-    for group in SLIDER_GROUPS:
-        group_sliders = [
-            ui.div(_slider(name, spec, values[name], sources[name]), class_=f"param-{sources[name]}")
-            for name, spec in sliders.items() if spec["group"] == group
+def slider_tabs(sliders, values):
+    """A tab per group, with a folded section per theme holding its sliders. A dot marks a tab and a section
+    with a slider moved from its start."""
+    tabs = []
+    for group, found in sections(sliders).items():
+        panels = [
+            ui.accordion_panel(
+                section,
+                ui.layout_column_wrap(*[_slider(name, sliders[name], values[name]) for name in names], width="240px", gap="0 1.5rem"),
+                value=section,
+            )
+            for section, names in found.items()
         ]
-        if group_sliders:
-            groups.append(ui.div(ui.h6(group, class_="mt-2"), ui.layout_column_wrap(*group_sliders, width="240px", gap="0 1.5rem")))
-    return groups
+        tabs.append(ui.nav_panel(group, ui.accordion(*panels, open=False, multiple=True, class_="mt-2 param-sections"), value=group))
+    return ui.navset_underline(*tabs, id="param_tab")

@@ -15,7 +15,6 @@ REQUIRED_FILES = (
     ("pop_file", "Population density", "netcdf"),
     ("area_file", "Cell area", "netcdf"),
     ("age_file", "Age structure (cumulative)", "text"),
-    ("const", "Parameters", "text"),
 )
 OPTIONAL_FILES = (
     ("mortality_file", "Mortality by age", "text"),
