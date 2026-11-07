@@ -566,12 +566,13 @@ CONTAINS
   ! default water fraction of permanent water bodies used if
   ! Sentinel maps are not read in, and also used as minimum if > sentinel
   ! otherwise wperm set to this everywhere
-  wperm_default=0.00001 ! (calibrated, Senegal)
+  wperm_default=1.e-5 ! (calibrated, Senegal)
   ! END TYPE c_wperm
  
   ! TYPE c_wpond 
   wpond_evap=5       ! evaporation rate in mm/day (*Lv/86400 gives units of Wm^-2) 1.728=50w/m2
-  wpond_max=1.0      ! max default water fraction def=0.2 - also used in v130 (calibrated, Senegal)
+! wpond_max=0.2      ! max default water fraction def=0.2 - also used in v130
+  wpond_max=1.0      ! max default water fraction (calibrated, Senegal)
 
   ! infiltration rates using the GLDAS soil texture map:
   ! default values from Annex 2 of FAO soil management training methods : 
@@ -683,7 +684,7 @@ CONTAINS
 
   ! Sporogonic cycle from Detinova (1962) - 18.0 used by HM04, 16.0 by Ermert
   rtsporo=16.0 ! threshold temperature for parasite development
-  dsporo=122.35623077325249 ! (calibrated, Senegal)
+  dsporo=122.3562 ! (calibrated, Senegal)
 
 
   ! MOVE this to initialization ?
