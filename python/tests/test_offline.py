@@ -152,9 +152,14 @@ class TestConfig(unittest.TestCase):
             for path in ("src/mo_const.f90", "utils/vectri/mo_constants.f90"):
                 (Path(copy) / path).parent.mkdir(parents=True, exist_ok=True)
                 text = Path(MOBILE, path).read_text()
-                (Path(copy) / path).write_text(text.replace("k_star   = 10", "k_star   = 12") if "mo_const.f90" in path else text)
-            self.assertEqual(fortran_defaults(copy)["k_star"], 12.0)
-            self.assertEqual(fortran_defaults(copy)["e1"], 0.1)
+                if "mo_const.f90" in path:
+                    text, count = re.subn(r"^(\s*k_star\s*=\s*)[0-9.eE+-]+", r"\g<1>12", text, count=1, flags=re.M)
+                    self.assertEqual(count, 1)
+                (Path(copy) / path).write_text(text)
+            changed, source = fortran_defaults(copy), fortran_defaults(MOBILE)
+            self.assertEqual(changed["k_star"], 12.0)
+            self.assertNotEqual(source["k_star"], 12.0)
+            self.assertEqual({k: v for k, v in changed.items() if k != "k_star"}, {k: v for k, v in source.items() if k != "k_star"})
 
     def test_configuration_has_only_the_essentials(self):
         path = Path(os.getcwd()) / "old.yaml"
