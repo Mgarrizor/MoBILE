@@ -8,31 +8,22 @@ from pathlib import Path
 
 import yaml
 
+from .parameters import run_parameters, shown_parameters
 from .period import period_days, period_problems, spin_up_problem
 from .region import region_problems
 
 # The keys of a configuration file. Parameters, outputs and sliders are set in the GUI.
 CONFIG_KEYS = {"mobile", "runs_dir", "project", "run", "inputs", "region", "period"}
 RUN_KEYS = {"disID", "mob", "nstep", "spin_up", "nagent", "seed", "threads"}
-REQUIRED_INPUTS = {"rain_file", "temp_file", "pop_file", "area_file", "age_file", "const"}
+REQUIRED_INPUTS = {"rain_file", "temp_file", "pop_file", "area_file", "age_file"}
+# A parameter file is no longer an input: the parameters, their defaults and ranges are in parameters.yaml
+NO_CONST = ("inputs: const is no longer used: the parameters are set in the GUI, or with `mobile run --set`, and start at "
+            "the defaults compiled into the model. Remove `const` from the configuration.")
 OPTIONAL_INPUTS = {"mortality_file", "birthrate_file", "mortality_time_file", "imm_forcing"}
 OPTIONAL_DEFAULTS = {"counterfactual": 0}
 
-# The groups of the netCDF output
-SLIDER_GROUPS = ("Human", "Vector", "Hydro", "Climate")
-
 # character(len=200) in mo_control.f90; a namelist read truncates longer paths silently
 MAX_PATH_LENGTH = 200
-
-
-def default_sliders():
-    """{name: {group, label, min, max}} of the sliders of the GUI, from sliders.yaml in the package."""
-    return yaml.safe_load((Path(str(resources.files("mobile"))) / "sliders.yaml").read_text())["sliders"]
-
-
-def default_params():
-    """{name: value} of the compiled-in values of the slider parameters, from default_params.txt in the package."""
-    return read_params(Path(str(resources.files("mobile"))) / "default_params.txt")
 
 
 def example_config():
@@ -128,10 +119,8 @@ class Config:
         return config
 
     def final_params(self):
-        """Parameters of the run: the `const` file overridden by `params`."""
-        final = read_params(self.inputs["const"])
-        final.update({name: repr(value) for name, value in self.params.items()})
-        return final
+        """Parameters of the run, as written to its &CONST: every parameter of the GUI at its default, overridden by `params`."""
+        return run_parameters(self.params)
 
     def output_flags(self):
         """{flag: value} for every &OUTPUT flag, or None for the default output."""
@@ -161,7 +150,9 @@ class Config:
             if problem:
                 errors.append(f"run: {problem}")
 
-        allowed = REQUIRED_INPUTS | OPTIONAL_INPUTS | set(OPTIONAL_DEFAULTS)
+        if "const" in self.inputs:
+            errors.append(NO_CONST)
+        allowed = REQUIRED_INPUTS | OPTIONAL_INPUTS | set(OPTIONAL_DEFAULTS) | {"const"}
         unknown = set(self.inputs) - allowed
         if unknown:
             errors.append(f"inputs: unknown {sorted(unknown)}")
@@ -194,6 +185,9 @@ class Config:
             unknown = set(self.params) - namelist_names(self.mobile, "CONST")
             if unknown:
                 errors.append(f"params: not in &CONST: {sorted(unknown)}")
+            hidden = set(self.params) - unknown - set(shown_parameters())
+            if hidden:
+                errors.append(f"params: not available for this model: {sorted(hidden)}")
             if self.output is not None:
                 unknown = set(self.output) - namelist_names(self.mobile, "OUTPUT")
                 if unknown:

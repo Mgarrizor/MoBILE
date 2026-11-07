@@ -12,8 +12,8 @@ import numpy as np
 from shiny import reactive, render, ui
 
 from .basemap import load_basemap
-from .config import ConfigError, SLIDER_GROUPS
-from .layout import HA_BELOW_ONE, OUTPUT_FLAGS, SALIB_URL, parameter_label, with_tip
+from .config import ConfigError
+from .layout import HA_BELOW_ONE, OUTPUT_FLAGS, SALIB_URL, UNIT_LABELS, parameter_label, sections, with_tip
 from .outcome import run_name_problem
 from .plots import climate_figure, index_map_figure, indices_figure, monthly_figure, second_order_figure, send_figure
 from .sensitivity import DISTRIBUTIONS, SampledParameter, design_problems, run_count_formula
@@ -22,7 +22,8 @@ from .sensitivity_results import (
     metric_from_entry, monthly_table, output_info,
 )
 from .sensitivity_runs import (
-    StudyState, create_study, describe_parameter, list_studies, read_study, run_study, studies_dir, study_label, study_parameters,
+    OLD_STUDY, StudyState, create_study, describe_parameter, list_studies, read_study, run_study, studies_dir, study_label,
+    study_parameters,
 )
 
 N_CHOICES = {str(2**k): f"{2**k:,}" for k in range(1, 15)}
@@ -78,7 +79,8 @@ def _parameter_row(name, spec, value):
     use = f"input.sa_use_{name}"
     dist = f"input.sa_dist_{name}"
     return ui.div(
-        ui.div(ui.input_checkbox(f"sa_use_{name}", parameter_label(spec.get("label", name), spec), value=False), class_="sa-name"),
+        ui.div(ui.input_checkbox(f"sa_use_{name}", parameter_label(spec.get("label", name) + UNIT_LABELS.get(spec.get("display"), ""), spec),
+                                 value=False), class_="sa-name"),
         ui.panel_conditional(
             use,
             ui.div(
@@ -327,10 +329,13 @@ def sensitivity_server(input, output, session, setup, slider_setup, overrides, s
     def sa_parameters():
         sliders = slider_setup()
         groups = []
-        for group in SLIDER_GROUPS:
-            rows = [_parameter_row(name, spec, sliders["defaults"][name]) for name, spec in sliders["sliders"].items() if spec["group"] == group]
-            if rows:
-                groups.append(ui.accordion_panel(group, _fields_header(), *rows))
+        for group, found in sections(sliders["sliders"]).items():
+            rows = []
+            for section, names in found.items():
+                if section != group:
+                    rows.append(ui.h6(section, class_="mt-2 mb-1 small fw-semibold"))
+                rows += [_parameter_row(name, sliders["sliders"][name], sliders["defaults"][name]) for name in names]
+            groups.append(ui.accordion_panel(group, _fields_header(), *rows))
         return ui.accordion(*groups, open=False, multiple=True)
 
     @reactive.effect
@@ -454,8 +459,12 @@ def sensitivity_server(input, output, session, setup, slider_setup, overrides, s
         if running() or single_run_running():
             ui.notification_show("Wait for the run or analysis in progress, or cancel it, before resuming.", type="warning")
             return
-        if read_study(folder)["status"] == "finished":
+        record = read_study(folder)
+        if record["status"] == "finished":
             ui.notification_show("This analysis has finished: every run is done.", type="message")
+            return
+        if "const" in record["run_inputs"]:
+            ui.notification_show(OLD_STUDY, type="error")
             return
         start(folder)
 

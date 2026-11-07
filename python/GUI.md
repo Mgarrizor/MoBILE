@@ -53,8 +53,8 @@ Everything a run needs that is not a parameter or an output.
   **Create and open**. It then opens, and **Use this folder** selects it. Names use letters, digits, `.`, `_`
   and `-` only (no spaces), and the folder cannot be inside the MoBILE repository. It takes effect with
   **Apply setup**, and *Earlier runs* in the sidebar then lists the runs in that folder.
-- **Driving files**: rainfall, temperature, population density, cell area, cumulative age structure and the
-  parameter (`const`) file. Type a path or use **Browse**. Optional files (mortality, birth rate, immunity
+- **Driving files**: rainfall, temperature, population density, cell area and cumulative age structure. There is no
+  parameter file: the parameters are set in tab 2. Type a path or use **Browse**. Optional files (mortality, birth rate, immunity
   forcing, counterfactual demography) are under *Optional files*. The files filled in at first are the
   example that comes with MoBILE (`utils/test_run` in the GitHub repository): Senegal, 2012 to 2014, on a 0.05°
   grid (rainfall CHIRPS, temperature CHIRTS, population WorldPop 2020). A note says so while they are in use.
@@ -84,11 +84,16 @@ The settings are remembered for the next session in `~/.config/mobile/last_setup
 
 ### 2. Parameters & SA tab
 
-- **Parameters for single runs**: sliders by group (Human, Vector, Hydro, Climate). A blue slider starts at its value in
-  the parameter file, a grey one (marked *default*) at the model default. Only sliders you move are changed for
-  the run. **Reset parameters** puts them all back. Slider ranges are placeholders (the example value ±50%).
-  Hover over the name of a parameter (or move to it with Tab) for what it does, the formula it enters and
-  where it comes from. The descriptions are in `info` and `source` of each slider in `sliders.yaml`.
+- **Parameters for single runs**: every parameter of the model's `&CONST` namelist, in tabs (Human, Vector, Hydro,
+  Demography, Interventions), each with folded sections by theme (e.g. *Immunity acquisition*, *Symptomatic
+  probability*). A slider starts at the default compiled into the model. An amber dot marks a moved slider, its
+  section and its tab, so a change in a folded section is not missed; **Reset parameters** puts them all back. Rates
+  per day such as `mu` are shown per year, and tiny fractions (`wpond_min`, `wperm_default`) as log10 of the value;
+  the label says so. Hover over the name of a parameter (or move to it with Tab) for what it does and where it
+  comes from. All of this is in `mobile/parameters.yaml`: the default, the range (only 12 ranges are curated so far;
+  the others are the default ±50%), the tab, the section and the description of each parameter. The tests compare its
+  defaults with the Fortran source, so a default changed in the model, or a parameter added to `&CONST`, must be
+  added there too. The parameters of the cholera model and of mobility are not shown and keep their default.
 - **Outputs**: which fields the next run writes. Age-resolved fields give large files. A sensitivity analysis writes
   the same fields, and only these can be analysed afterwards.
 - **Sensitivity analysis (Sobol)**, below: see the next section.
@@ -101,7 +106,7 @@ parameter not sampled at its slider value.
 
 1. **Parameters to sample**: tick at least two, by group. Choose a distribution (uniform, log-uniform, normal or
    log-normal, the last two truncated to the minimum and maximum) and its bounds, which start at the range of the
-   slider. Normal needs a mean and sd; log-normal those of ln x. Only slider parameters can be sampled for now.
+   slider, in the same units. Normal needs a mean and sd; log-normal those of ln x.
 2. **Sobol**: the base samples N, a power of 2, and whether to compute second-order indices (S2, for each pair).
    The number of runs is shown with its formula: N(2D+2) with S2, N(D+2) without, D the parameters sampled.
 3. **Stochastic** (amber): repeat the analysis for several seeds, from the sidebar seed up, with the same samples,

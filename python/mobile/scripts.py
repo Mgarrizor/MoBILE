@@ -422,11 +422,10 @@ $(document).on('shiny:connected shiny:value', fitSidebar);
 
 
 PARAMETER_STYLE = """
-.param-default .irs--shiny .irs-bar, .param-default .irs--shiny .irs-single,
-.param-default .irs--shiny .irs-handle { background: #8a8984; border-color: #8a8984; }
-.param-default .irs--shiny .irs-single:before { border-top-color: #8a8984; }
-.param-default label { color: var(--bs-secondary-color); }
-.param-swatch { display: inline-block; width: 0.8em; height: 0.8em; border-radius: 2px; margin-right: 0.3em; }
+/* A dot on a moved slider, and on its section and tab: amber, which reads on the light and the dark theme */
+.param-moved > .form-group .param-label::after, .param-sections .accordion-item.param-moved .accordion-title::after,
+#param_tab .nav-link.param-moved::after { content: ""; display: inline-block; width: 0.5em; height: 0.5em; border-radius: 50%;
+  background: #d97706; margin-left: 0.4em; vertical-align: middle; }
 .dots { max-width: 40rem; margin: 0.5rem auto 1rem; }
 .dot-row { display: flex; align-items: center; gap: 0.6rem; padding: 0.2rem 0.5rem; border: 1px solid transparent; border-radius: 4px; cursor: pointer; }
 .dot-row:hover { background: var(--bs-tertiary-bg); }
@@ -439,4 +438,27 @@ PARAMETER_STYLE = """
 .card > .card-header { font-size: 1.15rem; font-weight: 600; color: var(--bs-primary); letter-spacing: 0.02em;
   background: transparent; border-bottom: 2px solid rgba(var(--bs-primary-rgb), 0.35); }
 .card.no-run-yet > .card-header { font-size: 1rem; }
+"""
+
+
+# Marks a moved slider, its section and its tab, so that a change in a folded section is not hidden
+PARAMETER_MARKS = """
+function markParameters() {
+  document.querySelectorAll('.param-slider').forEach(function(box) {
+    const input = box.querySelector('input.js-range-slider');
+    if (!input) return;
+    const value = parseFloat(input.value);
+    const moved = Math.abs(value - parseFloat(box.dataset.start)) >= parseFloat(box.dataset.step) / 2;
+    box.classList.toggle('param-moved', moved);
+  });
+  document.querySelectorAll('.param-sections .accordion-item').forEach(function(item) {
+    item.classList.toggle('param-moved', item.querySelector('.param-slider.param-moved') !== null);
+  });
+  document.querySelectorAll('#param_tab .nav-link').forEach(function(link) {
+    const pane = document.querySelector(`.tab-pane[data-value="${link.dataset.value}"]`);
+    link.classList.toggle('param-moved', pane !== null && pane.querySelector('.param-slider.param-moved') !== null);
+  });
+}
+$(document).on('shiny:inputchanged', function(event) { if (event.name.startsWith('param_')) setTimeout(markParameters, 0); });
+$(document).on('shiny:value', function(event) { if (event.name === 'parameter_sliders') setTimeout(markParameters, 0); });
 """
