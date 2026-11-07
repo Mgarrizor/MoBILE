@@ -1,8 +1,11 @@
 """The pieces of the page that do not depend on a run: sliders, output switches, header, logos, docs."""
 
+import html
 import math
+import re
 from pathlib import Path
 
+import yaml
 from shiny import ui
 
 from .config import SLIDER_GROUPS
@@ -217,12 +220,49 @@ def player_controls(prefix="player"):
     )
 
 
+def publications(entries=None):
+    """The publications of publications.yaml, or those given: the pinned ones first, in their order, then the others by
+    year, oldest first."""
+    if entries is None:
+        entries = yaml.safe_load((Path(__file__).parent / "publications.yaml").read_text())["publications"]
+    return sorted(entries, key=lambda entry: (entry.get("pinned") is None, entry.get("pinned") or 0, entry["year"]))
+
+
+def _italics(text):
+    """Text with *words* in italics, such as the name of a species."""
+    return ui.HTML(re.sub(r"\*(.+?)\*", r"<em>\1</em>", html.escape(text)))
+
+
+def publications_card():
+    rows = []
+    for entry in publications():
+        link = f"https://doi.org/{entry['doi']}"
+        rows.append(ui.tags.tr(
+            ui.tags.td(str(entry["year"]) + (" 📌" if entry.get("pinned") else ""), class_="text-nowrap"),
+            ui.tags.td(entry["authors"].rstrip("."), ". ", ui.tags.em(entry["title"]), ". ", entry["venue"], ". ",
+                       ui.a(f"doi:{entry['doi']}", href=link, target="_blank")),
+            ui.tags.td(entry["region"]),
+            ui.tags.td(entry["domain"]),
+            ui.tags.td(entry["side"]),
+            ui.tags.td(_italics(entry["introduced"])),
+        ))
+    head = ui.tags.thead(ui.tags.tr(*[ui.tags.th(name) for name in ("Year", "Publication", "Region", "Domain", "Side", "What it introduced or studied")]))
+    return ui.card(
+        ui.card_header("Publications"),
+        ui.p("On VECTRI and VECTRI-ABM. 📌 The two models; the others by year. Region: where the model was evaluated or "
+             "applied. Domain: on a grid of cells (Spatial) or at one site (Point). Side: where the model was developed, on the vector, the human or both, or Application for a study "
+             "that uses it.", class_="small text-muted mb-2"),
+        ui.tags.table(head, ui.tags.tbody(*rows), class_="table table-sm small mb-0"),
+    )
+
+
 def help_tab():
     return ui.div(
         ui.card(ui.card_header("Getting started"), quick_start(),
                 ui.p("An earlier run, with its setup and parameters, is reloaded from ", ui.tags.strong("Earlier runs"),
                      " in the sidebar. Hover over ⓘ for an explanation of a setting.", class_="small text-muted mb-0")),
         docs(),
+        publications_card(),
         class_="mt-3",
     )
 
