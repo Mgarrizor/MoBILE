@@ -116,12 +116,20 @@ def _lines(geometries):
     return {"x": x, "y": y}
 
 
+def cell_size(lat, lon, single=0.05):
+    """(degrees of latitude, of longitude) of a grid cell. A stripe one cell wide takes the size of the other direction, as the
+    cells are square; a single cell, single."""
+    steps = [abs(float(values[1]) - float(values[0])) if len(values) > 1 else None for values in (lat, lon)]
+    fallback = next((step for step in steps if step), single)
+    return tuple(step or fallback for step in steps)
+
+
 def load_basemap(lon, lat):
     """The basemap of a grid, from its coordinates; None if it cannot be obtained."""
     west, east = float(min(lon)) - PADDING_DEGREES, float(max(lon)) + PADDING_DEGREES
     south, north = float(min(lat)) - PADDING_DEGREES, float(max(lat)) + PADDING_DEGREES
     # Filled areas only: a coast with every vertex slows each redraw, and this cannot be seen
-    tolerance = abs(float(lon[1]) - float(lon[0])) / 50
+    tolerance = cell_size(lat, lon)[1] / 50
     key = hashlib.sha256(f"{west:.3f},{east:.3f},{south:.3f},{north:.3f},{tolerance:.4f}".encode()).hexdigest()[:16]
     cached = cache_folder() / f"basemap_{key}.json"
     try:
@@ -166,7 +174,7 @@ def load_terrain(lon, lat, land_colour):
     west, east = float(min(lon)) - PADDING_DEGREES, float(max(lon)) + PADDING_DEGREES
     south, north = float(min(lat)) - PADDING_DEGREES, float(max(lat)) + PADDING_DEGREES
     # About 4 samples per grid cell of the 15 arc-second source
-    stride = max(1, round(abs(float(lon[1]) - float(lon[0])) / (15 / 3600) / 4))
+    stride = max(1, round(cell_size(lat, lon)[1] / (15 / 3600) / 4))
     key = hashlib.sha256(f"{west:.3f},{east:.3f},{south:.3f},{north:.3f},{stride},{land_colour}".encode()).hexdigest()[:16]
     cached = cache_folder() / f"terrain_{key}.json"
     try:

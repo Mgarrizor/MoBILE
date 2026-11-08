@@ -8,28 +8,28 @@ from pathlib import Path
 
 import yaml
 
+from .parameters import run_parameters, shown_parameters
+from .period import period_days, period_problems, spin_up_problem
+from .region import region_problems
+from .worldpop import choice_problems, resolve_choice
+
 # The keys of a configuration file. Parameters, outputs and sliders are set in the GUI.
-CONFIG_KEYS = {"mobile", "runs_dir", "project", "run", "inputs"}
+CONFIG_KEYS = {"mobile", "runs_dir", "project", "run", "inputs", "region", "period", "age_structure"}
 RUN_KEYS = {"disID", "mob", "nstep", "spin_up", "nagent", "seed", "threads"}
-REQUIRED_INPUTS = {"rain_file", "temp_file", "pop_file", "area_file", "age_file", "const"}
+REQUIRED_INPUTS = {"rain_file", "temp_file", "pop_file"}
+# A parameter file is no longer an input: the parameters, their defaults and ranges are in parameters.yaml
+NO_CONST = ("inputs: const is no longer used: the parameters are set in the GUI, or with `mobile run --set`, and start at "
+            "the defaults compiled into the model. Remove `const` from the configuration.")
+NO_AREA = ("inputs: area_file is no longer used: the model computes the cell areas from the grid of the population "
+           "file. Remove `area_file` from the configuration.")
+NO_AGE = ("inputs: age_file is no longer used: the age structure comes from WorldPop, chosen by country and, optionally, "
+          "product and year. Remove `age_file` and set e.g. `age_structure: {country: SEN}`.")
+NO_AGE_STRUCTURE = "age_structure: missing; choose a country of WorldPop, e.g. {country: SEN}, and optionally product and year"
 OPTIONAL_INPUTS = {"mortality_file", "birthrate_file", "mortality_time_file", "imm_forcing"}
 OPTIONAL_DEFAULTS = {"counterfactual": 0}
 
-# The groups of the netCDF output
-SLIDER_GROUPS = ("Human", "Vector", "Hydro", "Climate")
-
 # character(len=200) in mo_control.f90; a namelist read truncates longer paths silently
 MAX_PATH_LENGTH = 200
-
-
-def default_sliders():
-    """{name: {group, label, min, max}} of the sliders of the GUI, from sliders.yaml in the package."""
-    return yaml.safe_load((Path(str(resources.files("mobile"))) / "sliders.yaml").read_text())["sliders"]
-
-
-def default_params():
-    """{name: value} of the compiled-in values of the slider parameters, from default_params.txt in the package."""
-    return read_params(Path(str(resources.files("mobile"))) / "default_params.txt")
 
 
 def example_config():
@@ -74,6 +74,9 @@ class Config:
     params: dict = field(default_factory=dict)
     output: tuple | None = None
     project: str = ""  # Name shown in the app
+    region: dict | None = None  # {north, west, south, east} to simulate; None for the whole grid
+    period: dict | None = None  # {start, end} days to simulate, as YYYY-MM-DD; None for all the driving data
+    age_structure: dict | None = None  # {product, country, year} of WorldPop; year None for that of the period (worldpop.py)
 
     @classmethod
     def load(cls, path=None, mobile=None):
@@ -106,6 +109,9 @@ class Config:
             run=dict(raw.get("run", {})),
             inputs=inputs,
             project=str(raw.get("project") or ""),
+            region=raw.get("region"),
+            period=raw.get("period"),
+            age_structure=raw.get("age_structure"),
         )
         config.validate()
         return config
@@ -120,11 +126,23 @@ class Config:
         config.validate()
         return config
 
+    def age_choice(self):
+        """{product, country, year} of the age structure: the product and year given, or else chosen for the first year
+        simulated, of the period or of the driving data (worldpop.resolve_choice)."""
+        choice = dict(self.age_structure)
+        if choice.get("product") is not None and choice.get("year") is not None:
+            return choice
+        if self.period is not None:
+            start = int(str(self.period["start"])[:4])
+        else:
+            from .checks import driving_days  # Not at the top: checks reads the files, config does not
+            days = driving_days(self.inputs["rain_file"])
+            start = int(str(days[0])[:4]) if days is not None and len(days) else 0  # No dates: the oldest product
+        return resolve_choice(choice, start)
+
     def final_params(self):
-        """Parameters of the run: the `const` file overridden by `params`."""
-        final = read_params(self.inputs["const"])
-        final.update({name: repr(value) for name, value in self.params.items()})
-        return final
+        """Parameters of the run, as written to its &CONST: every parameter of the GUI at its default, overridden by `params`."""
+        return run_parameters(self.params)
 
     def output_flags(self):
         """{flag: value} for every &OUTPUT flag, or None for the default output."""
@@ -145,7 +163,23 @@ class Config:
             if not isinstance(value, int) or isinstance(value, bool):
                 errors.append(f"run: {key} must be an integer, got {value!r}")
 
-        allowed = REQUIRED_INPUTS | OPTIONAL_INPUTS | set(OPTIONAL_DEFAULTS)
+        errors += region_problems(self.region)
+        problems = period_problems(self.period)
+        errors += problems
+        if not problems:
+            days = period_days(self.period) if self.period is not None else self.run.get("nstep")
+            problem = spin_up_problem(self.run.get("spin_up"), days)
+            if problem:
+                errors.append(f"run: {problem}")
+
+        if "const" in self.inputs:
+            errors.append(NO_CONST)
+        if "area_file" in self.inputs:
+            errors.append(NO_AREA)
+        if "age_file" in self.inputs:
+            errors.append(NO_AGE)
+        errors += [NO_AGE_STRUCTURE] if self.age_structure is None else choice_problems(self.age_structure)
+        allowed = REQUIRED_INPUTS | OPTIONAL_INPUTS | set(OPTIONAL_DEFAULTS) | {"const", "area_file", "age_file"}
         unknown = set(self.inputs) - allowed
         if unknown:
             errors.append(f"inputs: unknown {sorted(unknown)}")
@@ -178,6 +212,9 @@ class Config:
             unknown = set(self.params) - namelist_names(self.mobile, "CONST")
             if unknown:
                 errors.append(f"params: not in &CONST: {sorted(unknown)}")
+            hidden = set(self.params) - unknown - set(shown_parameters())
+            if hidden:
+                errors.append(f"params: not available for this model: {sorted(hidden)}")
             if self.output is not None:
                 unknown = set(self.output) - namelist_names(self.mobile, "OUTPUT")
                 if unknown:

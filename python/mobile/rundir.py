@@ -3,10 +3,17 @@
 import datetime
 import re
 import secrets
-import shutil
 from pathlib import Path
 
+from .checks import driving_days
+from .config import MAX_PATH_LENGTH, ConfigError
+from .grid import pop_coordinates
+from .period import day_range, period_days
+from .region import cut_inputs
+from .worldpop import age_file_text, prepare
+
 OUTPUT_NAME = "output"
+INPUTS_NAME = "inputs"  # The driving files cut to the region of a run
 
 
 def fill_template(template, values, threads, mobile):
@@ -37,12 +44,26 @@ def new_run_id():
     return f"{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(2)}"
 
 
+def period_steps(config):
+    """(first, last) step of the period of a config in its driving files; None if it has none or covers them all."""
+    if config.period is None:
+        return None
+    days = driving_days(config.inputs["rain_file"])
+    try:
+        steps = day_range(days, config.period)
+    except ValueError as error:
+        raise ConfigError(f"period: {error}") from None
+    return None if steps == (0, len(days) - 1) else steps
+
+
 def create_run_dir(config, name=None):
     """Create runs_dir/<name>/ and everything the scripts read from it."""
     run_dir = Path(config.runs_dir) / (name or new_run_id())
     (run_dir / "age_structure").mkdir(parents=True)
 
-    shutil.copy(config.inputs["age_file"], run_dir / "age_structure" / "cumm_age.txt")
+    # Downloaded and analysed the first time a product, country and year is used (worldpop.py), then kept
+    age = prepare(**config.age_choice())
+    (run_dir / "age_structure" / "cumm_age.txt").write_text(age_file_text(age))
     params = "".join(f"{key}={value},\n" for key, value in config.final_params().items())
     (run_dir / "params.txt").write_text(params)
 
@@ -54,19 +75,24 @@ def create_run_dir(config, name=None):
         output_file = "'output.txt'"
 
     inputs = config.inputs
+    steps = period_steps(config)
+    if config.region is not None or steps is not None:
+        inputs = {**inputs, **cut_inputs(inputs, config.region, run_dir / INPUTS_NAME, pop_coordinates(inputs["pop_file"]), steps)}
+        too_long = [path for path in inputs.values() if len(str(path)) > MAX_PATH_LENGTH]
+        if too_long:
+            raise ConfigError(f"paths in the run folder longer than {MAX_PATH_LENGTH} characters: {too_long}")
     values = {
         "output_name": f"'{OUTPUT_NAME}'",
         "disID": config.run["disID"],
         "seed": config.run["seed"],
         "name_list": "'namelist.nml'",
         "mob": config.run["mob"],
-        "nstep": config.run["nstep"],
+        "nstep": config.run["nstep"] if config.period is None else period_days(config.period),
         "nagent": config.run["nagent"],
         "spin_up": config.run["spin_up"],
         "pop_file": f"'{inputs['pop_file']}'",
         "rain_file": f"'{inputs['rain_file']}'",
         "temp_file": f"'{inputs['temp_file']}'",
-        "area_file": f"'{inputs['area_file']}'",
         "mortality_file": f"'{inputs.get('mortality_file', 'NONE')}'",
         "birthrate_file": f"'{inputs.get('birthrate_file', 'NONE')}'",
         "mortality_time_file": f"'{inputs.get('mortality_time_file', 'NONE')}'",

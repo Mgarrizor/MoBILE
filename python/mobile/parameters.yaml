@@ -1,0 +1,635 @@
+# Every parameter of the &CONST namelist of MoBILE, for the GUI and every run.
+# value: the default compiled into the model (src/mo_const.f90, utils/vectri/mo_constants.f90 for the default
+#   vector, src/mo_namelist.f90), in the units of the model. The tests compare it with the source: change a
+#   default there, or add a parameter to &CONST, and the tests fail until this file follows.
+# group, section: the tab and the folded section of the slider. Cholera and Mobility are not shown: the cholera
+#   model and mobility are not available yet; a run leaves them at the compiled default.
+# min, max: the range of the slider, in the units shown (see display). curated: false marks a placeholder range,
+#   the default +/- 50% (fractions at most 1), to be set by hand.
+# display: per_year shows a rate per day as per year; log10 shows log10 of the value. starts_at: the slider of a
+#   parameter whose default is a flag (birth_rate = -1: equal to mu) starts at the value of that parameter.
+# type: integer for a Fortran integer. info and source are shown on hovering over the slider.
+parameters:
+  e_0:
+    group: Human
+    section: Immunity acquisition
+    value: 0.197
+    min: 0.0985
+    max: 0.296
+    curated: true
+    info: 'Largest immunity gained from one infection, when an agent has no immunity yet. Immunity runs from 0 to 1, and the
+      gain shrinks as it builds up: gain = e_0 (A1 exp(-imm/e1) + (1 - A1) exp(-imm/e2)).'
+    source: dimmunity in mo_agents.f90
+  e1:
+    group: Human
+    section: Immunity acquisition
+    value: 0.2393
+    min: 0.12
+    max: 0.359
+    curated: true
+    info: Immunity level over which the fast part of the immunity gain per infection falls by a factor e. Smaller values make
+      the gain stop sooner as immunity builds up.
+    source: dimmunity in mo_agents.f90
+  e2:
+    group: Human
+    section: Immunity acquisition
+    value: 1.7276
+    min: 0.864
+    max: 2.59
+    curated: true
+    info: Immunity level over which the slow part of the immunity gain per infection falls by a factor e. Larger values keep
+      the gain going at high immunity.
+    source: dimmunity in mo_agents.f90
+  A1:
+    group: Human
+    section: Immunity acquisition
+    value: 0.9894
+    min: 0.495
+    max: 1
+    curated: true
+    info: Weight of the fast part in the immunity gain per infection, from 0 to 1; the slow part has the weight 1 - A1.
+    source: dimmunity in mo_agents.f90
+  e_th:
+    group: Human
+    section: Immunity acquisition
+    value: 0.001
+    min: 0.0005
+    max: 0.0015
+    curated: false
+    info: Threshold immunity level for the transition from recovered to susceptible (R to S).
+    source: mo_const.f90
+  mat_rate:
+    group: Human
+    section: Immunity acquisition
+    value: 0.003850817669777474
+    min: 0.00193
+    max: 0.00578
+    curated: false
+    info: Loss rate of maternal immunity, ln(2) over its half-life (about 6 months), per day.
+    source: mo_const.f90
+  d_c:
+    group: Human
+    section: Immunity waning
+    value: 200.0
+    min: 100.0
+    max: 300.0
+    curated: false
+    info: 'Half-life of clinical immunity in children (t_c), in days. The half-life moves to the adult value d_a with age:
+      t = d_c + (d_a - d_c)(1 - exp(-age/k_e)).'
+    source: mo_const.f90
+  d_a:
+    group: Human
+    section: Immunity waning
+    value: 3650.0
+    min: 1820.0
+    max: 5480.0
+    curated: false
+    info: Half-life of clinical immunity in adults (t_a), in days.
+    source: mo_const.f90
+  k_e:
+    group: Human
+    section: Immunity waning
+    value: 15.0
+    min: 7.5
+    max: 22.5
+    curated: false
+    info: E-folding age, in years, of the maturation of the immunity half-life from d_c to d_a.
+    source: mo_const.f90
+  i_star_c:
+    group: Human
+    section: Symptomatic probability
+    value: 0.9868
+    min: 0.493
+    max: 1
+    curated: true
+    info: 'Immunity level for young children at which the probability that an infection is symptomatic falls fastest (the
+      middle of its S-shaped curve). With age it moves to the adult value i_star_a: i* = i_star_a + (i_star_c - i_star_a)
+      exp(-age/k_star).'
+    source: age_i_star and prob_symp_sig in mo_agents.f90
+  i_star_a:
+    group: Human
+    section: Symptomatic probability
+    value: 0.15
+    min: 0.075
+    max: 0.225
+    curated: false
+    info: Immunity level for adults at which the probability that an infection is symptomatic falls fastest (the middle of
+      its S-shaped curve).
+    source: mo_const.f90
+  k_star:
+    group: Human
+    section: Symptomatic probability
+    value: 15.8706
+    min: 7.94
+    max: 23.8
+    curated: true
+    info: 'Age, in years, over which the immunity level at the middle of the symptomatic curve moves from its child value
+      (i_star_c) to its adult value: the difference falls by a factor e every k_star years.'
+    source: age_i_star in mo_agents.f90
+  m_c:
+    group: Human
+    section: Symptomatic probability
+    value: 60.0
+    min: 30.0
+    max: 90.0
+    curated: false
+    info: Slope of the S-shaped curve of the probability that an infection is symptomatic, for young children.
+    source: mo_const.f90
+  m_a:
+    group: Human
+    section: Symptomatic probability
+    value: 10.0
+    min: 5.0
+    max: 15.0
+    curated: false
+    info: Slope of the S-shaped curve of the probability that an infection is symptomatic, for adults.
+    source: mo_const.f90
+  k_m:
+    group: Human
+    section: Symptomatic probability
+    value: 10.0
+    min: 5.0
+    max: 15.0
+    curated: false
+    info: Age, in years, over which the slope of the symptomatic curve moves from its child value (m_c) to its adult value
+      (m_a).
+    source: mo_const.f90
+  alph_min:
+    group: Human
+    section: Symptomatic probability
+    value: 0.4258
+    min: 0.213
+    max: 0.639
+    curated: true
+    info: Lowest probability that an infection is symptomatic, reached at high immunity, for a newborn. It falls with age
+      as alph_min exp(-age/k_alph), so that older agents with high immunity are mostly asymptomatic.
+    source: age_alph_min and prob_symp_sig in mo_agents.f90
+  k_alph:
+    group: Human
+    section: Symptomatic probability
+    value: 7.2476
+    min: 3.62
+    max: 10.9
+    curated: true
+    info: Age, in years, over which the lowest symptomatic probability (alph_min) falls by a factor e.
+    source: age_alph_min in mo_agents.f90
+  fA_chr:
+    group: Human
+    section: Chronic asymptomatics
+    value: 0.05
+    min: 0.025
+    max: 0.075
+    curated: false
+    info: Fraction of asymptomatic infections that become chronic.
+    source: mo_const.f90
+  tau_chr:
+    group: Human
+    section: Chronic asymptomatics
+    value: 730
+    min: 365.0
+    max: 1100.0
+    curated: false
+    info: Duration of chronic parasitaemia, in days.
+    source: mo_const.f90
+    type: integer
+  P_v0:
+    group: Human
+    section: Transmission to humans
+    value: 0.3453
+    min: 0.173
+    max: 0.518
+    curated: true
+    info: Probability that a bite of an infective mosquito infects a human (mosquito to human). The daily infection probability
+      of an agent is 1 - exp(-w EIR P_v0), with w its exposure to bites and EIR the daily entomological inoculation rate.
+      Ermert et al. (2011) give 0.3.
+    source: Ermert et al. (2011); mo_agents.f90
+  P_max:
+    group: Vector
+    section: Transmission
+    value: 0.2466
+    min: 0.123
+    max: 0.37
+    curated: true
+    info: 'Highest probability that a mosquito becomes infected when it bites an infectious human (human to mosquito): P =
+      P_max (1 - exp(-w b P_h0)), with w the exposure of the agent to bites, b the daily bites of uninfected mosquitoes on
+      it and P_h0 a probability per bite.'
+    source: Churcher et al. (2013), about 0.2 +/- 0.15; mo_agents.f90
+  P_h0:
+    group: Vector
+    section: Transmission
+    value: 0.2
+    min: 0.1
+    max: 0.3
+    curated: false
+    info: Base probability that a susceptible mosquito biting an infected human becomes infected (human to mosquito). Ermert
+      et al. (2011).
+    source: mo_const.f90
+  K_h:
+    group: Vector
+    section: Transmission
+    value: 0.0003
+    min: 0.00015
+    max: 0.00045
+    curated: false
+    info: Free (tuning) parameter of the vector-human transmission.
+    source: mo_const.f90
+  b_rate:
+    group: Vector
+    section: Transmission
+    value: 0.5
+    min: 0.25
+    max: 0.75
+    curated: false
+    info: Mosquito biting rate, in bites per mosquito per day.
+    source: mo_const.f90
+  k_NB:
+    group: Vector
+    section: Transmission
+    value: 2.5
+    min: 1.25
+    max: 3.75
+    curated: false
+    info: Dispersion coefficient of the negative binomial distribution of bites among humans. Guelbeogo et al. (2018).
+    source: mo_const.f90
+  dsporo:
+    group: Vector
+    section: Development
+    value: 122.3562
+    min: 61.2
+    max: 184
+    curated: true
+    info: Degree-days the malaria parasite needs to develop in the mosquito (sporogonic cycle) before the mosquito is infective.
+      Each day adds (T - 16 °C) / dsporo of the cycle, T being the temperature. Larger values give a longer cycle, so fewer
+      mosquitoes live to be infective. Detinova (1962) gives 111.
+    source: Detinova (1962), as in VECTRI (sporo in utils/vectri/mo_methods.f90)
+  dgono:
+    group: Vector
+    section: Development
+    value: 44.18
+    min: 22.1
+    max: 66.3
+    curated: true
+    info: Degree-days a mosquito needs from a blood meal to laying eggs (gonotrophic cycle). Each day adds (T - T_gono) /
+      dgono of the cycle, T_gono being about 7.7 °C. Mosquitoes bite once per cycle, so larger values give fewer bites and
+      fewer eggs. Detinova (1962) gives 37.1 at high humidity.
+    source: Detinova (1962), as in VECTRI (gono in utils/vectri/mo_methods.f90)
+  rvecsurv:
+    group: Vector
+    section: Adult survival
+    value: 0.95
+    min: 0.475
+    max: 1.0
+    curated: false
+    info: Underlying daily survival of adult mosquitoes, on which the temperature-based function is imposed.
+    source: utils/vectri/mo_constants.f90
+  rvecsurv_min:
+    group: Vector
+    section: Adult survival
+    value: 0.5
+    min: 0.25
+    max: 0.75
+    curated: false
+    info: Lowest daily survival of adult mosquitoes.
+    source: utils/vectri/mo_constants.f90
+  wpond_max:
+    group: Hydro
+    section: Temporary ponds
+    value: 1.0
+    min: 0.5
+    max: 1.0
+    curated: false
+    info: Largest fraction of a cell covered by temporary ponds.
+    source: utils/vectri/mo_constants.f90
+  wpond_min:
+    group: Hydro
+    section: Temporary ponds
+    value: 1.0e-06
+    min: -7.0
+    max: -5.0
+    curated: false
+    info: Smallest fraction of a cell covered by temporary ponds. The slider is log10 of the value.
+    source: utils/vectri/mo_constants.f90
+    display: log10
+  wpond_ratio:
+    group: Hydro
+    section: Temporary ponds
+    value: 0.48
+    min: 0.24
+    max: 0.72
+    curated: false
+    info: Fraction of the temporary ponds that the mosquito uses to breed.
+    source: utils/vectri/mo_constants.f90
+  wpond_shapep2:
+    group: Hydro
+    section: Temporary ponds
+    value: 1.0
+    min: 0.5
+    max: 1.5
+    curated: false
+    info: Shape factor p of the pond geometry, divided by 2 (source range 0.5 to 2).
+    source: utils/vectri/mo_constants.f90
+  wpond_depthref:
+    group: Hydro
+    section: Temporary ponds
+    value: 300.0
+    min: 150.0
+    max: 450.0
+    curated: false
+    info: Reference water depth of the ponds, in mm (source range 250 to 350).
+    source: utils/vectri/mo_constants.f90
+  wpond_CN:
+    group: Hydro
+    section: Temporary ponds
+    value: 86.78
+    min: 43.4
+    max: 130.0
+    curated: false
+    info: Curve number of the runoff formula, S = 25400/CN - 254 (source range 80 to 90).
+    source: utils/vectri/mo_constants.f90
+  wpond_ref:
+    group: Hydro
+    section: Temporary ponds
+    value: 0.02
+    min: 0.01
+    max: 0.03
+    curated: false
+    info: Reference pond water fraction (source range 0.005 to 0.02).
+    source: utils/vectri/mo_constants.f90
+  soilinfil_SA:
+    group: Hydro
+    section: Temporary ponds
+    value: 675.16
+    min: 338.0
+    max: 1010.0
+    curated: false
+    info: Infiltration of pond water into the soil, the same in every cell.
+    source: mo_const.f90
+  wperm_ratio:
+    group: Hydro
+    section: Permanent water
+    value: 0.006
+    min: 0.003
+    max: 0.009
+    curated: false
+    info: Fraction of permanent water (pools and ponding near streams, rivers and lakes) that the mosquito uses to breed.
+    source: utils/vectri/mo_constants.f90
+  wperm_default:
+    group: Hydro
+    section: Permanent water
+    value: 1.0e-05
+    min: -6.0
+    max: -4.0
+    curated: false
+    info: Fraction of a cell covered by permanent water when no map of it is read, and its minimum otherwise. The slider is
+      log10 of the value.
+    source: utils/vectri/mo_constants.f90
+    display: log10
+  wurbn_ratio:
+    group: Hydro
+    section: Urban water
+    value: 0.01
+    min: 0.005
+    max: 0.015
+    curated: false
+    info: Fraction of the urban breeding sites (gutters, tyres and the like) that the mosquito uses.
+    source: utils/vectri/mo_constants.f90
+  rlarv_flushtau:
+    group: Hydro
+    section: Rain-driven larval mortality
+    value: 20.0
+    min: 10.0
+    max: 30.0
+    curated: false
+    info: How larval flushing increases with the rain rate, in mm per day.
+    source: utils/vectri/mo_constants.f90
+  rlarv_flushmin:
+    group: Hydro
+    section: Rain-driven larval mortality
+    value: 0.4
+    min: 0.2
+    max: 0.6
+    curated: false
+    info: Lowest larval survival under heavy rain.
+    source: utils/vectri/mo_constants.f90
+  mu:
+    group: Demography
+    section: Mortality and births
+    value: 7.972602739726027e-05
+    min: 0.0145
+    max: 0.0436
+    curated: false
+    info: Background mortality rate of humans, per year (written to the model per day). The default is an exponential fit
+      to Ghana's 2020 WorldPop age structure.
+    source: mo_const.f90
+    display: per_year
+  birth_rate:
+    group: Demography
+    section: Mortality and births
+    value: -1.0
+    min: 0.0146
+    max: 0.0437
+    curated: false
+    info: Birth rate of humans, per year (written to the model per day). By default equal to the mortality rate mu, which
+      keeps the population stable.
+    source: mo_const.f90
+    display: per_year
+    starts_at: mu
+  growth_ratio_ceiling:
+    group: Demography
+    section: Agent capacity
+    value: 1.0
+    min: 1.0
+    max: 2.0
+    curated: false
+    info: 'Spare agent slots: at most nagent x growth_ratio_ceiling agents. 1 means the population cannot grow beyond the
+      starting agents.'
+    source: mo_namelist.f90
+  interv_factor:
+    group: Interventions
+    section: Interventions
+    value: 1.0
+    min: 0.5
+    max: 1.5
+    curated: false
+    info: Intervention multiplier on human-vector contact; 1 is no intervention.
+    source: mo_const.f90
+  interv_beta:
+    group: Interventions
+    section: Interventions
+    value: 0.0
+    min: -1.0
+    max: 1.0
+    curated: false
+    info: Spatial log-slope of the intervention multiplier, per degree along the axis interv_theta; 0 is uniform.
+    source: mo_const.f90
+  interv_theta:
+    group: Interventions
+    section: Interventions
+    value: 0.0
+    min: 0.0
+    max: 360.0
+    curated: false
+    info: Bearing of the axis of the intervention gradient, in degrees clockwise from north.
+    source: mo_const.f90
+  mu_B:
+    group: Cholera
+    section: Cholera
+    value: 0.2
+    min: 0.1
+    max: 0.3
+    curated: false
+    info: Bacterial decay rate, per day.
+    source: mo_const.f90
+  theta_e:
+    group: Cholera
+    section: Cholera
+    value: 0.141
+    min: 0.0705
+    max: 0.211
+    curated: false
+    info: Baseline excretion (contamination) rate from the infected population, normalised, per day.
+    source: mo_const.f90
+  theta_p:
+    group: Cholera
+    section: Cholera
+    value: 0.141
+    min: 0.0705
+    max: 0.211
+    curated: false
+    info: Effect of precipitation on the climate-driven excretion rate, per mm.
+    source: mo_const.f90
+  rho:
+    group: Cholera
+    section: Cholera
+    value: 0.0009132420091324201
+    min: 0.000457
+    max: 0.00137
+    curated: false
+    info: Loss of immunity rate, per day.
+    source: mo_const.f90
+  sigma:
+    group: Cholera
+    section: Cholera
+    value: 0.2
+    min: 0.1
+    max: 0.3
+    curated: false
+    info: Proportion of symptomatic infections.
+    source: mo_const.f90
+  gamma:
+    group: Cholera
+    section: Cholera
+    value: 0.2
+    min: 0.1
+    max: 0.3
+    curated: false
+    info: Recovery rate, per day.
+    source: mo_const.f90
+  alpha:
+    group: Cholera
+    section: Cholera
+    value: 0.004
+    min: 0.002
+    max: 0.006
+    curated: false
+    info: Death rate (infection or other causes), per day.
+    source: mo_const.f90
+  beta:
+    group: Cholera
+    section: Cholera
+    value: 1.0
+    min: 0.5
+    max: 1.5
+    curated: false
+    info: Contact rate, per day.
+    source: mo_const.f90
+  B_0:
+    group: Cholera
+    section: Initial state
+    value: 0.1
+    min: 0.05
+    max: 0.15
+    curated: false
+    info: Initial bacterial concentration, normalised.
+    source: mo_const.f90
+  fS_0:
+    group: Cholera
+    section: Initial state
+    value: 1.0
+    min: 0.5
+    max: 1.0
+    curated: false
+    info: Initial susceptible fraction.
+    source: mo_const.f90
+  fI_0:
+    group: Cholera
+    section: Initial state
+    value: 0.0
+    min: 0.0
+    max: 1.0
+    curated: false
+    info: Initial infected fraction.
+    source: mo_const.f90
+  fA_0:
+    group: Cholera
+    section: Initial state
+    value: 0.0
+    min: 0.0
+    max: 1.0
+    curated: false
+    info: Initial asymptomatic fraction.
+    source: mo_const.f90
+  fR_0:
+    group: Cholera
+    section: Initial state
+    value: 0.0
+    min: 0.0
+    max: 1.0
+    curated: false
+    info: Initial recovered fraction.
+    source: mo_const.f90
+  m_short:
+    group: Mobility
+    section: Mobility
+    value: 0.0
+    min: 0.0
+    max: 1.0
+    curated: false
+    info: Fraction of the population making short daily trips.
+    source: mo_const.f90
+  m_long:
+    group: Mobility
+    section: Mobility
+    value: 0.0
+    min: 0.0
+    max: 1.0
+    curated: false
+    info: Fraction of the population starting long overnight trips.
+    source: mo_const.f90
+  D_grav:
+    group: Mobility
+    section: Mobility
+    value: 2.0
+    min: 1.0
+    max: 3.0
+    curated: false
+    info: E-folding distance of the gravity model, in km.
+    source: mo_const.f90
+  D_pop:
+    group: Mobility
+    section: Mobility
+    value: 10.0
+    min: 5.0
+    max: 15.0
+    curated: false
+    info: E-folding decay of a radial city, in km.
+    source: mo_const.f90
+  H_0:
+    group: Mobility
+    section: Mobility
+    value: 2000.0
+    min: 1000.0
+    max: 3000.0
+    curated: false
+    info: Human population density at the city centre, per km2.
+    source: mo_const.f90

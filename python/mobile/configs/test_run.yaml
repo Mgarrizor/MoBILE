@@ -5,6 +5,9 @@ runs_dir: runs
 
 project: MoBILE example
 
+# Optional: run on part of the grid, in degrees; a point is a box with north = south and west = east
+# region: {north: 14.6, west: -17.2, south: 14.0, east: -16.4}
+
 run:
   disID: 1           # 0: cholera, 1: malaria
   mob: 0             # Mobility, not functional yet
@@ -18,6 +21,8 @@ inputs:
   rain_file: $MOBILE/utils/test_run/rain.nc
   temp_file: $MOBILE/utils/test_run/t2m.nc
   pop_file: $MOBILE/utils/test_run/pop.nc
-  area_file: $MOBILE/utils/test_run/area.nc
-  age_file: $MOBILE/utils/test_run/age_structure/cumm_age.txt
-  const: $MOBILE/utils/test_run/params.txt
+
+# The age structure of the agents, from WorldPop: the country and, optionally, the product (Global2000_2020 or
+# R2025A) and the year; else chosen for the first year simulated (2012 here: Global2000_2020, 2012). It is
+# downloaded and analysed once, then kept.
+age_structure: {country: SEN}

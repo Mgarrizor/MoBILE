@@ -95,26 +95,36 @@ What to fill in
      rain_file: data/rain.nc
      temp_file: data/t2m.nc
      pop_file: data/pop.nc
-     area_file: data/area.nc
-     age_file: data/cumm_age.txt
-     const: params.txt
+
+   age_structure: {country: SEN}   # product (Global2000_2020 or R2025A) and year: optional
 
 ``run``
    As the flags of ``run_MOBILE.sh``. Two of them deserve care:
 
-   - ``nagent``: results depend on the number of humans each agent represents, which the GUI shows
-     next to the number of agents. Lowering ``nagent`` to save time changes the answer.
+   - ``nagent``: results depend on the number of humans each agent represents (HA). In the GUI you enter
+     HA, and the number of agents follows from it; below 1 there would be more agents than people, and the
+     model stops at once. Raising HA to save time changes the answer.
    - ``threads``: a run is only reproducible with the same ``seed`` **and** the same number of threads.
 
 ``inputs``
    The four driving fields must follow the units and variable names in the README of MoBILE
    (`Driving data <https://github.com/Mgarrizor/MoBILE#driving-data>`_).
-   ``age_file`` is the cumulative age distribution. ``const`` is your parameter file, as
-   ``params.txt``: the GUI's parameter sliders start at its values, and a parameter not in it starts
-   at the model's default, shown in grey. Optional: ``mortality_file``, ``birthrate_file``,
+   There is no age file: ``age_structure`` chooses a country of WorldPop (ISO3 code, Sub-Saharan Africa) and optionally
+   a product and a year; else the product is chosen from the first year simulated (``Global2000_2020`` before 2015,
+   ``R2025A`` from 2015) with the year closest to it. It is downloaded and analysed
+   once, as ``utils/fetch_age.sh`` does, and a configuration with ``age_file`` is refused. There is no parameter file: the parameters start at
+   the defaults compiled into the model and are changed on the sliders of the GUI, or with
+   ``mobile run --set NAME=VALUE``; a configuration with ``const`` is refused. Optional: ``mortality_file``, ``birthrate_file``,
    ``mortality_time_file``, ``imm_forcing`` (``NONE`` when not used) and ``counterfactual`` (0 or 1).
 
+``period``
+   Optional: ``{start: 2013-01-01, end: 2013-12-31}``, the first and last day to simulate, within the days of
+   ``rain_file``. Without it the whole driving record is simulated. It replaces ``nstep``.
+
 Everything else, the parameters to change and the fields the model writes, is set in the GUI.
+
+When *Apply setup* is pressed in the GUI, the driving files are checked against each other: the grid, the
+days, and the units of rainfall (mm/day) and temperature (°C). Any difference is listed in a warning window.
 
 When the GUI starts, it checks the configuration and lists any problem: a missing file, an unknown
 setting, and so on.
@@ -144,3 +154,31 @@ Each run has its own folder, ``runs/<date>-<id>/``:
   a copy of the folder.
 
 The runs of a seed band are grouped in ``runs/seed_band_<date>-<id>/``.
+
+A sensitivity analysis has its own folder, ``runs/sensitivity/<name>/``, apart from single runs:
+
+- ``sa.json``: what was sampled and how, the setup, and how far the runs got;
+- ``samples.txt``: the parameter values, one row per sample;
+- ``runs/seed_<seed>/sample_<index>/``: one run folder, as above, for each sample and seed;
+- ``metrics/``: what was read from the runs for each way of analysing them, so that analysing them again is quick.
+
+Sensitivity analysis
+--------------------
+
+The **Sensitivity analysis (Sobol)** card, in the Parameters & SA tab, runs the model for many combinations of the
+parameters you tick, drawn from their distributions (uniform, log-uniform, or normal and log-normal truncated to
+their bounds), with the setup applied in the Setup tab. It uses `SALib <https://salib.readthedocs.io/>`_'s Sobol method: N base samples give N(2D+2)
+runs for D parameters with second-order indices, N(D+2) without. With **Stochastic**, the whole analysis is
+repeated for several seeds with the same samples.
+
+The runs are kept: a cancelled analysis resumes where it stopped, and a finished one can be analysed again, for
+another variable, period, months or reduction, without running again. The indices can be those of one number per
+run (the variable summed, averaged or at its maximum over the days, then averaged or summed over the populated
+cells), maps of the indices cell by cell compared with the rainfall, temperature and population density of each
+cell, or indices month by month across the cells. **How the indices are calculated**, in the card, explains the numbers.
+
+For the sensitivity by age, the runs must write at least **Agents** and one more output under *Human, by age* in the
+Outputs card, e.g. *New symptomatic cases*. The indices can then be computed age band by age band (17 bands, from
+age 0 to 80 and over), or for the age profile of the cases: their share under 5 years old and their mean age, from
+the rate of each band times its agents, day by day. **How the age sensitivities are calculated**, in the card,
+explains them. ``python/GUI.md`` in the repository describes every control.

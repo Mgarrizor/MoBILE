@@ -6,6 +6,7 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -20,8 +21,39 @@ SPINUP_RE = re.compile(r"Spin-up convergence\s+([\d.]+)\s*<=\?\s*([\d.]+)")
 INTEGRATE_RE = re.compile(r"Integrating\s*(\d+)\s*/\s*(\d+)\s*-\s*([\d.]+)\s*%")
 
 
+def macos_sdk():
+    """The path of the newest macOS SDK installed, from xcrun; None if there is none or this is not a Mac."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        found = subprocess.run(["xcrun", "--show-sdk-path"], capture_output=True, text=True, timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    path = found.stdout.strip()
+    return path if found.returncode == 0 and os.path.isdir(path) else None
+
+
+def run_environment(mobile, environ=None):
+    """The environment of a run. On a Mac, gfortran looks for the SDK named after the macOS version, which the
+    Command Line Tools may not have yet (linking then fails with "library 'System' not found"), so the SDK
+    that is installed is given, unless SDKROOT is set."""
+    env = {**(os.environ if environ is None else environ), "MOBILE": str(mobile), "GFORTRAN_UNBUFFERED_PRECONNECTED": "1"}
+    if "SDKROOT" not in env and (sdk := macos_sdk()):
+        env["SDKROOT"] = sdk
+    return env
+
+
+BUILT_LINE = "Running MoBILE"  # Written by mobile.sh once the model is built, just before it starts
+LOCK_POLL_SECONDS = 0.2
+
+
 class RunnerBusy(RuntimeError):
-    """Another run is using this MoBILE repository: mobile.sh modifies the shared src/."""
+    """Another run is building the model from this MoBILE repository: mobile.sh modifies the shared src/ while
+    it builds, so builds take turns. Once built, runs go on side by side."""
+
+
+class RunCancelled(RuntimeError):
+    """The run was cancelled while it waited for its turn to build, so it never started."""
 
 
 @dataclass(frozen=True)
@@ -77,22 +109,36 @@ class Runner:
         key = hashlib.sha256(str(self.config.mobile).encode()).hexdigest()[:16]
         return os.path.join(tempfile.gettempdir(), f"mobile_{key}.lock")
 
-    def run(self, name=None, on_progress=None):
-        """Run the model to the end and return a RunResult; a failed run is a status, not an exception."""
-        with open(self._lock_path(), "w") as lock:
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                raise RunnerBusy(f"A run is already using {self.config.mobile}") from None
-            return self._run_locked(name, on_progress)
+    def run(self, name=None, on_progress=None, wait=False):
+        """Run the model to the end and return a RunResult; a failed run is a status, not an exception.
 
-    def _run_locked(self, name, on_progress):
+        The repository is locked while the model is built. If another run is building, raise RunnerBusy, or
+        with wait wait for it, unless the run is cancelled meanwhile (RunCancelled)."""
+        with open(self._lock_path(), "w") as lock:
+            while True:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if not wait:
+                        raise RunnerBusy(f"Another run is building the model from {self.config.mobile}") from None
+                if self._cancelled.wait(LOCK_POLL_SECONDS):
+                    raise RunCancelled("Cancelled before the model was built")
+            locked = [True]
+
+            def release():
+                if locked[0]:
+                    fcntl.flock(lock, fcntl.LOCK_UN)
+                    locked[0] = False
+
+            try:
+                return self._run_locked(name, on_progress, release)
+            finally:
+                release()
+
+    def _run_locked(self, name, on_progress, release_lock):
         run_dir = create_run_dir(self.config, name)
-        env = {
-            **os.environ,
-            "MOBILE": str(self.config.mobile),
-            "GFORTRAN_UNBUFFERED_PRECONNECTED": "1",
-        }
+        env = run_environment(self.config.mobile)
         parser = ProgressParser()
         finished = False
         started = time.time()
@@ -105,15 +151,20 @@ class Runner:
                 stderr=subprocess.STDOUT,
                 start_new_session=True,  # Its own process group, so that cancel reaches make and mobile.out
             )
+            if self._cancelled.is_set():  # Cancelled while the run folder was made
+                os.killpg(self._process.pid, signal.SIGTERM)
             for raw in _lines(self._process.stdout):
                 log.write(raw + b"\n")
                 log.flush()
                 line = raw.decode("utf-8", errors="replace")
+                if BUILT_LINE in line:
+                    release_lock()  # Built: the next run can build while this one runs
                 finished = finished or FINISHED_LINE in line
                 event = parser.parse(line)
                 if event and on_progress:
                     on_progress(event)
             returncode = self._process.wait()
+            self._process.stdout.close()
         wall_seconds = time.time() - started
 
         # Exit codes do not tell: a bare STOP exits 0 and the scripts do not pass the model's status on
@@ -138,7 +189,10 @@ class Runner:
     def cancel(self):
         """Stop the running scripts, compiler and model. Safe to call from another thread."""
         process = self._process
-        if process is None or process.poll() is not None:
+        if process is None:
+            self._cancelled.set()  # Still waiting for its turn to build: it will not start
+            return
+        if process.poll() is not None:
             return
         self._cancelled.set()
         os.killpg(process.pid, signal.SIGTERM)

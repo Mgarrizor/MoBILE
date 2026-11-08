@@ -12,6 +12,8 @@ dependencies = [
     "pillow",
     "pyshp",
     "shapely",
+    "SALib",
+    "scipy",
 ]
 
 [project.scripts]
@@ -25,4 +27,4 @@ build-backend = "setuptools.build_meta"
 packages = ["mobile"]
 
 [tool.setuptools.package-data]
-mobile = ["sliders.yaml", "default_params.txt", "configs/*.yaml", "assets/*", "assets/funders/*", "assets/docs/**/*"]
+mobile = ["parameters.yaml", "publications.yaml", "age_structures/*/*.json", "configs/*.yaml", "assets/*", "assets/funders/*", "assets/docs/**/*"]

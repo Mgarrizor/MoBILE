@@ -1,0 +1,37 @@
+name: python-tests
+
+# Runs the tests of the Python package (python/tests) on every pull request into gui or main,
+# and on pushes to gui. They need no compiler and no simulation: they check the package
+# against the Fortran source and the example data of the repository.
+
+on:
+  pull_request:
+    branches: [gui, main]
+  push:
+    branches: [gui]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # The oldest version the package supports, and a recent one
+        python-version: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install the package
+        run: pip install ./python
+
+      - name: Run the tests
+        env:
+          MOBILE: ${{ github.workspace }}
+        run: python -m unittest discover -v python/tests

@@ -22,6 +22,10 @@
 
 Check provenance before comparing anything: `md5 mobile.out` in each run directory, and the number of timesteps. Runs from different builds or of different length are not comparable.
 
+## Branches and tests
+
+Follow CONTRIBUTING.md. In short: never push to `gui` or `main`, nor force-push anywhere; work on a branch from `gui` and open a pull request. Run the Python tests before proposing changes to `python/`, and keep `python/mobile/default_params.txt` in step with the model defaults.
+
 ## Style
 
 - Source code comments should describe the method, not its history, unless this is needed to understand a particular method. A few lines at most — no bug narratives, no benchmark numbers, no "previously this did X".
