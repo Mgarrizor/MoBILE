@@ -129,8 +129,12 @@ def _slider(name, spec, value):
     low, high, step, decimals = slider_grid(spec)
     label = parameter_label(spec.get("label", name) + UNIT_LABELS.get(spec.get("display"), ""), spec)
     # The browser marks the slider, its section and its tab when the value leaves its start
-    return ui.div(ui.input_slider(f"param_{name}", label, min=low, max=high, value=value, step=step),
-                  class_="param-slider", data_start=f"{round(value, decimals)}", data_step=f"{step}")
+    slider = ui.div(ui.input_slider(f"param_{name}", label, min=low, max=high, value=value, step=step),
+                    class_="param-slider", data_start=f"{round(value, decimals)}", data_step=f"{step}")
+    if name == "mu":
+        # The mortality fitted to the age structure of the setup, from WorldPop
+        return ui.TagList(slider, ui.output_ui("fitted_mortality_button"))
+    return slider
 
 
 def logo_files(folder, stem=None):

@@ -10,6 +10,7 @@ from .grid import pop_coordinates
 from .layout import player_controls, with_tip
 from .plots import COLOUR_MAPS
 from .setup import OPTIONAL_FILES, REGION_MODES, REQUIRED_FILES, region_mode
+from .worldpop import COUNTRIES, DEFAULT_PRODUCT, PRODUCTS, year_label
 
 
 SUFFIX_NAMES = {"netcdf": ("netCDF (.nc)",), "text": ("text (.txt, .csv)",), "folder": ()}
@@ -97,6 +98,7 @@ def setup_tab(config):
         ui.card_header("Driving files"),
         ui.output_ui("example_note"),
         *[_path_input(f"setup_{key}", label, setup_value(config, key), kind) for key, label, kind in REQUIRED_FILES],
+        _age_inputs(config),
         ui.accordion(
             ui.accordion_panel(
                 "Optional files",
@@ -118,6 +120,95 @@ def setup_tab(config):
         ),
         _region_card(config),
         _preview_box(),
+        _age_card(),
+        class_="mt-3",
+    )
+
+
+AUTO_YEAR = "auto"  # The year menu entry for the year closest to the start of the period
+
+
+def age_values(config):
+    """(product, country, year entry) of the age structure menus for a setup."""
+    choice = config.age_structure or {"product": DEFAULT_PRODUCT, "country": "SEN"}
+    year = choice.get("year")
+    return choice["product"], choice["country"], AUTO_YEAR if year is None else str(year)
+
+
+def year_choices(product):
+    """The year menu: the default, then the estimates and the projections of the product in groups of their own."""
+    first, last = PRODUCTS[product]["years"]
+    projected_from = PRODUCTS[product].get("projected_from", last + 1)
+    estimates = {str(year): str(year) for year in range(first, min(projected_from, last + 1))}
+    projections = {str(year): year_label(year, product) for year in range(max(projected_from, first), last + 1)}
+    if not projections:
+        return {AUTO_YEAR: "Closest to the start of the period", **estimates}
+    return {AUTO_YEAR: "Closest to the start of the period", "Estimates": estimates, "Projections": projections}
+
+
+def _age_inputs(config):
+    """The age structure of the agents: a WorldPop product, a country and a year, instead of a file."""
+    product, country, year = age_values(config)
+    countries = dict(sorted(COUNTRIES.items(), key=lambda item: item[1]))
+    return ui.div(
+        ui.tags.label("Age structure (WorldPop)", class_="form-label fw-semibold mb-1"),
+        ui.input_select("setup_age_product", "Product", {key: spec["label"] for key, spec in PRODUCTS.items()}, selected=product,
+                        width="100%"),
+        ui.output_ui("age_source"),
+        ui.layout_columns(
+            ui.input_select("setup_age_country", "Country", countries, selected=country, width="100%"),
+            ui.input_select("setup_age_year", "Year", year_choices(product), selected=year, width="100%"),
+            col_widths=(7, 5), fill=False,
+        ),
+        ui.output_ui("age_status"),
+        class_="border-top pt-2 mb-3",
+    )
+
+
+AGE_FIGURES = {"age_fit": "Age structure and fitted mortality", "age_cumulative": "Cumulative weights",
+               "age_sexes": "Sex structure", "age_heterogeneity": "Spatial heterogeneity"}
+
+
+def age_method():
+    """How the age structure is made from WorldPop, for the curious, as in utils/fetch_age.sh."""
+    item = ui.tags.li
+    return ui.accordion(
+        ui.accordion_panel(
+            "How the age structure is computed",
+            ui.tags.ol(
+                item("WorldPop gives, for each 1 km cell of the country, the number of people of each sex in 18 age groups: under 1, "
+                     "1 to 4, then groups of 5 years up to 75 to 79, and 80 and over. The 36 rasters are downloaded once."),
+                item("In each cell, the share of each age group in the people of that sex is computed. The histograms of these "
+                     "shares over the cells (Spatial heterogeneity) show how far the age structure varies across the country: "
+                     "the model takes the same structure in every cell."),
+                item("The shares are averaged over the cells, each cell counting the same, and then over the two sexes, with "
+                     "equal weight (Sex structure)."),
+                item("The cumulative sum of the mean shares, each age group at its last year of age (0, 4, 9, ..., 79), is "
+                     "interpolated to every year of age from 0 to 79 with a monotone cubic (PCHIP), so that the weight of a "
+                     "year of age never rises with age. The 80 and over group is left out, so the weights end just below 1. "
+                     "These 80 weights are the age file the model reads (Cumulative weights)."),
+                item("The weight of each year of age, the difference of consecutive cumulative weights, is fitted by "
+                     "A·exp(−γ·age) (least squares). With births equal to deaths, as by default in the model, a population "
+                     "with mortality γ has this age structure: γ is the fitted mortality, which can be used for the "
+                     "mortality mu in the Parameters & SA tab."),
+            ),
+            ui.p("The same steps as utils/fetch_age.sh in the MoBILE repository, which does this for a run outside the GUI.",
+                 class_="small text-muted mb-0"),
+        ),
+        open=False,
+        class_="mt-2",
+    )
+
+
+def _age_card():
+    """The age structure of the applied setup, from WorldPop, as the model gets it."""
+    return ui.card(
+        ui.card_header("Age structure"),
+        ui.output_ui("age_card_summary"),
+        ui.input_radio_buttons("age_figure", None, AGE_FIGURES, inline=True),
+        ui.panel_conditional("input.age_figure !== 'age_heterogeneity'", ui.div(id="age_plot", style="height: 520px;")),
+        ui.panel_conditional("input.age_figure === 'age_heterogeneity'", ui.div(id="age_heterogeneity_plot", style="height: 900px;")),
+        age_method(),
         class_="mt-3",
     )
 
@@ -214,7 +305,7 @@ def _region_card(config):
     )
 
 
-PREVIEW_FILES = {"rain_file": "Rainfall", "temp_file": "Temperature", "pop_file": "Population density", "age_file": "Age structure"}
+PREVIEW_FILES = {"rain_file": "Rainfall", "temp_file": "Temperature", "pop_file": "Population density"}
 DAILY_FILES = ("rain_file", "temp_file")
 # Colour map and scale each map starts with
 PREVIEW_STYLE = {"rain_file": ("Blues", "linear"), "temp_file": ("Coolwarm", "linear"), "pop_file": ("Reds", "log")}
@@ -274,7 +365,8 @@ def example_note_box():
     return ui.div(
         ui.tags.strong("Example data for Senegal. "),
         "These files come with MoBILE, in utils/test_run of its GitHub repository: Senegal from 2012 to 2014 on a "
-        "0.05° grid, with rainfall from CHIRPS, temperature from CHIRTS and population from WorldPop (2020). "
+        "0.05° grid, with rainfall from CHIRPS, temperature from CHIRTS and population from WorldPop (2020). Its age "
+        "structure is that of Senegal from WorldPop. "
         "Choose your own files for another region or period.",
         class_="alert alert-info small py-2 mb-3",
     )

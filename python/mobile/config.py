@@ -11,16 +11,20 @@ import yaml
 from .parameters import run_parameters, shown_parameters
 from .period import period_days, period_problems, spin_up_problem
 from .region import region_problems
+from .worldpop import choice_problems, default_year
 
 # The keys of a configuration file. Parameters, outputs and sliders are set in the GUI.
-CONFIG_KEYS = {"mobile", "runs_dir", "project", "run", "inputs", "region", "period"}
+CONFIG_KEYS = {"mobile", "runs_dir", "project", "run", "inputs", "region", "period", "age_structure"}
 RUN_KEYS = {"disID", "mob", "nstep", "spin_up", "nagent", "seed", "threads"}
-REQUIRED_INPUTS = {"rain_file", "temp_file", "pop_file", "age_file"}
+REQUIRED_INPUTS = {"rain_file", "temp_file", "pop_file"}
 # A parameter file is no longer an input: the parameters, their defaults and ranges are in parameters.yaml
 NO_CONST = ("inputs: const is no longer used: the parameters are set in the GUI, or with `mobile run --set`, and start at "
             "the defaults compiled into the model. Remove `const` from the configuration.")
 NO_AREA = ("inputs: area_file is no longer used: the model computes the cell areas from the grid of the population "
            "file. Remove `area_file` from the configuration.")
+NO_AGE = ("inputs: age_file is no longer used: the age structure comes from WorldPop, chosen by product, country and "
+          "year. Remove `age_file` and set `age_structure: {product: R2025A, country: SEN}` (year: optional).")
+NO_AGE_STRUCTURE = "age_structure: missing; choose a WorldPop product and country, e.g. {product: R2025A, country: SEN}"
 OPTIONAL_INPUTS = {"mortality_file", "birthrate_file", "mortality_time_file", "imm_forcing"}
 OPTIONAL_DEFAULTS = {"counterfactual": 0}
 
@@ -72,6 +76,7 @@ class Config:
     project: str = ""  # Name shown in the app
     region: dict | None = None  # {north, west, south, east} to simulate; None for the whole grid
     period: dict | None = None  # {start, end} days to simulate, as YYYY-MM-DD; None for all the driving data
+    age_structure: dict | None = None  # {product, country, year} of WorldPop; year None for that of the period (worldpop.py)
 
     @classmethod
     def load(cls, path=None, mobile=None):
@@ -106,6 +111,7 @@ class Config:
             project=str(raw.get("project") or ""),
             region=raw.get("region"),
             period=raw.get("period"),
+            age_structure=raw.get("age_structure"),
         )
         config.validate()
         return config
@@ -119,6 +125,20 @@ class Config:
         config = replace(self, run={**self.run, **run})
         config.validate()
         return config
+
+    def age_choice(self):
+        """{product, country, year} of the age structure, the year given or else that of the product closest to the
+        first year simulated: of the period, or of the driving data."""
+        choice = dict(self.age_structure)
+        if choice.get("year") is None:
+            if self.period is not None:
+                start = int(str(self.period["start"])[:4])
+            else:
+                from .checks import driving_days  # Not at the top: checks reads the files, config does not
+                days = driving_days(self.inputs["rain_file"])
+                start = int(str(days[0])[:4]) if days is not None and len(days) else 0  # No dates: the first year
+            choice["year"] = default_year(start, choice["product"])
+        return choice
 
     def final_params(self):
         """Parameters of the run, as written to its &CONST: every parameter of the GUI at its default, overridden by `params`."""
@@ -156,7 +176,10 @@ class Config:
             errors.append(NO_CONST)
         if "area_file" in self.inputs:
             errors.append(NO_AREA)
-        allowed = REQUIRED_INPUTS | OPTIONAL_INPUTS | set(OPTIONAL_DEFAULTS) | {"const", "area_file"}
+        if "age_file" in self.inputs:
+            errors.append(NO_AGE)
+        errors += [NO_AGE_STRUCTURE] if self.age_structure is None else choice_problems(self.age_structure)
+        allowed = REQUIRED_INPUTS | OPTIONAL_INPUTS | set(OPTIONAL_DEFAULTS) | {"const", "area_file", "age_file"}
         unknown = set(self.inputs) - allowed
         if unknown:
             errors.append(f"inputs: unknown {sorted(unknown)}")

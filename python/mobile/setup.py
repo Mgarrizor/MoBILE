@@ -13,7 +13,6 @@ REQUIRED_FILES = (
     ("rain_file", "Rainfall", "netcdf"),
     ("temp_file", "Temperature", "netcdf"),
     ("pop_file", "Population density", "netcdf"),
-    ("age_file", "Age structure (cumulative)", "text"),
 )
 OPTIONAL_FILES = (
     ("mortality_file", "Mortality by age", "text"),
@@ -39,7 +38,7 @@ def typed_path(value):
     return Path(os.path.expandvars(os.path.expanduser(str(value).strip()))).resolve()
 
 
-def from_fields(mobile, project, runs_dir, run, inputs, region=None, period=None):
+def from_fields(mobile, project, runs_dir, run, inputs, region=None, period=None, age_structure=None):
     """The Config of the fields of the Setup panel. An empty optional file is not used.
 
     Raises ConfigError, listing every problem, as for a configuration file.
@@ -67,6 +66,7 @@ def from_fields(mobile, project, runs_dir, run, inputs, region=None, period=None
         project=str(project or "").strip(),
         region=region,
         period=period,
+        age_structure=age_structure,
     )
     config.validate()
     return config
@@ -100,6 +100,7 @@ def to_dict(config):
         "inputs": dict(config.inputs),
         "region": config.region,
         "period": config.period,
+        "age_structure": config.age_structure,
     }
 
 
@@ -119,7 +120,7 @@ def load_setup(mobile=None):
     try:
         saved = json.loads((settings_folder() / SETUP_FILE).read_text())
         return from_fields(mobile or saved["mobile"], saved["project"], saved["runs_dir"], saved["run"], saved["inputs"],
-                           saved.get("region"), saved.get("period"))
+                           saved.get("region"), saved.get("period"), saved.get("age_structure"))
     except (OSError, ValueError, KeyError, TypeError, ConfigError):
         return None
 
@@ -128,7 +129,7 @@ def from_manifest(manifest, current):
     """The settings with which a run was made, from its run.json, in the project and results
     folder of the current settings."""
     return from_fields(current.mobile, current.project, current.runs_dir, manifest["run"], manifest["inputs"],
-                       manifest.get("region"), manifest.get("period"))
+                       manifest.get("region"), manifest.get("period"), manifest.get("age_structure"))
 
 
 def list_folder(folder, kind):

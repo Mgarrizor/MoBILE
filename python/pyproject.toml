@@ -27,4 +27,4 @@ build-backend = "setuptools.build_meta"
 packages = ["mobile"]
 
 [tool.setuptools.package-data]
-mobile = ["parameters.yaml", "publications.yaml", "configs/*.yaml", "assets/*", "assets/funders/*", "assets/docs/**/*"]
+mobile = ["parameters.yaml", "publications.yaml", "age_structures/*/*.json", "configs/*.yaml", "assets/*", "assets/funders/*", "assets/docs/**/*"]

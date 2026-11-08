@@ -95,6 +95,7 @@ def create_study(config, parameters, n, second_order, seeds, name=None, sample_s
         "run_inputs": run_inputs,
         "region": config.region,
         "period": config.period,
+        "age_structure": config.age_choice(),
         "params": {key: float(value) for key, value in config.params.items()},
         "output": list(config.output) if config.output is not None else None,
     }
@@ -102,18 +103,18 @@ def create_study(config, parameters, n, second_order, seeds, name=None, sample_s
     return folder
 
 
-OLD_STUDY = ("This analysis was made by an earlier version of the GUI, with a parameter file (const), which is no longer "
-             "used: its runs cannot be resumed. Start a new analysis.")
+OLD_STUDY = ("This analysis was made by an earlier version of the GUI, with a parameter file (const) or an age file, which "
+             "are no longer used: its runs cannot be resumed. Start a new analysis.")
 
 
 def study_config(folder, record):
     """The configuration of the runs of an analysis, before the values of its samples and seeds."""
-    if "const" in record["run_inputs"]:
+    if "const" in record["run_inputs"] or "age_file" in record["run_inputs"] or "age_structure" not in record:
         raise ConfigError(f"{folder}: {OLD_STUDY}")
     return Config(
         mobile=Path(record["mobile"]), runs_dir=Path(folder) / RUNS, run=dict(record["run"]), inputs=dict(record["run_inputs"]),
         params=dict(record["params"]), output=tuple(record["output"]) if record["output"] is not None else None,
-        project=record["project"], region=None, period=record.get("period"),
+        project=record["project"], region=None, period=record.get("period"), age_structure=record["age_structure"],
     )
 
 
