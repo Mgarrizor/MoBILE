@@ -14,7 +14,7 @@ from .setup import OPTIONAL_FILES, REGION_MODES, REQUIRED_FILES, region_mode
 from .worldpop import COUNTRIES, PRODUCTS, product_countries, year_label
 
 
-SUFFIX_NAMES = {"netcdf": ("netCDF (.nc)",), "text": ("text (.txt, .csv)",), "folder": ()}
+SUFFIX_NAMES = {"netcdf": ("netCDF (.nc)",), "text": ("text (.txt, .csv)",), "data": ("netCDF (.nc)", "tables (.csv, .txt)"), "folder": ()}
 
 
 FILE_LABELS = {key: label for key, label, _ in (*REQUIRED_FILES, *OPTIONAL_FILES)}

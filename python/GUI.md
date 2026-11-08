@@ -29,9 +29,9 @@ folder in the Setup tab.
 
 The tabs follow the order of the work: **1. Setup**, **2. Parameters & SA**, **3. Results**. The GUI opens on Setup.
 The header with the tabs stays in view while the page scrolls, and a tab opens at its top.
-The sidebar, always visible below the header, starts runs and loads earlier ones. The **Analysis (to come)** menu and the **Calibration (to come)** tab hold
-work that is not implemented yet (Analysis: Time series, Demography, Mobility; Calibration: with the
-[Optuna](https://optuna.org/) parameter optimisation suite); the sensitivity analysis is in **2. Parameters & SA**. **Help** has a short
+The sidebar, always visible below the header, starts runs and loads earlier ones. The **Analysis (to come)** menu holds
+work that is not implemented yet (Time series, Demography, Mobility), and the **Calibration (in development)** tab, so
+far, its Data box; the sensitivity analysis is in **2. Parameters & SA**. **Help** has a short
 guide, the documentation and the publications on VECTRI and VECTRI-ABM (listed in `mobile/publications.yaml`, where
 new ones are added). Hover over ⓘ beside a setting for an explanation.
 
@@ -206,6 +206,52 @@ Until there are results, the tab says how to get them.
 
 The first time the GUI has a connection, it downloads the map background (Natural Earth) to `~/.cache/mobile`,
 and the relief (ETOPO 2022) when Terrain is first turned on. Without a connection the map is plain.
+
+### Calibration tab (in development)
+
+Calibration compares the model with observations, to tune its parameters with [Optuna](https://optuna.org/). The tab
+has a **Model** box (to come: a model output processed like the data) and a **Data** box, which works now:
+
+1. Type the path of a file of observations, or **Browse**, and press **Load**. A file in the standard netCDF form of the
+   GUI loads at once; a table (CSV, or text separated by blanks, as written by R) opens an import form.
+2. **Import**: say what the values are (dated, a climatology of calendar months or of seasons, yearly, by age band, or a single value),
+   which column holds them, whether they add up (counts, e.g. cases) or are averaged (rates, prevalences), their units,
+   and the columns of their shape: for dated values a date per row (standing for the period that contains it, e.g. a
+   mid-month date for that month) or a first and last day. Optionally an uncertainty column, and other columns to keep,
+   such as the population. Rows repeated exactly are kept once, rows giving different values for the same period are
+   refused, and gaps and missing values are reported.
+3. **Processing** is a list of steps you build, applied in order to the values loaded: choose a step under the list and
+   press **Add step**; each step can be changed, moved up or down (↑ ↓) or removed (×), and the plot, the table and the
+   notes follow at once. The steps:
+   - **Aggregate into longer periods**: week, month, quarter, season (DJF, MAM, JJA, SON; December counts in the DJF of
+     the next year), year, or a number of days, by sum, day-weighted mean, median, minimum or maximum. With **Complete
+     periods only** (the default) a period the values do not cover entirely, or with a missing value, is left out;
+     without it, it is kept with its coverage as a column.
+   - **Arithmetic** with a kept column or a number: divide (e.g. cases per person, with the population, which takes
+     away its growth: the model's population does not grow), multiply, add, subtract.
+   - **Select**: a window of time, or chosen months, seasons, years or age bands (e.g. without June and July).
+   - **Climatology** by calendar month or by season: the mean over the years, with their spread as error bars. From
+     monthly values a season is the mean month of the season; for seasonal totals, aggregate into seasons (sum) first.
+   - **Transform**: natural log or log10 (with an offset, e.g. 1 for counts with zeros), standardise, anomaly from the
+     mean, moving average.
+   - **Frequency filter**: low, high or band pass, with the cut-off periods in days, months or years (a Butterworth filter
+     of order 4, run forward and backward, so nothing shifts in time). The cut-off is gradual: half the amplitude is kept
+     at the cut-off period, so to remove the annual cycle cut at about 2 years. The filter starts up at each end: values
+     within about two of the longest periods kept from each end are less reliable, and a note says how far. Missing
+   values and missing periods do not stop it: **Interpolate short gaps** fills gaps of up to N values (3 at first) by a
+   straight line only for the filter to run, and puts them back as missing after; **Filter each stretch separately**
+   interpolates nothing. Either way longer gaps split the series into stretches filtered separately, stretches too
+   short for the cut-off stay missing, and the notes and the step say what was done. Data are never filled in.
+   - **Combine** with another loaded data set of the same coordinates: sum, mean or difference. Load several files to
+     combine them; **Data set shown** picks the one whose steps are edited.
+4. **Compare with**, above the plot, draws an earlier stage with the result: the values loaded, or after any step but
+   the last. With the same shape and units it is overlaid in grey (e.g. before and after a filter); otherwise it is in a
+   second panel below, sharing the time axis if both are dated (e.g. cases before dividing by the population, or the
+   months before a climatology), so values in different units never share an axis.
+5. The plot and the table show the result; **Save as standard netCDF** writes it to `calibration/data/` in the results
+   folder. The standard file has the values with their units and how they add up, their periods (CF `time_bnds`),
+   calendar months, seasons, years or age bands, any uncertainty and other columns, the notes of what was done and the
+   steps themselves, so they can be seen and applied again (e.g. to the model output, next).
 
 ## What a run leaves behind
 

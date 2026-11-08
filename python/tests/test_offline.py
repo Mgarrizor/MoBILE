@@ -586,7 +586,9 @@ class TestSetup(unittest.TestCase):
         self.assertEqual(list_folder(self.folder, "text")[1], ["data.csv", "notes.txt"])
         self.assertEqual(list_folder(self.folder, "folder")[1], [])
         self.assertEqual(start_folder(str(self.folder / "b.nc")), self.folder.resolve())
-        self.assertEqual(start_folder(""), Path.home())
+        # Empty, or a path that does not exist: the folder the GUI was started in
+        self.assertEqual(start_folder(""), Path.cwd())
+        self.assertEqual(start_folder(str(self.folder / "nowhere" / "x.nc")), Path.cwd())
 
     def test_new_folder(self):
         path, problem = create_folder(self.folder, " kenya_2025 ")
@@ -1822,6 +1824,254 @@ class TestDrivingFilesHelp(unittest.TestCase):
         # What the GUI does not need is said, and no file for it is asked
         self.assertIn("Not needed in the GUI", html)
         self.assertNotIn("area.nc", html)
+
+
+class TestCalibrationData(unittest.TestCase):
+    """Observations for calibration: tables of every shape, the standard netCDF file, checks and processing."""
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.folder = Path(folder.name)
+
+    def daily(self, first="2001-01-01", last="2001-12-31", value=None):
+        """A dated table of daily counts, value i on day i (from 0) unless given."""
+        import pandas as pd
+        days = pd.date_range(first, last, freq="D")
+        return pd.DataFrame({"day": days.strftime("%Y-%m-%d"), "cases": np.arange(len(days), dtype=float) if value is None else value,
+                             "N": np.full(len(days), 1000.0)})
+
+    def test_tables_of_any_separator(self):
+        from mobile.calibration_data import read_table
+        rows = [("date", "PF", "N"), ("2001-01-15", "7", "1200"), ("2001-02-15", "NA", "1210")]
+        for separator in (",", ";", "\t"):
+            table = read_table("\n".join(separator.join(row) for row in rows) + "\n")
+            self.assertEqual(list(table.columns), ["date", "PF", "N"], separator)
+            self.assertTrue(np.isnan(table["PF"].iloc[1]))
+        # Written by R: quoted header, row names, blanks
+        table = read_table('"date" "PF" "N"\n"1" 2001-01-15 7 1200\n"2" 2001-02-15 NA 1210\n')
+        self.assertEqual(list(table.columns), ["date", "PF", "N"])
+        self.assertEqual(float(table["N"].iloc[0]), 1200.0)
+
+    def test_dated_import(self):
+        import pandas as pd
+        from mobile.calibration_data import DataError, import_table
+        table = pd.DataFrame({"date": ["1990-03-15", "1990-01-15", "1990-01-15", "1990-04-15"], "PF": [3.0, 1.0, 1.0, np.nan],
+                              "N": [100.0, 100.0, 100.0, 100.0]})
+        observations = import_table(table, "dated", "PF", "sum", "cases", date="date", period="month", extra=("N",))
+        # Sorted; a mid-month date stands for its month; the exact repeat kept once; the gap and the missing value said
+        self.assertEqual([observations.label(i) for i in range(len(observations))], ["1990-01", "1990-03", "1990-04"])
+        self.assertEqual(str(observations.index["start"].iloc[1].date()), "1990-03-01")
+        self.assertEqual(str(observations.index["end"].iloc[1].date()), "1990-03-31")
+        notes = " ".join(observations.notes)
+        for said in ("1 rows repeated exactly", "1 values missing", "1 gaps between periods, e.g. 1990-02-01 to 1990-02-28"):
+            self.assertIn(said, notes)
+        # Different values for the same month, or overlapping periods: refused
+        clash = pd.concat([table, pd.DataFrame({"date": ["1990-01-20"], "PF": [2.0], "N": [100.0]})])
+        with self.assertRaisesRegex(DataError, "different values for the same start, end"):
+            import_table(clash, "dated", "PF", "sum", "cases", date="date", period="month")
+        spans = pd.DataFrame({"start": ["1990-01-01", "1990-01-05"], "end": ["1990-01-07", "1990-01-11"], "v": [1.0, 2.0]})
+        with self.assertRaisesRegex(DataError, "periods overlap"):
+            import_table(spans, "dated", "v", "sum", "cases", start="start", end="end")
+        # The minimum information
+        with self.assertRaisesRegex(DataError, "units are needed"):
+            import_table(table, "dated", "PF", "sum", " ", date="date")
+        with self.assertRaisesRegex(DataError, "need the column date"):
+            import_table(table, "dated", "PF", "sum", "cases")
+        with self.assertRaisesRegex(DataError, "no column 'cases'"):
+            import_table(table, "dated", "cases", "sum", "cases", date="date")
+        with self.assertRaisesRegex(DataError, "not dates"):
+            import_table(pd.DataFrame({"date": ["soon"], "v": [1.0]}), "dated", "v", "sum", "cases", date="date")
+
+    def test_other_shapes(self):
+        import pandas as pd
+        from mobile.calibration_data import DataError, import_table
+        months = import_table(pd.DataFrame({"m": range(12, 0, -1), "eir": np.arange(12.0), "s": np.ones(12)}), "climatology", "eir",
+                              "mean", "bites per person per day", month="m", sd="s")
+        self.assertEqual([months.label(i) for i in (0, 11)], ["Jan", "Dec"])
+        self.assertEqual(months.values[0], 11.0)
+        with self.assertRaisesRegex(DataError, "months must be whole numbers from 1 to 12"):
+            import_table(pd.DataFrame({"m": [13], "v": [1.0]}), "climatology", "v", "mean", "x", month="m")
+        ages = import_table(pd.DataFrame({"lo": [0, 5, 60], "hi": [4, 59, None], "v": [1.0, 2.0, 3.0]}), "age", "v", "mean",
+                            "attacks per person per year", age_lower="lo", age_upper="hi")
+        self.assertEqual([ages.label(i) for i in range(3)], ["0-4", "5-59", "60+"])
+        years = import_table(pd.DataFrame({"y": [1994, 1993], "aeir": [18.49, 59.8]}), "yearly", "aeir", "sum", "bites per person", year="y")
+        self.assertEqual([years.label(i) for i in range(2)], ["1993", "1994"])
+        one = import_table(pd.DataFrame({"aeir": [39.27], "sd": [28.5]}), "single", "aeir", "sum", "bites per person", sd="sd")
+        self.assertEqual((len(one), one.sd[0]), (1, 28.5))
+        with self.assertRaisesRegex(DataError, "a single value needs one row"):
+            import_table(pd.DataFrame({"v": [1.0, 2.0]}), "single", "v", "sum", "x")
+
+    def test_standard_file(self):
+        import pandas as pd
+        from mobile.calibration_data import DataError, import_table, read_observations, write_observations
+        sets = [
+            import_table(self.daily(), "dated", "cases", "sum", "cases", date="day", period="day", extra=("N",)),
+            import_table(pd.DataFrame({"m": range(1, 13), "v": np.arange(12.0), "s": np.full(12, 0.5)}), "climatology", "v", "mean", "x", month="m", sd="s"),
+            import_table(pd.DataFrame({"y": [1993, 1994], "v": [1.0, np.nan]}), "yearly", "v", "sum", "x", year="y"),
+            import_table(pd.DataFrame({"lo": [0, 60], "hi": [59, None], "v": [1.0, 2.0]}), "age", "v", "mean", "x", age_lower="lo", age_upper="hi"),
+            import_table(pd.DataFrame({"v": [39.27]}), "single", "v", "sum", "x"),
+        ]
+        for observations in sets:
+            path = self.folder / f"{observations.shape}.nc"
+            write_observations(observations, path)
+            back = read_observations(path)
+            self.assertEqual((back.shape, back.units, back.aggregation, back.notes), (observations.shape, observations.units,
+                             observations.aggregation, observations.notes))
+            self.assertTrue(np.array_equal(back.values, observations.values, equal_nan=True), observations.shape)
+            self.assertEqual([back.label(i) for i in range(len(back))], [observations.label(i) for i in range(len(observations))])
+            if observations.sd is not None:
+                self.assertTrue(np.array_equal(back.sd, observations.sd))
+        self.assertTrue(np.array_equal(read_observations(self.folder / "dated.nc").extra["N"], sets[0].extra["N"]))
+        # CF time bounds of a day: from its start to the start of the next
+        import netCDF4
+        with netCDF4.Dataset(self.folder / "dated.nc") as data:
+            self.assertEqual(list(data["time_bnds"][0]), [36890.0, 36891.0])  # 2001-01-01 in days since 1900-01-01
+            self.assertEqual(data["time"].bounds, "time_bnds")
+        # A driving file is not a file of observations
+        with self.assertRaisesRegex(DataError, "not a file of observations"):
+            read_observations(Path(MOBILE) / "utils" / "test_run" / "pop.nc")
+
+    def test_processing_steps(self):
+        import pandas as pd
+        from mobile.calibration_data import DataError, import_table, period_kind, read_observations, write_observations
+        from mobile.calibration_steps import STEP_KINDS, apply_steps, default_step
+        days = import_table(self.daily(), "dated", "cases", "sum", "cases", date="day", period="day", extra=("N",))
+        step = lambda kind, **changes: {**default_step(kind, days), **changes}
+        # Aggregate: sums by month add up to the daily total (control), January holds days 0 to 30
+        months = apply_steps(days, [step("aggregate", period="month")])
+        self.assertEqual((len(months), months.values.sum(), months.values[0]), (12, days.values.sum(), sum(range(31))))
+        self.assertEqual(period_kind(months), "month")
+        self.assertEqual(list(months.extra["N"]), [1000.0] * 12)
+        # 52 weeks from Monday 1 January (the 53rd starts on 31 December, incomplete); 36 complete 10-day periods
+        for period, n in (("quarter", 4), ("year", 1), ("week", 52), ("days", 36)):
+            self.assertEqual(len(apply_steps(days, [step("aggregate", period=period, days=10)])), n, period)
+        # Seasons: December belongs to the DJF of the next year, so 2001 has MAM, JJA and SON entirely
+        seasons = apply_steps(days, [step("aggregate", period="season")])
+        self.assertEqual([seasons.label(i) for i in range(len(seasons))], ["2001-03 to 2001-05", "2001-06 to 2001-08", "2001-09 to 2001-11"])
+        # Statistics, and incomplete periods kept with their coverage
+        rates = import_table(self.daily(value=np.r_[np.full(31, 1.0), np.full(334, 3.0)]), "dated", "cases", "mean", "per day", date="day", period="day")
+        self.assertEqual(list(apply_steps(rates, [{**default_step("aggregate", rates), "period": "year"}]).values), [(31 + 334 * 3.0) / 365])
+        self.assertEqual(apply_steps(days, [step("aggregate", period="month", how="max")]).values[0], 30.0)
+        part = import_table(self.daily("2001-01-01", "2001-02-10"), "dated", "cases", "sum", "cases", date="day", period="day")
+        self.assertEqual(len(apply_steps(part, [{**default_step("aggregate", part), "period": "month"}])), 1)
+        kept = apply_steps(part, [{**default_step("aggregate", part), "period": "month", "complete": False}])
+        self.assertEqual(round(kept.extra["coverage"][1], 4), round(10 / 28, 4))
+        with self.assertRaisesRegex(DataError, r"step 1 \(aggregate into longer periods\): no year is covered entirely"):
+            apply_steps(part, [{**default_step("aggregate", part), "period": "year"}])
+        # Arithmetic with a column or a number; select; climatology by month
+        per = apply_steps(months, [{**default_step("arithmetic", months), "units": "cases per person"}])
+        self.assertEqual((per.values[0], per.units), (sum(range(31)) / 1000, "cases per person"))
+        self.assertEqual(apply_steps(months, [step("arithmetic", operand="number", operation="multiply", number=2.0)]).values[0], 2 * sum(range(31)))
+        with self.assertRaisesRegex(DataError, "division by zero"):
+            apply_steps(months, [step("arithmetic", operand="number", number=0.0)])
+        summer = apply_steps(months, [{"kind": "select", "what": "months", "items": [6, 7, 8]}])
+        self.assertEqual([summer.label(i) for i in range(3)], ["2001-06", "2001-07", "2001-08"])
+        two = import_table(pd.DataFrame({"d": [f"{y}-{m:02d}-15" for y in (2001, 2002) for m in range(1, 13)],
+                                         "v": [1.0, *[0.0] * 11, 3.0, *[0.0] * 11]}), "dated", "v", "sum", "cases", date="d", period="month")
+        season = apply_steps(two, [{"kind": "climatology", "by": "month"}])
+        self.assertEqual((season.shape, season.values[0], round(season.sd[0], 6)), ("climatology", 2.0, round(np.sqrt(2.0), 6)))
+        by_season = apply_steps(two, [{"kind": "aggregate", "period": "season", "how": "sum", "complete": False, "days": 1},
+                                      {"kind": "climatology", "by": "season"}])
+        self.assertEqual([by_season.label(i) for i in range(4)], ["DJF", "MAM", "JJA", "SON"])
+        with self.assertRaisesRegex(DataError, "more than one month"):
+            apply_steps(months, [{"kind": "aggregate", "period": "quarter", "how": "sum", "complete": True, "days": 1}, {"kind": "climatology", "by": "month"}])
+        # Transforms
+        log = apply_steps(months, [{"kind": "transform", "transform": "log10", "offset": 1.0, "window": 3}])
+        self.assertAlmostEqual(log.values[0], np.log10(sum(range(31)) + 1))
+        z = apply_steps(months, [{"kind": "transform", "transform": "standardise", "offset": 0, "window": 3}])
+        self.assertAlmostEqual(float(np.mean(z.values)), 0.0)
+        self.assertAlmostEqual(float(np.std(z.values, ddof=1)), 1.0)
+        smooth = apply_steps(months, [{"kind": "transform", "transform": "moving_average", "offset": 0, "window": 3}])
+        self.assertTrue(np.isnan(smooth.values[0]))
+        self.assertAlmostEqual(smooth.values[1], months.values[:3].mean())
+        # Frequency filter on a monthly series of a 12-month cycle plus a 5-year cycle (control: each is kept or removed)
+        n = 240
+        t_ = np.arange(n)
+        annual, five = np.sin(2 * np.pi * t_ / 12), 2 * np.sin(2 * np.pi * t_ / 60)
+        series = import_table(pd.DataFrame({"d": pd.date_range("1980-01-15", periods=n, freq="MS").strftime("%Y-%m-15"), "v": annual + five}),
+                              "dated", "v", "mean", "x", date="d", period="month")
+        inner = slice(60, 180)  # Away from the ends
+        low = apply_steps(series, [{"kind": "filter", "type": "low", "short": 1, "long": 2, "unit": "years"}])
+        self.assertLess(np.max(np.abs(low.values[inner] - five[inner])), 0.1)
+        high = apply_steps(series, [{"kind": "filter", "type": "high", "short": 2, "long": 10, "unit": "years"}])
+        self.assertLess(np.max(np.abs(high.values[inner] - annual[inner])), 0.1)
+        # A band pass rings longer: on 50 years, judged 15 years (about two of the longest periods) from each end
+        n = 600
+        t_ = np.arange(n)
+        annual, five = np.sin(2 * np.pi * t_ / 12), 2 * np.sin(2 * np.pi * t_ / 60)
+        long_series = import_table(pd.DataFrame({"d": pd.date_range("1960-01-15", periods=n, freq="MS").strftime("%Y-%m-15"), "v": annual + five}),
+                                   "dated", "v", "mean", "x", date="d", period="month")
+        band = apply_steps(long_series, [{"kind": "filter", "type": "band", "short": 3, "long": 8, "unit": "years"}])
+        self.assertLess(np.max(np.abs(band.values[180:-180] - five[180:-180])), 0.1)
+        self.assertIn("within about 16 years of each end are less reliable", " ".join(band.notes))
+        with self.assertRaisesRegex(DataError, "longer than two values"):
+            apply_steps(series, [{"kind": "filter", "type": "high", "short": 1, "long": 2, "unit": "months"}])
+        # Missing values and missing periods: interpolated for the filter only, and put back as missing (240 months again)
+        from mobile.calibration_steps import describe
+        n = 240
+        t_ = np.arange(n)
+        annual, five = np.sin(2 * np.pi * t_ / 12), 2 * np.sin(2 * np.pi * t_ / 60)
+        low_step = {"kind": "filter", "type": "low", "short": 1, "long": 2, "unit": "years", "missing": "interpolate", "max_gap": 3}
+        complete = apply_steps(series, [low_step]).values
+        holes = import_table(pd.DataFrame({"d": pd.date_range("1980-01-15", periods=n, freq="MS").strftime("%Y-%m-15"),
+                                           "v": np.where(np.isin(t_, [100, 101]), np.nan, annual + five)}).drop(index=150),
+                             "dated", "v", "mean", "x", date="d", period="month")
+        gappy = apply_steps(holes, [low_step])
+        self.assertEqual(len(gappy), n - 1)  # The missing row is not added
+        self.assertTrue(np.isnan(gappy.values[[100, 101]]).all())  # Interpolated values are not data
+        rows = np.r_[60:95, 106:145, 156:180]  # Away from the gaps, in rows of the series without row 150
+        self.assertLess(np.max(np.abs(gappy.values[rows] - complete[np.where(rows < 150, rows, rows + 1)])), 0.05)
+        notes = " ".join(gappy.notes)
+        self.assertIn("2 gaps of up to 2 values interpolated for the filter only, left missing after", notes)
+        self.assertIn("gaps of up to 3 values interpolated for the filter only", describe(low_step))
+        # A gap longer than N splits the series; filtering each stretch separately interpolates nothing
+        long_gap = import_table(pd.DataFrame({"d": pd.date_range("1980-01-15", periods=n, freq="MS").strftime("%Y-%m-15"),
+                                              "v": np.where((t_ >= 100) & (t_ < 110), np.nan, annual + five)}), "dated", "v", "mean", "x", date="d", period="month")
+        self.assertIn("2 stretches without gaps filtered separately", " ".join(apply_steps(long_gap, [low_step]).notes))
+        apart = apply_steps(holes, [{**low_step, "missing": "stretches"}])
+        self.assertNotIn("interpolated", " ".join(apart.notes))
+        self.assertIn("each stretch without gaps filtered separately", describe({**low_step, "missing": "stretches"}))
+        # A stretch too short for the cut-off is left missing
+        short_end = import_table(pd.DataFrame({"d": pd.date_range("1980-01-15", periods=n, freq="MS").strftime("%Y-%m-15"),
+                                               "v": np.where((t_ >= 220) & (t_ < 230), np.nan, annual + five)}), "dated", "v", "mean", "x", date="d", period="month")
+        tail = apply_steps(short_end, [low_step])
+        self.assertTrue(np.isnan(tail.values[230:]).all())
+        self.assertIn("10 values in stretches shorter than", " ".join(tail.notes))
+        # Combine with other observations of the same coordinates
+        a = import_table(pd.DataFrame({"m": range(1, 13), "v": np.ones(12), "s": np.full(12, 3.0)}), "climatology", "v", "mean", "x", month="m", sd="s")
+        b = import_table(pd.DataFrame({"m": range(1, 13), "v": np.full(12, 2.0), "s": np.full(12, 4.0)}), "climatology", "v", "mean", "x", month="m", sd="s")
+        both = apply_steps(a, [{"kind": "combine", "other": "b", "how": "sum"}], {"b": b})
+        self.assertEqual((both.values[0], both.sd[0]), (3.0, 5.0))
+        self.assertEqual(apply_steps(a, [{"kind": "combine", "other": "b", "how": "difference"}], {"b": b}).values[0], -1.0)
+        with self.assertRaisesRegex(DataError, "same shape and the same coordinates"):
+            apply_steps(a, [{"kind": "combine", "other": "m", "how": "sum"}], {"m": months})
+        # The steps are kept with the observations, in the standard file too, and can be applied again
+        chain = [step("aggregate", period="month"), {**default_step("arithmetic", months), "units": "cases per person"}]
+        result = apply_steps(days, chain)
+        self.assertEqual([s["kind"] for s in result.steps], ["aggregate", "arithmetic"])
+        write_observations(result, self.folder / "steps.nc")
+        back = read_observations(self.folder / "steps.nc")
+        self.assertEqual(list(back.steps), chain)
+        self.assertTrue(np.array_equal(apply_steps(days, list(back.steps)).values, result.values))
+        self.assertEqual(set(STEP_KINDS), {"aggregate", "arithmetic", "select", "climatology", "transform", "filter", "combine"})
+        # An earlier stage drawn with the result: overlaid if same shape and units, else in a panel below
+        from mobile.plots import observations_figure
+        alone = observations_figure(months, "file")
+        self.assertEqual((len(alone.data), alone.layout.height), (1, 380))
+        smoothed = apply_steps(months, [{"kind": "transform", "transform": "moving_average", "offset": 0, "window": 3}])
+        overlay = observations_figure(smoothed, "file", months, "Values loaded")
+        self.assertEqual([trace.name for trace in overlay.data], ["Values loaded", "After all steps"])
+        self.assertIsNone(overlay.layout.xaxis2.domain if "xaxis2" in overlay.layout else None)
+        per_person = observations_figure(per, "file", months, "After step 1")  # cases per person vs cases: two panels
+        self.assertEqual((len(per_person.data), per_person.layout.height), (2, 640))
+        self.assertEqual((per_person.layout.yaxis.title.text, per_person.layout.yaxis2.title.text), ("cases per person", "cases"))
+        self.assertEqual(per_person.data[1].xaxis, "x2")
+        # Every shape can be drawn (a seasonal climatology once had no axis title, and the plot kept the last one)
+        quarters = observations_figure(by_season, "file")
+        self.assertEqual((list(quarters.data[0].x), quarters.layout.xaxis.title.text), (["DJF", "MAM", "JJA", "SON"], "Season"))
+        seasonal = observations_figure(season, "file", two, "Values loaded")  # a climatology vs the months: two panels, by category
+        self.assertEqual((seasonal.layout.xaxis.type, seasonal.layout.xaxis2.type), ("category", None))
 
 if __name__ == "__main__":
     unittest.main()
