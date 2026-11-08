@@ -53,6 +53,10 @@ Everything a run needs that is not a parameter or an output.
   **Create and open**. It then opens, and **Use this folder** selects it. Names use letters, digits, `.`, `_`
   and `-` only (no spaces), and the folder cannot be inside the MoBILE repository. It takes effect with
   **Apply setup**, and *Earlier runs* in the sidebar then lists the runs in that folder.
+- **What the driving files must be**, folded above the cards: the table of the README of MoBILE for the GUI (variable
+  names, units, time axis, and how to put each file on the model grid with CDO), the coordinates, what the GUI does
+  not need, and, under *Why these choices*, why conservative remapping and when `fracarea` or `destarea`. An amber note
+  says that only a file you make with a single latitude or longitude needs cell bounds; regions cut in the GUI keep them.
 - **Driving files**: rainfall, temperature and population density. There is no parameter file: the parameters are
   set in tab 2, and no cell-area file: the model computes the cell areas from the grid of the population file.
 - **Age structure (WorldPop)**, in the same card: a **Product**, a **Country** (Sub-Saharan Africa) and a **Year**.

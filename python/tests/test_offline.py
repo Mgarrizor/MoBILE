@@ -1804,5 +1804,31 @@ class TestWorldPop(unittest.TestCase):
         self.assertNotIn("61", " ".join(trace.name or "" for trace in fit.data))  # No literature reference
         self.assertEqual(len(age_heterogeneity_figure(summary, "").data), 36)
 
+
+class TestDrivingFilesHelp(unittest.TestCase):
+    """The table of the driving files in the Setup tab lists the names the model accepts."""
+
+    def test_names_as_the_model(self):
+        from mobile.driving import LAT_NAMES, LON_NAMES, POP_NAMES, RAIN_NAMES, TEMP_NAMES, TIME_NAMES
+        from mobile.setup_ui import driving_files_help
+
+        source = Path(MOBILE, "src", "mo_control.f90").read_text()
+
+        def model_names(array):
+            line = re.search(rf"^\s*character\(len=\d+\)\s*::\s*{array}\(\d+\)\s*=\s*\[[^:]*::(.*)\]", source, re.M).group(1)
+            return re.findall(r'"([^"]*)"', line)
+
+        for names, array in ((POP_NAMES, "pop_names"), (RAIN_NAMES, "rain_names"), (TEMP_NAMES, "temp_names"),
+                             (LAT_NAMES, "lat_names"), (LON_NAMES, "lon_names"), (TIME_NAMES, "time_names")):
+            self.assertEqual(names, model_names(array), array)
+        html = str(driving_files_help())
+        for name in (*POP_NAMES, *RAIN_NAMES, *TEMP_NAMES, *LAT_NAMES, *LON_NAMES, *TIME_NAMES):
+            self.assertIn(f"<code>{name}</code>", html)
+        for unit in ("mm/day", "°C", "persons/m²"):
+            self.assertIn(unit, html)
+        # What the GUI does not need is said, and no file for it is asked
+        self.assertIn("Not needed in the GUI", html)
+        self.assertNotIn("area.nc", html)
+
 if __name__ == "__main__":
     unittest.main()

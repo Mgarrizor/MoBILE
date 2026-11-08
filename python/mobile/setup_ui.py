@@ -6,6 +6,7 @@ from dataclasses import replace
 from shiny import ui
 
 from .checks import driving_days
+from .driving import LAT_NAMES, LON_NAMES, POP_NAMES, RAIN_NAMES, TEMP_NAMES, TIME_NAMES
 from .grid import pop_coordinates
 from .layout import player_controls, with_tip
 from .plots import COLOUR_MAPS
@@ -112,6 +113,7 @@ def setup_tab(config):
         ui.p("Choose the model, the period to simulate, the driving data and, if not the whole grid, the region to simulate, then press ",
              ui.tags.strong("Apply setup"), ". Next, set the parameters in the Parameters & SA tab and press Run in the sidebar.",
              class_="text-muted"),
+        driving_files_help(),
         ui.layout_columns(run_box, files_box, col_widths=(5, 7)),
         ui.div(
             ui.input_action_button("apply_setup", "Apply setup", class_="btn-primary btn-lg"),
@@ -168,7 +170,7 @@ def _age_inputs(config):
         ui.tags.label("Age structure (WorldPop)", class_="form-label fw-semibold mb-1"),
         ui.input_select("setup_age_product", "Product", product_choices(), selected=product, width="100%"),
         ui.p("⚠ The model does not use the sex structure yet: the female and male shares are averaged into one age structure.",
-             class_="small mb-1", style="color: #d97706;"),
+             class_="small mb-1", style=AMBER_TEXT),
         ui.output_ui("age_source"),
         ui.layout_columns(
             ui.input_select("setup_age_country", "Country", country_choices(product), selected=country, width="100%"),
@@ -227,6 +229,82 @@ def _age_card():
         ui.panel_conditional("input.age_figure === 'age_heterogeneity'", ui.div(id="age_heterogeneity_plot", style="height: 900px;")),
         age_method(),
         class_="mt-3",
+    )
+
+
+AMBER_TEXT = "color: #d97706;"  # As the markers of moved sliders and the note on the sex structure
+
+
+def _names(names):
+    """e.g. `rain`, `rainfall` as code."""
+    return ui.TagList(*[ui.TagList(", " if i else "", ui.tags.code(name)) for i, name in enumerate(names)])
+
+
+# (file, variable names, units, time axis, putting it on the model grid with CDO): as the table of the README of MoBILE
+DRIVING_TABLE = (
+    ("Rainfall", RAIN_NAMES, ("mm/day",), ("daily; ", ui.tags.code(TIME_NAMES[0]), " or ", ui.tags.code(TIME_NAMES[1])),
+     ("conservative, the mean over the part covered: ", ui.tags.code("CDO_REMAP_NORM=fracarea cdo remapcon"))),
+    ("Temperature", TEMP_NAMES, ("°C (ERA5 is in K: ", ui.tags.code("cdo subc,273.15"), ")"), ("daily mean, the same days as rainfall",),
+     ("as rainfall (", ui.tags.code("remapcon"), " with ", ui.tags.code("fracarea"), "); none if the model grid is the temperature grid")),
+    ("Population density", POP_NAMES, ("persons/m² (WorldPop density is per km²: ", ui.tags.code("cdo mulc,1e-6"), ")"), ("none (static)",),
+     ("conservative, keeping the people: ", ui.tags.code("CDO_REMAP_NORM=destarea cdo remapcon"))),
+)
+
+
+def driving_files_help():
+    """What the driving files must be, folded: the table of the README of MoBILE for the files of the GUI, why, and what
+    the GUI does itself."""
+    header = ui.tags.thead(ui.tags.tr(*[ui.tags.th(text) for text in (
+        "File", "Variable names accepted", "Units", "Time axis", "Putting it on the model grid with CDO")]))
+    rows = ui.tags.tbody(*[
+        ui.tags.tr(ui.tags.td(ui.tags.strong(name)), ui.tags.td(_names(names)), ui.tags.td(*units), ui.tags.td(*time), ui.tags.td(*cdo))
+        for name, names, units, time, cdo in DRIVING_TABLE
+    ])
+    item = ui.tags.li
+    why = ui.accordion(
+        ui.accordion_panel(
+            "Why these choices",
+            ui.tags.ul(
+                item(ui.tags.strong("Why remapcon, not bilinear. "), "Population must add up, so the regridding must keep its total; "
+                     "rainfall and temperature are averages, so each model cell must get the mean of what falls in it. Conservative "
+                     "remapping does both, giving each model cell the area-weighted mean of the source cells it overlaps. Bilinear "
+                     "interpolation, a common default, does neither in general."),
+                item(ui.tags.strong("fracarea or destarea. "), "They differ only where a model cell is partly covered by the source, "
+                     "typically on the coast, where the source has no values over the sea. A model cell gets (sum of source value × "
+                     "overlap area) / A: with ", ui.tags.code("fracarea"), " A is the covered area, with ", ui.tags.code("destarea"),
+                     " the whole cell. For a coastal cell half land: rain of 10 mm/day on the land half gives 10 mm/day with fracarea, "
+                     "5 with destarea; the sea half is unmeasured, not dry, so use fracarea. 1,000 people on the land half give twice "
+                     "the density with fracarea, and the model, which makes people from density × cell area, would put 2,000 in the "
+                     "cell; the sea really is empty, so use destarea, which keeps the total of the source."),
+                item(ui.tags.strong("Count products. "), "A population count (persons per pixel, as WorldPop's count products) must "
+                     "first be divided by the area of the pixel: ", ui.tags.code("cdo div pop.nc -gridarea pop.nc"), ". WorldPop's "
+                     "density products (persons per km²) only need ", ui.tags.code("cdo mulc,1e-6"), "."),
+            ),
+        ),
+        open=False,
+        class_="mt-2",
+    )
+    return ui.accordion(
+        ui.accordion_panel(
+            "What the driving files must be",
+            ui.p("Three netCDF files on one grid, the model grid. ", ui.tags.strong("The model applies no unit conversion"),
+                 ": the units below are requirements. Cells with no data in the population, rainfall or temperature are not simulated.",
+                 class_="small mb-2"),
+            ui.div(ui.tags.table(header, rows, class_="table table-sm small align-top mb-2 driving-table"), class_="table-responsive"),
+            ui.p("Coordinates: latitude ", _names(LAT_NAMES), ", longitude ", _names(LON_NAMES), ". The grid of the population file is "
+                 "the model grid: rainfall and temperature must be on it.", class_="small mb-2"),
+            ui.p("Not needed in the GUI: a parameter file (the parameters are in the Parameters & SA tab), a cell area file (the "
+                 "model computes the areas from the grid of the population file) or an age file (the age structure comes from "
+                 "WorldPop, in the Age structure menus of Driving files).", class_="small mb-2"),
+            ui.p("⚠ A region chosen in the GUI keeps the size of its cells by itself. Only a file you make with a single latitude or "
+                 "longitude needs the cell bounds of its coordinates (a CF bounds attribute, e.g. ", ui.tags.code("lat_bnds"), ", ",
+                 ui.tags.code("lon_bnds"), "): one centre gives no cell size.", class_="small mb-2", style=AMBER_TEXT),
+            ui.p("Apply setup compares the files (grid, days) and checks the units of rainfall and temperature, and warns before "
+                 "applying a setup whose files may not work together.", class_="small mb-0"),
+            why,
+        ),
+        open=False,
+        class_="mb-3",
     )
 
 
