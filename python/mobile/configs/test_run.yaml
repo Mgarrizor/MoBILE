@@ -22,6 +22,7 @@ inputs:
   temp_file: $MOBILE/utils/test_run/t2m.nc
   pop_file: $MOBILE/utils/test_run/pop.nc
 
-# The age structure of the agents, from WorldPop: the country and, optionally, the year (else that of the
-# product closest to the first year simulated). It is downloaded and analysed once, then kept.
-age_structure: {product: R2025A, country: SEN}
+# The age structure of the agents, from WorldPop: the country and, optionally, the product (Global2000_2020 or
+# R2025A) and the year; else chosen for the first year simulated (2012 here: Global2000_2020, 2012). It is
+# downloaded and analysed once, then kept.
+age_structure: {country: SEN}

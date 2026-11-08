@@ -452,7 +452,7 @@ def age_sex_figure(summary, name):
     """The mean share of each age group in the people of a cell, female and male: the two are averaged for the model."""
     groups = summary["age_groups"]
     ends = summary["group_ends"]
-    figure = go.Figure(layout=_base_layout(title=f"Sex structure: {name}"))
+    figure = go.Figure(layout=_base_layout(title=f"Sex structure (not used by the model yet): {name}"))
     for sex in ("f", "m"):
         shares = summary["mean_share"][sex][:-1]  # 80 and over is left out, as for the model
         figure.add_trace(go.Scatter(

@@ -10,7 +10,7 @@ from .grid import pop_coordinates
 from .layout import player_controls, with_tip
 from .plots import COLOUR_MAPS
 from .setup import OPTIONAL_FILES, REGION_MODES, REQUIRED_FILES, region_mode
-from .worldpop import COUNTRIES, DEFAULT_PRODUCT, PRODUCTS, year_label
+from .worldpop import COUNTRIES, PRODUCTS, product_countries, year_label
 
 
 SUFFIX_NAMES = {"netcdf": ("netCDF (.nc)",), "text": ("text (.txt, .csv)",), "folder": ()}
@@ -125,18 +125,33 @@ def setup_tab(config):
     )
 
 
-AUTO_YEAR = "auto"  # The year menu entry for the year closest to the start of the period
+AUTO = "auto"  # The menu entry for the product, or the year, chosen from the start of the period
+AUTO_YEAR = AUTO
+AUTO_PRODUCT_LABEL = "From the start of the period"  # 2000–2020 before 2015, R2025A from 2015: the status line names it
 
 
 def age_values(config):
-    """(product, country, year entry) of the age structure menus for a setup."""
-    choice = config.age_structure or {"product": DEFAULT_PRODUCT, "country": "SEN"}
-    year = choice.get("year")
-    return choice["product"], choice["country"], AUTO_YEAR if year is None else str(year)
+    """(product, country, year) entries of the age structure menus for a setup."""
+    choice = config.age_structure or {"country": "SEN"}
+    product, year = choice.get("product"), choice.get("year")
+    return product or AUTO, choice["country"], AUTO if year is None else str(year)
+
+
+def product_choices():
+    return {AUTO: AUTO_PRODUCT_LABEL, **{key: spec["label"] for key, spec in PRODUCTS.items()}}
+
+
+def country_choices(product):
+    """{ISO3: name} by name: of the product, or of all products when it is chosen from the period."""
+    countries = product_countries(product) if product in PRODUCTS else COUNTRIES
+    return dict(sorted(countries.items(), key=lambda item: item[1]))
 
 
 def year_choices(product):
-    """The year menu: the default, then the estimates and the projections of the product in groups of their own."""
+    """The year menu: the default, then the estimates and the projections of the product in groups of their own. With
+    the product chosen from the period, the year is too."""
+    if product not in PRODUCTS:
+        return {AUTO: "Closest to the start of the period"}
     first, last = PRODUCTS[product]["years"]
     projected_from = PRODUCTS[product].get("projected_from", last + 1)
     estimates = {str(year): str(year) for year in range(first, min(projected_from, last + 1))}
@@ -149,14 +164,14 @@ def year_choices(product):
 def _age_inputs(config):
     """The age structure of the agents: a WorldPop product, a country and a year, instead of a file."""
     product, country, year = age_values(config)
-    countries = dict(sorted(COUNTRIES.items(), key=lambda item: item[1]))
     return ui.div(
         ui.tags.label("Age structure (WorldPop)", class_="form-label fw-semibold mb-1"),
-        ui.input_select("setup_age_product", "Product", {key: spec["label"] for key, spec in PRODUCTS.items()}, selected=product,
-                        width="100%"),
+        ui.input_select("setup_age_product", "Product", product_choices(), selected=product, width="100%"),
+        ui.p("⚠ The model does not use the sex structure yet: the female and male shares are averaged into one age structure.",
+             class_="small mb-1", style="color: #d97706;"),
         ui.output_ui("age_source"),
         ui.layout_columns(
-            ui.input_select("setup_age_country", "Country", countries, selected=country, width="100%"),
+            ui.input_select("setup_age_country", "Country", country_choices(product), selected=country, width="100%"),
             ui.input_select("setup_age_year", "Year", year_choices(product), selected=year, width="100%"),
             col_widths=(7, 5), fill=False,
         ),
@@ -182,7 +197,9 @@ def age_method():
                      "shares over the cells (Spatial heterogeneity) show how far the age structure varies across the country: "
                      "the model takes the same structure in every cell."),
                 item("The shares are averaged over the cells, each cell counting the same, and then over the two sexes, with "
-                     "equal weight (Sex structure)."),
+                     "equal weight (Sex structure): the model does not use the sex structure yet. The products differ in the "
+                     "cells they have people in: R2025A (constrained) only in the cells with buildings, the 2000–2020 "
+                     "product (unconstrained) in every land cell, many with few people."),
                 item("The cumulative sum of the mean shares, each age group at its last year of age (0, 4, 9, ..., 79), is "
                      "interpolated to every year of age from 0 to 79 with a monotone cubic (PCHIP), so that the weight of a "
                      "year of age never rises with age. The 80 and over group is left out, so the weights end just below 1. "

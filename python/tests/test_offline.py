@@ -568,7 +568,7 @@ class TestSetup(unittest.TestCase):
 
     def test_restored_from_a_run(self):
         current = from_fields(MOBILE, "Study", "elsewhere", self.run, self.files, age_structure=self.age)
-        manifest = {"run": {**self.run, "nagent": 5000}, "inputs": self.files, "age_structure": {**self.age, "year": 2020}}
+        manifest = {"run": {**self.run, "nagent": 5000}, "inputs": self.files, "age_structure": {**self.age, "product": "R2025A", "year": 2020}}
         restored = from_manifest(manifest, current)
         self.assertEqual(restored.run["nagent"], 5000)
         self.assertEqual(restored.age_structure["year"], 2020)
@@ -1718,7 +1718,8 @@ class TestWorldPop(unittest.TestCase):
         source.mkdir()
         for (sex, age), values in rasters.items():
             write_raster(source / f"{sex}_{age:02d}.tif", values)
-        product = {"label": "Test", "years": (2015, 2030), "source": "", "url": f"file://{source}/{{sex}}_{{age}}.tif"}
+        product = {"label": "Test", "years": (2015, 2030), "source": "", "url": f"file://{source}/{{sex}}_{{age}}.tif",
+                   "age_code": "{:02d}", "without": ()}
         with mock.patch.dict(worldpop.PRODUCTS, {"TEST": product}):
             calls = []
             summary = worldpop.prepare("TEST", "SEN", 2020, progress=lambda done, total: calls.append((done, total)))
@@ -1736,9 +1737,18 @@ class TestWorldPop(unittest.TestCase):
             self.assertFalse((self.folder / "settings" / "worldpop" / "TEST" / "SEN_2022.json").exists())
 
     def test_choice(self):
-        from mobile.worldpop import COUNTRIES, choice_problems, default_year
+        from mobile.worldpop import COUNTRIES, choice_problems, default_product, default_year, product_countries, raster_urls, resolve_choice
 
         self.assertEqual([default_year(year) for year in (2008, 2015, 2021, 2035)], [2015, 2015, 2021, 2030])
+        # The product from the start of the period: 2000-2020 before 2015, R2025A from 2015
+        self.assertEqual([default_product(year) for year in (1995, 2008, 2014, 2015, 2040)],
+                         ["Global2000_2020", "Global2000_2020", "Global2000_2020", "R2025A", "R2025A"])
+        self.assertEqual(resolve_choice({"country": "KEN"}, 2008), {"product": "Global2000_2020", "country": "KEN", "year": 2008})
+        self.assertEqual(resolve_choice({"country": "KEN"}, 1995)["year"], 2000)
+        self.assertEqual(resolve_choice({"product": "R2025A", "country": "KEN"}, 2008)["year"], 2015)
+        # Age codes as WorldPop writes them: zero-padded in R2025A only
+        self.assertTrue(raster_urls("R2025A", "SEN", 2020)[("f", 5)].endswith("/sen_f_05_2020_CN_1km_R2025A_UA_v1.tif"))
+        self.assertTrue(raster_urls("Global2000_2020", "SEN", 2012)[("m", 5)].endswith("/2012/SEN/sen_m_5_2012_1km.tif"))
         from mobile.setup_ui import year_choices
         from mobile.worldpop import year_label
 
@@ -1746,30 +1756,40 @@ class TestWorldPop(unittest.TestCase):
         menu = year_choices("R2025A")
         self.assertEqual((list(menu["Estimates"])[0], list(menu["Estimates"])[-1]), ("2015", "2024"))
         self.assertEqual(list(menu["Projections"].values()), [f"{year} (projection)" for year in range(2025, 2031)])
-        self.assertEqual(len(COUNTRIES), 47)  # Sub-Saharan Africa, without Eritrea (rasters of about 430 MB a year)
-        self.assertNotIn("ERI", COUNTRIES)
+        self.assertEqual(len(COUNTRIES), 48)  # Sub-Saharan Africa
+        # Eritrea not in R2025A (rasters of about 430 MB a year), but in 2000-2020 (0.7 MB a raster)
+        self.assertNotIn("ERI", product_countries("R2025A"))
+        self.assertIn("ERI", product_countries("Global2000_2020"))
+        self.assertTrue(choice_problems({"product": "R2025A", "country": "ERI"}))
+        self.assertEqual(choice_problems({"product": "Global2000_2020", "country": "ERI", "year": 2005}), [])
+        self.assertEqual(choice_problems({"country": "ERI"}), [])
+        self.assertTrue(choice_problems({"country": "SEN", "year": 2010}))  # A year needs a product
         self.assertEqual(choice_problems({"product": "R2025A", "country": "SEN"}), [])
         self.assertEqual(choice_problems({"product": "R2025A", "country": "KEN", "year": 2030}), [])
         for wrong in ({"product": "R2025A", "country": "FRA"}, {"product": "X", "country": "SEN"},
-                      {"product": "R2025A", "country": "SEN", "year": 2031}, {"country": "SEN"}):
+                      {"product": "R2025A", "country": "SEN", "year": 2031}, {"product": "R2025A"},
+                      {"product": "Global2000_2020", "country": "SEN", "year": 2021}):
             self.assertTrue(choice_problems(wrong), wrong)
 
     def test_config_and_run_folder(self):
         from mobile.worldpop import age_file_text, cached_summary
 
         config = replace(Config.load(CONFIG), runs_dir=self.folder / "runs")
-        self.assertEqual(config.age_choice(), {"product": "R2025A", "country": "SEN", "year": 2015})  # Rain from 2012
-        self.assertEqual(replace(config, period={"start": "2014-01-01", "end": "2014-12-31"}).age_choice()["year"], 2015)
-        self.assertEqual(replace(config, age_structure={**config.age_structure, "year": 2020}).age_choice()["year"], 2020)
+        # Rain from 2012: the 2000-2020 product, 2012, whose result comes with the package
+        self.assertEqual(config.age_choice(), {"product": "Global2000_2020", "country": "SEN", "year": 2012})
+        self.assertEqual(replace(config, period={"start": "2014-01-01", "end": "2014-12-31"}).age_choice()["year"], 2014)
+        chosen = replace(config, age_structure={"product": "R2025A", "country": "SEN"})
+        self.assertEqual(chosen.age_choice(), {"product": "R2025A", "country": "SEN", "year": 2015})
+        self.assertEqual(replace(config, age_structure={"product": "R2025A", "country": "SEN", "year": 2020}).age_choice()["year"], 2020)
         run_dir = create_run_dir(config, name="age")
         written = (run_dir / "age_structure" / "cumm_age.txt").read_text()
-        self.assertEqual(written, age_file_text(cached_summary("R2025A", "SEN", 2015)))
+        self.assertEqual(written, age_file_text(cached_summary("Global2000_2020", "SEN", 2012)))
         with self.assertRaisesRegex(ConfigError, "age_file is no longer used"):
             replace(config, inputs={**config.inputs, "age_file": str(CONFIG)}).validate()
         with self.assertRaisesRegex(ConfigError, "age_structure: missing"):
             replace(config, age_structure=None).validate()
         with self.assertRaisesRegex(ConfigError, "no country"):
-            replace(config, age_structure={"product": "R2025A", "country": "ERI"}).validate()
+            replace(config, age_structure={"product": "R2025A", "country": "FRA"}).validate()
 
     def test_figures(self):
         from mobile.plots import age_cumulative_figure, age_fit_figure, age_heterogeneity_figure, age_sex_figure
