@@ -22,8 +22,18 @@ from PIL import Image
 from scipy.interpolate import PchipInterpolator, make_interp_spline
 from scipy.optimize import curve_fit
 
-# The products, by release. url has {year}, {iso}, {iso_lower}, {sex} (f or m) and {age} (zero-padded code)
+# The products, oldest first. url has {year}, {iso}, {iso_lower}, {sex} (f or m) and {age}, the code of an age
+# group written with age_code; without lists the countries of COUNTRIES a product is not offered for
 PRODUCTS = {
+    "Global2000_2020": {
+        "label": "WorldPop Global: age and sex structures, 2000–2020, 1 km, unconstrained (UN-adjusted)",
+        "years": (2000, 2020),
+        "source": "https://hub.worldpop.org/Global1_2000-2020_AgeSexStructures",
+        "url": ("https://data.worldpop.org/GIS/AgeSex_structures/Global_2000_2020_1km/unconstrained/{year}/{iso}/"
+                "{iso_lower}_{sex}_{age}_{year}_1km.tif"),
+        "age_code": "{:d}",
+        "without": (),
+    },
     "R2025A": {
         "label": "WorldPop R2025A: age and sex structures, 2015–2030, 1 km, constrained",
         "years": (2015, 2030),
@@ -31,16 +41,18 @@ PRODUCTS = {
         "source": "https://hub.worldpop.org/project/categories?id=8",
         "url": ("https://data.worldpop.org/GIS/AgeSex_structures/Global_2015_2030/R2025A/{year}/{iso}/v1/1km_ua/"
                 "constrained/{iso_lower}_{sex}_{age}_{year}_CN_1km_R2025A_UA_v1.tif"),
+        "age_code": "{:02d}",
+        # Eritrea: its rasters are about 12 MB each (2020), 18 times those of Senegal, about 430 MB for a year
+        "without": ("ERI",),
     },
 }
-DEFAULT_PRODUCT = "R2025A"
+DEFAULT_PRODUCT = "R2025A"  # Of a period from its first year on; before, the product covering its start (default_product)
 
-# The World Bank's Sub-Saharan Africa region, where the model is meant to be used. Without Eritrea (ERI): its
-# rasters are about 12 MB each in R2025A (2020), 18 times those of Senegal, about 430 MB for a year
+# The World Bank's Sub-Saharan Africa region, where the model is meant to be used
 COUNTRIES = {
     "AGO": "Angola", "BDI": "Burundi", "BEN": "Benin", "BFA": "Burkina Faso", "BWA": "Botswana",
     "CAF": "Central African Republic", "CIV": "Côte d'Ivoire", "CMR": "Cameroon", "COD": "Congo, Democratic Republic",
-    "COG": "Congo, Republic", "COM": "Comoros", "CPV": "Cabo Verde", "ETH": "Ethiopia", "GAB": "Gabon",
+    "COG": "Congo, Republic", "COM": "Comoros", "CPV": "Cabo Verde", "ERI": "Eritrea", "ETH": "Ethiopia", "GAB": "Gabon",
     "GHA": "Ghana", "GIN": "Guinea", "GMB": "Gambia", "GNB": "Guinea-Bissau", "GNQ": "Equatorial Guinea", "KEN": "Kenya",
     "LBR": "Liberia", "LSO": "Lesotho", "MDG": "Madagascar", "MLI": "Mali", "MOZ": "Mozambique", "MRT": "Mauritania",
     "MUS": "Mauritius", "MWI": "Malawi", "NAM": "Namibia", "NER": "Niger", "NGA": "Nigeria", "RWA": "Rwanda",
@@ -63,6 +75,25 @@ class WorldPopError(RuntimeError):
     """A product, country or year that does not exist, or a download that failed."""
 
 
+def default_product(start_year):
+    """The product for a period starting in a year: R2025A from 2015, else the oldest product covering the year, else the oldest."""
+    if int(start_year) >= PRODUCTS[DEFAULT_PRODUCT]["years"][0]:
+        return DEFAULT_PRODUCT
+    return next((key for key, spec in PRODUCTS.items() if spec["years"][0] <= int(start_year) <= spec["years"][1]), next(iter(PRODUCTS)))
+
+
+def product_countries(product):
+    """{ISO3: name} of the countries a product is offered for."""
+    return {iso: name for iso, name in COUNTRIES.items() if iso not in PRODUCTS[product]["without"]}
+
+
+def resolve_choice(choice, start_year):
+    """{product, country, year} with the product and year left out or None chosen for a period starting in start_year."""
+    product = choice.get("product") or default_product(start_year)
+    year = choice.get("year")
+    return {"product": product, "country": choice["country"], "year": default_year(start_year, product) if year is None else year}
+
+
 def default_year(start_year, product=DEFAULT_PRODUCT):
     """The year of a product closest to the first year of the simulation period."""
     first, last = PRODUCTS[product]["years"]
@@ -81,16 +112,21 @@ def year_label(year, product=DEFAULT_PRODUCT):
 
 
 def choice_problems(choice):
-    """What is wrong with an age structure choice {product, country, year}; year None is the default."""
-    if not isinstance(choice, dict) or not {"product", "country"} <= set(choice) <= {"product", "country", "year"}:
-        return ["age_structure: needs product and country, and optionally year"]
+    """What is wrong with an age structure choice {product, country, year}; product and year None (or left out) are
+    chosen from the period. A year needs a product."""
+    if not isinstance(choice, dict) or "country" not in choice or not set(choice) <= {"product", "country", "year"}:
+        return ["age_structure: needs country, and optionally product and year"]
     problems = []
-    product = PRODUCTS.get(choice["product"])
-    if product is None:
+    product = PRODUCTS.get(choice.get("product")) if choice.get("product") is not None else None
+    if choice.get("product") is not None and product is None:
         problems.append(f"age_structure: no product {choice['product']!r}; available: {', '.join(PRODUCTS)}")
     if choice["country"] not in COUNTRIES:
         problems.append(f"age_structure: no country {choice['country']!r}; use an ISO3 code, e.g. SEN")
+    elif product is not None and choice["country"] in product["without"]:
+        problems.append(f"age_structure: {COUNTRIES[choice['country']]} is not offered in {choice['product']}")
     year = choice.get("year")
+    if year is not None and choice.get("product") is None:
+        problems.append("age_structure: a year needs a product")
     if product is not None and year is not None:
         first, last = product["years"]
         if not isinstance(year, int) or isinstance(year, bool) or not first <= year <= last:
@@ -100,8 +136,8 @@ def choice_problems(choice):
 
 def raster_urls(product, country, year):
     """{(sex, age group): url} of the rasters of a product, country and year."""
-    template = PRODUCTS[product]["url"]
-    return {(sex, age): template.format(year=year, iso=country, iso_lower=country.lower(), sex=sex, age=f"{age:02d}")
+    template, code = PRODUCTS[product]["url"], PRODUCTS[product]["age_code"]
+    return {(sex, age): template.format(year=year, iso=country, iso_lower=country.lower(), sex=sex, age=code.format(age))
             for sex in SEXES for age in AGE_GROUPS}
 
 

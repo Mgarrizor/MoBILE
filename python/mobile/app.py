@@ -39,9 +39,9 @@ from .setup import (
 )
 from .setup_ui import (
     DAILY_FILES, EXAMPLE_FOLDER, PREVIEW_FILES, PREVIEW_STYLE, REGION_BOXES, REGION_LAYERS, REGION_MONTHS, SUFFIX_NAMES, available_model, example_note_box, region_values,
-    AUTO_YEAR, age_values, period_values, setup_problems, setup_tab, setup_value, year_choices,
+    AUTO, age_values, country_choices, period_values, setup_problems, setup_tab, setup_value, year_choices,
 )
-from .worldpop import COUNTRIES, PRODUCTS, WorldPopError, cached_summary, default_year, describe, fitted_mortality, prepare, year_label
+from .worldpop import COUNTRIES, PRODUCTS, WorldPopError, cached_summary, describe, fitted_mortality, prepare, resolve_choice, year_label
 from .variables import (
     AGE_KEY, age_choices, age_groups, preferred_variable, resolve_variable, variable_choices,
 )
@@ -518,7 +518,7 @@ def create_app(config):
             ui.update_select("setup_disID", selected=str(config.run["disID"]))
             product, country, year = age_values(config)
             ui.update_select("setup_age_product", selected=product)
-            ui.update_select("setup_age_country", selected=country)
+            ui.update_select("setup_age_country", choices=country_choices(product), selected=country)
             ui.update_select("setup_age_year", choices=year_choices(product), selected=year)
             values = period_values(config)
             if values is not None:
@@ -666,32 +666,40 @@ def create_app(config):
                 ui.update_navs("tab", selected="parameters")
 
         def typed_age():
-            """The age structure in the menus of the Setup tab, {product, country, year}; year None for the default."""
-            year = input.setup_age_year()
-            return {"product": input.setup_age_product(), "country": input.setup_age_country(),
-                    "year": None if year in (None, "", AUTO_YEAR) else int(year)}
+            """The age structure in the menus of the Setup tab, {product, country, year}; None for those chosen from the period."""
+            product, year = input.setup_age_product(), input.setup_age_year()
+            return {"product": None if product in (None, "", AUTO) else product, "country": input.setup_age_country(),
+                    "year": None if year in (None, "", AUTO) else int(year)}
 
-        def typed_age_year():
-            """The year the menus give: that chosen, or that of the product closest to the start of the typed period."""
-            choice = typed_age()
-            if choice["year"] is not None:
-                return choice["year"]
+        def typed_age_resolved():
+            """{product, country, year} the menus give, with those chosen from the start of the typed period."""
             typed = typed_days()
-            return default_year(typed[0].year if typed is not None else 0, choice["product"])
+            return resolve_choice(typed_age(), typed[0].year if typed is not None else 0)
+
+        @reactive.effect
+        @reactive.event(input.setup_age_product)
+        def age_product_changed():
+            """The countries and years of the product chosen, keeping those chosen before where the product has them."""
+            product = input.setup_age_product()
+            with reactive.isolate():
+                country, year = input.setup_age_country(), input.setup_age_year()
+            countries, years = country_choices(product), year_choices(product)
+            flat_years = {key for value in years.values() for key in (value if isinstance(value, dict) else {})} | set(years)
+            ui.update_select("setup_age_country", choices=countries, selected=country if country in countries else "SEN")
+            ui.update_select("setup_age_year", choices=years, selected=year if year in flat_years else AUTO)
 
         @render.ui
         def age_source():
-            product = PRODUCTS.get(input.setup_age_product())
-            if product is None:
-                return None
+            product = PRODUCTS[typed_age_resolved()["product"]]
             return ui.p("Source: ", ui.tags.a(product["source"], href=product["source"], target="_blank", rel="noopener"),
                         class_="small text-muted mb-2")
 
         @render.ui
         def age_status():
-            choice = typed_age()
-            year = typed_age_year()
-            name = f"{COUNTRIES.get(choice['country'], choice['country'])} {year_label(year, choice['product'])}"
+            choice = typed_age_resolved()
+            year = choice["year"]
+            name = (f"{COUNTRIES.get(choice['country'], choice['country'])} {year_label(year, choice['product'])}, "
+                    f"WorldPop {choice['product']}")
             if cached_summary(choice["product"], choice["country"], year) is not None:
                 return ui.p(f"{name}: ready.", class_="small text-muted mb-0")
             return ui.p(f"{name}: not downloaded yet; it is downloaded from WorldPop and analysed with Apply setup, once.",

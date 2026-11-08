@@ -11,7 +11,7 @@ import yaml
 from .parameters import run_parameters, shown_parameters
 from .period import period_days, period_problems, spin_up_problem
 from .region import region_problems
-from .worldpop import choice_problems, default_year
+from .worldpop import choice_problems, resolve_choice
 
 # The keys of a configuration file. Parameters, outputs and sliders are set in the GUI.
 CONFIG_KEYS = {"mobile", "runs_dir", "project", "run", "inputs", "region", "period", "age_structure"}
@@ -22,9 +22,9 @@ NO_CONST = ("inputs: const is no longer used: the parameters are set in the GUI,
             "the defaults compiled into the model. Remove `const` from the configuration.")
 NO_AREA = ("inputs: area_file is no longer used: the model computes the cell areas from the grid of the population "
            "file. Remove `area_file` from the configuration.")
-NO_AGE = ("inputs: age_file is no longer used: the age structure comes from WorldPop, chosen by product, country and "
-          "year. Remove `age_file` and set `age_structure: {product: R2025A, country: SEN}` (year: optional).")
-NO_AGE_STRUCTURE = "age_structure: missing; choose a WorldPop product and country, e.g. {product: R2025A, country: SEN}"
+NO_AGE = ("inputs: age_file is no longer used: the age structure comes from WorldPop, chosen by country and, optionally, "
+          "product and year. Remove `age_file` and set e.g. `age_structure: {country: SEN}`.")
+NO_AGE_STRUCTURE = "age_structure: missing; choose a country of WorldPop, e.g. {country: SEN}, and optionally product and year"
 OPTIONAL_INPUTS = {"mortality_file", "birthrate_file", "mortality_time_file", "imm_forcing"}
 OPTIONAL_DEFAULTS = {"counterfactual": 0}
 
@@ -127,18 +127,18 @@ class Config:
         return config
 
     def age_choice(self):
-        """{product, country, year} of the age structure, the year given or else that of the product closest to the
-        first year simulated: of the period, or of the driving data."""
+        """{product, country, year} of the age structure: the product and year given, or else chosen for the first year
+        simulated, of the period or of the driving data (worldpop.resolve_choice)."""
         choice = dict(self.age_structure)
-        if choice.get("year") is None:
-            if self.period is not None:
-                start = int(str(self.period["start"])[:4])
-            else:
-                from .checks import driving_days  # Not at the top: checks reads the files, config does not
-                days = driving_days(self.inputs["rain_file"])
-                start = int(str(days[0])[:4]) if days is not None and len(days) else 0  # No dates: the first year
-            choice["year"] = default_year(start, choice["product"])
-        return choice
+        if choice.get("product") is not None and choice.get("year") is not None:
+            return choice
+        if self.period is not None:
+            start = int(str(self.period["start"])[:4])
+        else:
+            from .checks import driving_days  # Not at the top: checks reads the files, config does not
+            days = driving_days(self.inputs["rain_file"])
+            start = int(str(days[0])[:4]) if days is not None and len(days) else 0  # No dates: the oldest product
+        return resolve_choice(choice, start)
 
     def final_params(self):
         """Parameters of the run, as written to its &CONST: every parameter of the GUI at its default, overridden by `params`."""

@@ -55,14 +55,18 @@ Everything a run needs that is not a parameter or an output.
   **Apply setup**, and *Earlier runs* in the sidebar then lists the runs in that folder.
 - **Driving files**: rainfall, temperature and population density. There is no parameter file: the parameters are
   set in tab 2, and no cell-area file: the model computes the cell areas from the grid of the population file.
-- **Age structure (WorldPop)**, in the same card: a **Product** (for now WorldPop R2025A, 2015 to 2030, with a link to
-  its source), a **Country** (Sub-Saharan Africa, without Eritrea, whose rasters are about 430 MB a year) and a
-  **Year**, by default the year of the product closest to the start of the period (2015 for a run from 2008). The
+- **Age structure (WorldPop)**, in the same card: a **Product**, a **Country** (Sub-Saharan Africa) and a **Year**.
+  The products are WorldPop Global 2000–2020 (1 km, unconstrained: people in every land cell) and R2025A (2015–2030,
+  1 km, constrained to settled cells; 2025 to 2030 are projections, marked so in the menu, and Eritrea is left out:
+  its rasters are about 430 MB a year). By default both are chosen from the start of the period: 2000–2020 before 2015,
+  R2025A from 2015, and the year closest to the start (2008 for a run from 2008, 2015 for a run from 2015); the line
+  under the menus names them, and a link goes to the product's source. An amber note says that the model does not
+  use the sex structure yet: female and male are averaged. The
   first time a country and year are used, **Apply setup** downloads the 36 rasters of WorldPop (18 age groups by sex)
   (2 MB for The Gambia, about 150 MB for Nigeria) and analyses them as `utils/fetch_age.sh` does, with progress and a Cancel button; the result, a few kilobytes, is
   kept in the settings folder (`worldpop/`) and the rasters are deleted. The age file the model reads is written into
   each run folder from it, and recorded in the run's `run.json`; it is never an input. The example's result
-  (Senegal 2015) comes with the package, so the example runs without a connection. Type a path or use **Browse**. Optional files (mortality, birth rate, immunity
+  (Senegal 2012, 2000–2020 product) comes with the package, so the example runs without a connection. Type a path or use **Browse**. Optional files (mortality, birth rate, immunity
   forcing, counterfactual demography) are under *Optional files*. The files filled in at first are the
   example that comes with MoBILE (`utils/test_run` in the GitHub repository): Senegal, 2012 to 2014, on a 0.05°
   grid (rainfall CHIRPS, temperature CHIRTS, population WorldPop 2020). A note says so while they are in use.

@@ -96,7 +96,7 @@ What to fill in
      temp_file: data/t2m.nc
      pop_file: data/pop.nc
 
-   age_structure: {product: R2025A, country: SEN}   # year: optional
+   age_structure: {country: SEN}   # product (Global2000_2020 or R2025A) and year: optional
 
 ``run``
    As the flags of ``run_MOBILE.sh``. Two of them deserve care:
@@ -109,8 +109,9 @@ What to fill in
 ``inputs``
    The four driving fields must follow the units and variable names in the README of MoBILE
    (`Driving data <https://github.com/Mgarrizor/MoBILE#driving-data>`_).
-   There is no age file: ``age_structure`` chooses a WorldPop product, a country (ISO3 code, Sub-Saharan Africa) and
-   optionally a year (else that of the product closest to the first year simulated); it is downloaded and analysed
+   There is no age file: ``age_structure`` chooses a country of WorldPop (ISO3 code, Sub-Saharan Africa) and optionally
+   a product and a year; else the product is chosen from the first year simulated (``Global2000_2020`` before 2015,
+   ``R2025A`` from 2015) with the year closest to it. It is downloaded and analysed
    once, as ``utils/fetch_age.sh`` does, and a configuration with ``age_file`` is refused. There is no parameter file: the parameters start at
    the defaults compiled into the model and are changed on the sliders of the GUI, or with
    ``mobile run --set NAME=VALUE``; a configuration with ``const`` is refused. Optional: ``mortality_file``, ``birthrate_file``,
