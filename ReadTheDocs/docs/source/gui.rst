@@ -95,7 +95,8 @@ What to fill in
      rain_file: data/rain.nc
      temp_file: data/t2m.nc
      pop_file: data/pop.nc
-     age_file: data/cumm_age.txt
+
+   age_structure: {product: R2025A, country: SEN}   # year: optional
 
 ``run``
    As the flags of ``run_MOBILE.sh``. Two of them deserve care:
@@ -108,7 +109,9 @@ What to fill in
 ``inputs``
    The four driving fields must follow the units and variable names in the README of MoBILE
    (`Driving data <https://github.com/Mgarrizor/MoBILE#driving-data>`_).
-   ``age_file`` is the cumulative age distribution. There is no parameter file: the parameters start at
+   There is no age file: ``age_structure`` chooses a WorldPop product, a country (ISO3 code, Sub-Saharan Africa) and
+   optionally a year (else that of the product closest to the first year simulated); it is downloaded and analysed
+   once, as ``utils/fetch_age.sh`` does, and a configuration with ``age_file`` is refused. There is no parameter file: the parameters start at
    the defaults compiled into the model and are changed on the sliders of the GUI, or with
    ``mobile run --set NAME=VALUE``; a configuration with ``const`` is refused. Optional: ``mortality_file``, ``birthrate_file``,
    ``mortality_time_file``, ``imm_forcing`` (``NONE`` when not used) and ``counterfactual`` (0 or 1).

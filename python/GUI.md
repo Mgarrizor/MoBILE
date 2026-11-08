@@ -53,9 +53,16 @@ Everything a run needs that is not a parameter or an output.
   **Create and open**. It then opens, and **Use this folder** selects it. Names use letters, digits, `.`, `_`
   and `-` only (no spaces), and the folder cannot be inside the MoBILE repository. It takes effect with
   **Apply setup**, and *Earlier runs* in the sidebar then lists the runs in that folder.
-- **Driving files**: rainfall, temperature, population density and cumulative age structure. There is no
-  parameter file: the parameters are set in tab 2, and no cell-area file: the model computes the cell areas from the
-  grid of the population file. Type a path or use **Browse**. Optional files (mortality, birth rate, immunity
+- **Driving files**: rainfall, temperature and population density. There is no parameter file: the parameters are
+  set in tab 2, and no cell-area file: the model computes the cell areas from the grid of the population file.
+- **Age structure (WorldPop)**, in the same card: a **Product** (for now WorldPop R2025A, 2015 to 2030, with a link to
+  its source), a **Country** (Sub-Saharan Africa, without Eritrea, whose rasters are about 430 MB a year) and a
+  **Year**, by default the year of the product closest to the start of the period (2015 for a run from 2008). The
+  first time a country and year are used, **Apply setup** downloads the 36 rasters of WorldPop (18 age groups by sex)
+  (2 MB for The Gambia, about 150 MB for Nigeria) and analyses them as `utils/fetch_age.sh` does, with progress and a Cancel button; the result, a few kilobytes, is
+  kept in the settings folder (`worldpop/`) and the rasters are deleted. The age file the model reads is written into
+  each run folder from it, and recorded in the run's `run.json`; it is never an input. The example's result
+  (Senegal 2015) comes with the package, so the example runs without a connection. Type a path or use **Browse**. Optional files (mortality, birth rate, immunity
   forcing, counterfactual demography) are under *Optional files*. The files filled in at first are the
   example that comes with MoBILE (`utils/test_run` in the GitHub repository): Senegal, 2012 to 2014, on a 0.05°
   grid (rainfall CHIRPS, temperature CHIRTS, population WorldPop 2020). A note says so while they are in use.
@@ -76,13 +83,17 @@ Everything a run needs that is not a parameter or an output.
   of the whole grid (`lat_bnds`, `lon_bnds`), from which the model computes the area of the cells of a point or a
   row. The region is part of the setup, applied with **Apply setup**, and the humans per agent in the
   sidebar are then those of the region.
-- **Preview driving files** draws a file as a map (rainfall and temperature by day, population density, age
-  structure) before you apply it, so mismatched grids show up early. **Dots on the map** mark cells whose daily
+- **Preview driving files** draws a file as a map (rainfall and temperature by day, population density) before you apply it, so mismatched grids show up early. **Dots on the map** mark cells whose daily
   values are plotted below the map, one line per dot. There is one dot to start with, near the middle of the data.
   A click on the map moves the highlighted dot; press **Add dot** and click the map to place another (up to 8,
   each in its own colour). The dots are listed with their coordinates: click a row to highlight its dot, and its
   cross to remove it. The dots stay while you switch between files on the same grid. The preview works while a run
   is in progress.
+- **Age structure**, a card of the applied setup: the fitted mortality γ and four figures, as those of
+  `utils/fetch_age.sh`: the weight of each year of age with the fit A·exp(−γ·age); the cumulative weights the model
+  reads, through those of WorldPop's age groups; the mean share of each age group by sex; and, for each age group, the
+  histograms of its share in the people of each 1 km cell (one narrow peak: the same structure everywhere, as the
+  model assumes). *How the age structure is computed* gives the steps.
 
 The settings are remembered for the next session in `~/.config/mobile/last_setup.json`.
 
@@ -98,6 +109,8 @@ The settings are remembered for the next session in `~/.config/mobile/last_setup
   the others are the default ±50%), the tab, the section and the description of each parameter. The tests compare its
   defaults with the Fortran source, so a default changed in the model, or a parameter added to `&CONST`, must be
   added there too. The parameters of the cholera model and of mobility are not shown and keep their default.
+  Under the mortality `mu` (Demography), **Use the fitted mortality** sets it to the γ fitted to the age structure of
+  the setup: with births equal to deaths, the default, a population with mortality γ has an age structure of that slope.
 - **Outputs**: which fields the next run writes. Age-resolved fields give large files. A sensitivity analysis writes
   the same fields, and only these can be analysed afterwards.
 - **Sensitivity analysis (Sobol)**, below: see the next section.

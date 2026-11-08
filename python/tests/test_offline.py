@@ -5,6 +5,7 @@ import json
 import math
 import os
 import re
+import shutil
 import socket
 import tempfile
 import unittest
@@ -537,15 +538,16 @@ class TestSetup(unittest.TestCase):
         self.example = Config.load(CONFIG)
         self.run = dict(self.example.run)
         self.files = {key: value for key, value in self.example.inputs.items()}
+        self.age = self.example.age_structure
 
     def test_fields_give_a_config(self):
         files = {**self.files, "mortality_file": "", "imm_forcing": "  "}
-        config = from_fields(MOBILE, " Study ", "results", self.run, files)
+        config = from_fields(MOBILE, " Study ", "results", self.run, files, age_structure=self.age)
         self.assertEqual(config.project, "Study")
         self.assertEqual(config.runs_dir, (self.folder / "results").resolve())
         self.assertEqual((config.inputs["mortality_file"], config.inputs["imm_forcing"]), ("NONE", "NONE"))
         # Number boxes give floats
-        self.assertEqual(from_fields(MOBILE, "", "runs", {**self.run, "nstep": 365.0}, self.files).run["nstep"], 365)
+        self.assertEqual(from_fields(MOBILE, "", "runs", {**self.run, "nstep": 365.0}, self.files, age_structure=self.age).run["nstep"], 365)
 
     def test_problems_are_listed_with_the_labels_of_the_panel(self):
         with self.assertRaises(ConfigError) as caught:
@@ -556,7 +558,7 @@ class TestSetup(unittest.TestCase):
 
     def test_remembered_between_sessions(self):
         self.assertIsNone(load_setup(MOBILE))
-        config = from_fields(MOBILE, "Study", "runs", self.run, self.files)
+        config = from_fields(MOBILE, "Study", "runs", self.run, self.files, age_structure=self.age)
         save_setup(config)
         self.assertEqual(load_setup(MOBILE), config)
         # Not valid any more, e.g. a file moved: as if there were none
@@ -565,11 +567,15 @@ class TestSetup(unittest.TestCase):
         self.assertIsNone(load_setup(MOBILE))
 
     def test_restored_from_a_run(self):
-        current = from_fields(MOBILE, "Study", "elsewhere", self.run, self.files)
-        manifest = {"run": {**self.run, "nagent": 5000}, "inputs": self.files}
+        current = from_fields(MOBILE, "Study", "elsewhere", self.run, self.files, age_structure=self.age)
+        manifest = {"run": {**self.run, "nagent": 5000}, "inputs": self.files, "age_structure": {**self.age, "year": 2020}}
         restored = from_manifest(manifest, current)
         self.assertEqual(restored.run["nagent"], 5000)
+        self.assertEqual(restored.age_structure["year"], 2020)
         self.assertEqual((restored.project, restored.runs_dir), (current.project, current.runs_dir))
+        # A run made with an age file, before WorldPop was in the GUI, cannot be restored
+        with self.assertRaisesRegex(ConfigError, "age_file is no longer used"):
+            from_manifest({"run": self.run, "inputs": {**self.files, "age_file": str(CONFIG)}}, current)
 
     def test_file_browser(self):
         (self.folder / "sub").mkdir()
@@ -595,7 +601,7 @@ class TestSetup(unittest.TestCase):
 
     def test_results_folder_inside_the_repository(self):
         with self.assertRaises(ConfigError):
-            from_fields(MOBILE, "Study", str(Path(MOBILE) / "runs"), self.run, self.files)
+            from_fields(MOBILE, "Study", str(Path(MOBILE) / "runs"), self.run, self.files, age_structure=self.age)
 
 
 class TestDrivingPreview(unittest.TestCase):
@@ -1616,18 +1622,167 @@ class TestRegion(unittest.TestCase):
         settings.start()
         self.addCleanup(settings.stop)
         files = dict(self.config.inputs)
-        config = from_fields(MOBILE, "Study", "runs", dict(self.config.run), files, self.box)
+        config = from_fields(MOBILE, "Study", "runs", dict(self.config.run), files, self.box, age_structure=self.config.age_structure)
         save_setup(config)
         self.assertEqual(load_setup(MOBILE).region, self.box)
-        manifest = {"run": dict(config.run), "inputs": files, "region": self.box}
+        manifest = {"run": dict(config.run), "inputs": files, "region": self.box, "age_structure": config.age_structure}
         self.assertEqual(from_manifest(manifest, replace(config, region=None)).region, self.box)
         # Runs from before regions and periods have none
-        self.assertIsNone(from_manifest({"run": dict(config.run), "inputs": files}, config).period)
-        self.assertIsNone(from_manifest({"run": dict(config.run), "inputs": files}, config).region)
+        old = {"run": dict(config.run), "inputs": files, "age_structure": config.age_structure}
+        self.assertIsNone(from_manifest(old, config).period)
+        self.assertIsNone(from_manifest(old, config).region)
         written = self.folder / "with_region.yaml"
         written.write_text(CONFIG.read_text().replace("$MOBILE", MOBILE).replace("runs_dir: runs", "runs_dir: runs\nregion: {north: 14.6, west: -17.2, south: 14.0, east: -16.4}"))
         self.assertEqual(Config.load(written).region, self.box)
 
+
+
+def write_raster(path, values, nodata=-99999.0):
+    """A single-band float GeoTIFF as WorldPop's, with its no-data value."""
+    from PIL import Image, TiffImagePlugin
+
+    tags = TiffImagePlugin.ImageFileDirectory_v2()
+    tags[42113] = str(int(nodata))
+    Image.fromarray(np.where(np.isnan(values), nodata, values).astype("float32")).save(path, tiffinfo=tags, compression="tiff_lzw")
+
+
+def exponential_rasters(gamma, shape=(4, 5), hole=(0, 0)):
+    """{(sex, group): people per cell} with the same structure in every cell, that of a population whose density
+    by age decays as exp(-gamma age): the people of a group are its integral, those of 80 and over to infinity."""
+    from mobile.worldpop import AGE_GROUPS, SEXES
+
+    starts = np.array(AGE_GROUPS, dtype="float64")
+    ends = np.append(starts[1:], np.inf)
+    shares = np.exp(-gamma * starts) - np.exp(-gamma * ends)
+    people = np.linspace(100, 1000, np.prod(shape)).reshape(shape)
+    people[hole] = np.nan  # A cell with no data
+    return {(sex, age): people * share * (1.0 if sex == "f" else 0.97) for sex in SEXES for age, share in zip(AGE_GROUPS, shares)}, shares
+
+
+class TestWorldPop(unittest.TestCase):
+    """The age structure from WorldPop: the analysis of utils/fetch_age.sh, the files, the choice and the runs."""
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.folder = Path(folder.name)
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(self.folder)
+        patch = mock.patch.dict(os.environ, {"MOBILE_CONFIG_DIR": str(self.folder / "settings")})
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_packaged_example_as_fetch_age(self):
+        from mobile.worldpop import age_file_text, cached_summary, fitted_mortality
+
+        # tests/data/fetch_age_SEN_2015.txt: the cumm_age.txt of the Python of utils/fetch_age.sh, run unchanged on
+        # the NetCDF files it made of WorldPop R2025A, Senegal 2015; it printed "Fitted mortality = 0.0337 / year"
+        summary = cached_summary("R2025A", "SEN", 2015)
+        reference = (Path(__file__).parent / "data" / "fetch_age_SEN_2015.txt").read_text().split()
+        self.assertEqual(age_file_text(summary).split(), reference)
+        self.assertEqual(f"{fitted_mortality(summary):.4f}", "0.0337")
+
+    def test_analysis_of_a_known_structure(self):
+        from mobile.worldpop import analyse
+
+        rasters, shares = exponential_rasters(0.03)
+        summary = analyse(rasters)
+        # The same structure in every cell: the mean shares are the shares, every cell in one bin of the histogram
+        for sex in ("f", "m"):
+            self.assertTrue(np.allclose(summary["mean_share"][sex], shares, rtol=1e-12))
+            self.assertTrue(all(sum(1 for count in counts if count) == 1 for counts in summary["histogram"][sex]))
+        self.assertEqual(summary["cells"], 19)  # 20 cells, one with no data
+        # The weights go through the cumulative shares at the end of each group, 80 and over left out, and never fall
+        weights = np.array(summary["weights"])
+        self.assertTrue(np.allclose(weights[summary["group_ends"]], np.cumsum(shares[:-1]), rtol=1e-12))
+        self.assertTrue(np.all(np.diff(weights) > 0))
+        self.assertLess(abs(weights[-1] - (1 - shares[-1])), 1e-12)
+        # The fit gives back the decay rate (the interpolation between group ends costs a little)
+        self.assertLess(abs(summary["fit"]["gamma"] / 0.03 - 1), 0.02)
+        # Control: another decay rate is told apart
+        self.assertGreater(abs(analyse(exponential_rasters(0.04)[0])["fit"]["gamma"] / 0.03 - 1), 0.2)
+
+    def test_rasters_are_read_with_their_no_data(self):
+        from mobile.worldpop import read_raster
+
+        values = np.array([[1.5, np.nan], [2.0, 3.25]])
+        write_raster(self.folder / "a.tif", values)
+        read = read_raster(self.folder / "a.tif")
+        self.assertTrue(np.array_equal(read, values, equal_nan=True))
+
+    def test_downloaded_once_then_kept(self):
+        import mobile.worldpop as worldpop
+
+        rasters, _ = exponential_rasters(0.03)
+        source = self.folder / "server"
+        source.mkdir()
+        for (sex, age), values in rasters.items():
+            write_raster(source / f"{sex}_{age:02d}.tif", values)
+        product = {"label": "Test", "years": (2015, 2030), "source": "", "url": f"file://{source}/{{sex}}_{{age}}.tif"}
+        with mock.patch.dict(worldpop.PRODUCTS, {"TEST": product}):
+            calls = []
+            summary = worldpop.prepare("TEST", "SEN", 2020, progress=lambda done, total: calls.append((done, total)))
+            self.assertEqual(calls[-1], (36, 36))
+            self.assertTrue(np.allclose(summary["weights"], worldpop.analyse(rasters)["weights"], rtol=1e-6))
+            self.assertTrue((self.folder / "settings" / "worldpop" / "TEST" / "SEN_2020.json").is_file())
+            # Kept: not downloaded again, even with the source gone
+            shutil.rmtree(source)
+            self.assertEqual(worldpop.prepare("TEST", "SEN", 2020)["weights"], summary["weights"])
+            # Cancelled, or a missing raster: an error, and nothing kept
+            with self.assertRaisesRegex(worldpop.WorldPopError, "cancelled"):
+                worldpop.prepare("TEST", "SEN", 2021, cancelled=lambda: True)
+            with self.assertRaisesRegex(worldpop.WorldPopError, "cannot download"):
+                worldpop.prepare("TEST", "SEN", 2022)
+            self.assertFalse((self.folder / "settings" / "worldpop" / "TEST" / "SEN_2022.json").exists())
+
+    def test_choice(self):
+        from mobile.worldpop import COUNTRIES, choice_problems, default_year
+
+        self.assertEqual([default_year(year) for year in (2008, 2015, 2021, 2035)], [2015, 2015, 2021, 2030])
+        from mobile.setup_ui import year_choices
+        from mobile.worldpop import year_label
+
+        self.assertEqual([year_label(year) for year in (2024, 2025, 2030)], ["2024", "2025 (projection)", "2030 (projection)"])
+        menu = year_choices("R2025A")
+        self.assertEqual((list(menu["Estimates"])[0], list(menu["Estimates"])[-1]), ("2015", "2024"))
+        self.assertEqual(list(menu["Projections"].values()), [f"{year} (projection)" for year in range(2025, 2031)])
+        self.assertEqual(len(COUNTRIES), 47)  # Sub-Saharan Africa, without Eritrea (rasters of about 430 MB a year)
+        self.assertNotIn("ERI", COUNTRIES)
+        self.assertEqual(choice_problems({"product": "R2025A", "country": "SEN"}), [])
+        self.assertEqual(choice_problems({"product": "R2025A", "country": "KEN", "year": 2030}), [])
+        for wrong in ({"product": "R2025A", "country": "FRA"}, {"product": "X", "country": "SEN"},
+                      {"product": "R2025A", "country": "SEN", "year": 2031}, {"country": "SEN"}):
+            self.assertTrue(choice_problems(wrong), wrong)
+
+    def test_config_and_run_folder(self):
+        from mobile.worldpop import age_file_text, cached_summary
+
+        config = replace(Config.load(CONFIG), runs_dir=self.folder / "runs")
+        self.assertEqual(config.age_choice(), {"product": "R2025A", "country": "SEN", "year": 2015})  # Rain from 2012
+        self.assertEqual(replace(config, period={"start": "2014-01-01", "end": "2014-12-31"}).age_choice()["year"], 2015)
+        self.assertEqual(replace(config, age_structure={**config.age_structure, "year": 2020}).age_choice()["year"], 2020)
+        run_dir = create_run_dir(config, name="age")
+        written = (run_dir / "age_structure" / "cumm_age.txt").read_text()
+        self.assertEqual(written, age_file_text(cached_summary("R2025A", "SEN", 2015)))
+        with self.assertRaisesRegex(ConfigError, "age_file is no longer used"):
+            replace(config, inputs={**config.inputs, "age_file": str(CONFIG)}).validate()
+        with self.assertRaisesRegex(ConfigError, "age_structure: missing"):
+            replace(config, age_structure=None).validate()
+        with self.assertRaisesRegex(ConfigError, "no country"):
+            replace(config, age_structure={"product": "R2025A", "country": "ERI"}).validate()
+
+    def test_figures(self):
+        from mobile.plots import age_cumulative_figure, age_fit_figure, age_heterogeneity_figure, age_sex_figure
+        from mobile.worldpop import cached_summary
+
+        summary = cached_summary("R2025A", "SEN", 2015)
+        for draw in (age_cumulative_figure, age_fit_figure, age_heterogeneity_figure, age_sex_figure):
+            figure = draw(summary, "Senegal 2015")
+            self.assertTrue(figure.data, draw.__name__)
+        fit = age_fit_figure(summary, "Senegal 2015")
+        self.assertIn("γ = 0.0337", fit.data[1].name)
+        self.assertNotIn("61", " ".join(trace.name or "" for trace in fit.data))  # No literature reference
+        self.assertEqual(len(age_heterogeneity_figure(summary, "").data), 36)
 
 if __name__ == "__main__":
     unittest.main()

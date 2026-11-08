@@ -12,7 +12,7 @@ from shiny import App, reactive, render, run_app, ui
 
 from .basemap import load_basemap, load_terrain
 from .config import ConfigError
-from .driving import climatology, field_limits, open_field, read_age
+from .driving import climatology, field_limits, open_field
 from .cells import CellSizeError
 from .grid import extent_key, load_grid, mask_like, read_grid
 from .layout import (
@@ -22,7 +22,7 @@ from .layout import (
 from .outcome import RunState, load_outcome, run_label, run_model, run_name_problem
 from .parameters import shown_parameters, slider_start, to_model, to_shown
 from .plots import (
-    BOX, COLOUR_MAPS, LAND, age_figure, cell_figure, envelope_figure, grid_figure, map_figure, message_figure,
+    BOX, COLOUR_MAPS, LAND, age_cumulative_figure, age_fit_figure, age_heterogeneity_figure, age_sex_figure, cell_figure, envelope_figure, grid_figure, map_figure, message_figure,
     MAX_DOTS, DOT_COLOURS, add_dot, default_dot, dot_label, move_dot, next_cells, remove_dot, send_figure, sig,
 )
 from .checks import driving_days, driving_problems
@@ -39,8 +39,9 @@ from .setup import (
 )
 from .setup_ui import (
     DAILY_FILES, EXAMPLE_FOLDER, PREVIEW_FILES, PREVIEW_STYLE, REGION_BOXES, REGION_LAYERS, REGION_MONTHS, SUFFIX_NAMES, available_model, example_note_box, region_values,
-    period_values, setup_problems, setup_tab, setup_value,
+    AUTO_YEAR, age_values, period_values, setup_problems, setup_tab, setup_value, year_choices,
 )
+from .worldpop import COUNTRIES, PRODUCTS, WorldPopError, cached_summary, default_year, describe, fitted_mortality, prepare, year_label
 from .variables import (
     AGE_KEY, age_choices, age_groups, preferred_variable, resolve_variable, variable_choices,
 )
@@ -515,6 +516,10 @@ def create_app(config):
             for key, _, _ in (*REQUIRED_FILES, *OPTIONAL_FILES):
                 ui.update_text(f"setup_{key}", value=setup_value(config, key))
             ui.update_select("setup_disID", selected=str(config.run["disID"]))
+            product, country, year = age_values(config)
+            ui.update_select("setup_age_product", selected=product)
+            ui.update_select("setup_age_country", selected=country)
+            ui.update_select("setup_age_year", choices=year_choices(product), selected=year)
             values = period_values(config)
             if values is not None:
                 first, last, start, end = values
@@ -558,7 +563,8 @@ def create_app(config):
             files = {key: input[f"setup_{key}"]() for key, _, _ in (*REQUIRED_FILES, *OPTIONAL_FILES)}
             files["counterfactual"] = 1 if input.setup_counterfactual() else 0
             try:
-                new = from_fields(setup().mobile, input.setup_project(), input.setup_runs_dir(), run, files, typed_region(), period)
+                new = from_fields(setup().mobile, input.setup_project(), input.setup_runs_dir(), run, files, typed_region(), period,
+                                  typed_age())
             except ConfigError as error:
                 setup_problem.set(setup_problems(error))
                 return
@@ -593,9 +599,154 @@ def create_app(config):
                 finish_apply(new)
 
         def finish_apply(new):
+            choice = new.age_choice()
+            if cached_summary(**choice) is None:
+                # Downloaded and analysed once, before the setup is applied
+                age_progress.update(done=0, total=0, cancelled=False)
+                age_pending.set(new)
+                age_task.invoke(choice)
+                ui.modal_show(ui.modal(
+                    ui.p(f"The age structure of {COUNTRIES[choice['country']]} {year_label(choice['year'], choice['product'])} is downloaded from WorldPop and "
+                         "analysed, once: from a few to a few hundred megabytes, depending on the country. The setup is applied when it is done."),
+                    ui.output_ui("age_download_status"),
+                    title="Age structure from WorldPop",
+                    footer=ui.input_action_button("age_download_cancel", "Cancel", class_="btn-outline-secondary"),
+                    easy_close=False,
+                ))
+                return
             adopt(new)
             ui.notification_show("Setup applied.", type="message", duration=3)
             ui.update_navs("tab", selected="parameters")
+
+        # The download and analysis of an age structure: {done, total} rasters and whether it was cancelled,
+        # written by the thread of the task and read by the page
+        age_progress = {"done": 0, "total": 0, "cancelled": False}
+        age_pending = reactive.value(None)  # The setup applied once its age structure is ready
+
+        def prepare_age(choice):
+            try:
+                return prepare(**choice, progress=lambda done, total: age_progress.update(done=done, total=total),
+                               cancelled=lambda: age_progress["cancelled"]), None
+            except (WorldPopError, OSError, ValueError, RuntimeError) as error:
+                return None, str(error)
+
+        @reactive.extended_task
+        async def age_task(choice):
+            return await asyncio.to_thread(prepare_age, choice)
+
+        @render.ui
+        def age_download_status():
+            if age_task.status() == "running":
+                reactive.invalidate_later(0.5)
+            done, total = age_progress["done"], age_progress["total"]
+            return ui.p(f"Rasters downloaded and read: {done} of {total or 36}.", class_="mb-0")
+
+        @reactive.effect
+        @reactive.event(input.age_download_cancel)
+        def cancel_age_download():
+            age_progress["cancelled"] = True
+
+        @reactive.effect
+        def age_downloaded():
+            if age_task.status() not in ("success", "error"):
+                return
+            with reactive.isolate():
+                new = age_pending()
+                if new is None:
+                    return
+                age_pending.set(None)
+                ui.modal_remove()
+                summary, problem = age_task.result() if age_task.status() == "success" else (None, "the download failed")
+                if summary is None:
+                    if not age_progress["cancelled"]:
+                        setup_problem.set([f"Age structure: {problem}"])
+                    return
+                adopt(new)
+                ui.notification_show("Setup applied.", type="message", duration=3)
+                ui.update_navs("tab", selected="parameters")
+
+        def typed_age():
+            """The age structure in the menus of the Setup tab, {product, country, year}; year None for the default."""
+            year = input.setup_age_year()
+            return {"product": input.setup_age_product(), "country": input.setup_age_country(),
+                    "year": None if year in (None, "", AUTO_YEAR) else int(year)}
+
+        def typed_age_year():
+            """The year the menus give: that chosen, or that of the product closest to the start of the typed period."""
+            choice = typed_age()
+            if choice["year"] is not None:
+                return choice["year"]
+            typed = typed_days()
+            return default_year(typed[0].year if typed is not None else 0, choice["product"])
+
+        @render.ui
+        def age_source():
+            product = PRODUCTS.get(input.setup_age_product())
+            if product is None:
+                return None
+            return ui.p("Source: ", ui.tags.a(product["source"], href=product["source"], target="_blank", rel="noopener"),
+                        class_="small text-muted mb-2")
+
+        @render.ui
+        def age_status():
+            choice = typed_age()
+            year = typed_age_year()
+            name = f"{COUNTRIES.get(choice['country'], choice['country'])} {year_label(year, choice['product'])}"
+            if cached_summary(choice["product"], choice["country"], year) is not None:
+                return ui.p(f"{name}: ready.", class_="small text-muted mb-0")
+            return ui.p(f"{name}: not downloaded yet; it is downloaded from WorldPop and analysed with Apply setup, once.",
+                        class_="small text-muted mb-0")
+
+        @reactive.calc
+        def age_summary():
+            """The age structure of the applied setup, or None if it is not ready."""
+            try:
+                return cached_summary(**setup().age_choice())
+            except (OSError, ValueError, KeyError, TypeError):
+                return None
+
+        @render.ui
+        def age_card_summary():
+            summary = age_summary()
+            if summary is None:
+                return ui.p("The age structure of the setup is not ready: press Apply setup.", class_="small text-muted")
+            people = summary["people"]["f"] + summary["people"]["m"]
+            return ui.p(f"{describe(summary)}: {people:,.0f} people in {summary['cells']:,} cells of 1 km. Fitted mortality "
+                        f"γ = {fitted_mortality(summary):.4f} per year (mean age of the fit {1 / fitted_mortality(summary):.1f} years).",
+                        class_="small mb-2")
+
+        @reactive.effect
+        async def draw_age_plot():
+            summary = age_summary()
+            figure_key = input.age_figure()
+            plot = "age_heterogeneity_plot" if figure_key == "age_heterogeneity" else "age_plot"
+            if summary is None:
+                await send_figure(session, plot, message_figure("Press Apply setup to get the age structure."))
+                return
+            draw = {"age_fit": age_fit_figure, "age_cumulative": age_cumulative_figure, "age_sexes": age_sex_figure,
+                    "age_heterogeneity": age_heterogeneity_figure}[figure_key]
+            await send_figure(session, plot, draw(summary, describe(summary)))
+
+        @render.ui
+        def fitted_mortality_button():
+            summary = age_summary()
+            if summary is None:
+                return None
+            return ui.input_action_button(
+                "use_fitted_mortality", f"Use the fitted mortality: {fitted_mortality(summary):.4f} per year ({describe(summary)})",
+                class_="btn-sm btn-outline-primary mb-3",
+            )
+
+        @reactive.effect
+        @reactive.event(input.use_fitted_mortality)
+        def use_fitted_mortality():
+            summary = age_summary()
+            if summary is None:
+                return
+            gamma = round(fitted_mortality(summary), 4)
+            spec = shown_parameters()["mu"]
+            # A fit outside the range of the slider widens it
+            ui.update_slider("param_mu", value=gamma, min=min(spec["min"], gamma), max=max(spec["max"], gamma))
 
         @reactive.calc
         def driving_span():
@@ -1253,7 +1404,7 @@ def create_app(config):
                 return key, None, None, f"No {PREVIEW_FILES[key].lower()} file in the box above."
             path = typed_path(typed)
             try:
-                data = read_age(path) if key == "age_file" else open_field(path, key)
+                data = open_field(path, key)
             except (OSError, ValueError, KeyError, StopIteration, TypeError, RuntimeError) as error:
                 return key, path, None, f"Cannot read {path}: {error or type(error).__name__}"
             return key, path, data, None
@@ -1361,9 +1512,6 @@ def create_app(config):
             key, path, data, problem = preview_data()
             if problem:
                 await send_figure(session, "preview_map", message_figure(problem))
-                return
-            if key == "age_file":
-                await send_figure(session, "preview_map", age_figure(*data, path.name))
                 return
             day = min(input.preview_day(), data.sizes.get("time", 1))
             figure = map_figure(

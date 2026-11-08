@@ -152,6 +152,15 @@ def list_runs(runs_dir, pop_file=None):
     return dict(sorted(runs.items(), key=lambda item: item[1].get("date", ""), reverse=True))
 
 
+def age_record(config, run_dir):
+    """The age structure of a run: its WorldPop product, country and year, and the weights the model read."""
+    try:
+        weights = [float(value) for value in (Path(run_dir) / "age_structure" / "cumm_age.txt").read_text().split()]
+    except OSError:
+        weights = None
+    return {**config.age_choice(), "weights": weights}
+
+
 def write_manifest(config, result):
     """Record what is needed to compare or repeat the run (see "Comparing runs" in MoBILE's LLM.md)."""
     mobile = config.mobile
@@ -169,6 +178,8 @@ def write_manifest(config, result):
         "inputs": config.inputs,
         "region": config.region,
         "period": config.period,
+        "age_structure": config.age_structure,
+        "age_used": age_record(config, result.run_dir),
         "param_overrides": config.params,
         "params": config.final_params(),
         "output": list(config.output) if config.output is not None else None,

@@ -21,4 +21,7 @@ inputs:
   rain_file: $MOBILE/utils/test_run/rain.nc
   temp_file: $MOBILE/utils/test_run/t2m.nc
   pop_file: $MOBILE/utils/test_run/pop.nc
-  age_file: $MOBILE/utils/test_run/age_structure/cumm_age.txt
+
+# The age structure of the agents, from WorldPop: the country and, optionally, the year (else that of the
+# product closest to the first year simulated). It is downloaded and analysed once, then kept.
+age_structure: {product: R2025A, country: SEN}

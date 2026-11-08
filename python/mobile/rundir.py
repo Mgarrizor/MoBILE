@@ -3,7 +3,6 @@
 import datetime
 import re
 import secrets
-import shutil
 from pathlib import Path
 
 from .checks import driving_days
@@ -11,6 +10,7 @@ from .config import MAX_PATH_LENGTH, ConfigError
 from .grid import pop_coordinates
 from .period import day_range, period_days
 from .region import cut_inputs
+from .worldpop import age_file_text, prepare
 
 OUTPUT_NAME = "output"
 INPUTS_NAME = "inputs"  # The driving files cut to the region of a run
@@ -61,7 +61,9 @@ def create_run_dir(config, name=None):
     run_dir = Path(config.runs_dir) / (name or new_run_id())
     (run_dir / "age_structure").mkdir(parents=True)
 
-    shutil.copy(config.inputs["age_file"], run_dir / "age_structure" / "cumm_age.txt")
+    # Downloaded and analysed the first time a product, country and year is used (worldpop.py), then kept
+    age = prepare(**config.age_choice())
+    (run_dir / "age_structure" / "cumm_age.txt").write_text(age_file_text(age))
     params = "".join(f"{key}={value},\n" for key, value in config.final_params().items())
     (run_dir / "params.txt").write_text(params)
 

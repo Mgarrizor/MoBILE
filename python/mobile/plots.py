@@ -398,6 +398,113 @@ def age_figure(ages, fraction, cumulative, name):
     return figure
 
 
+SEX_COLOURS = {"f": "#e34948", "m": "#2a78d6"}  # Female, male: the first two categorical colours
+SEX_NAMES = {"f": "Female", "m": "Male"}
+
+
+def age_group_label(groups, index):
+    """'Under 1', '1-4', ..., '80 and over' for the age groups of WorldPop, which start at the ages in groups."""
+    if index == 0:
+        return "Under 1"
+    if index == len(groups) - 1:
+        return f"{groups[index]} and over"
+    return f"{groups[index]}-{groups[index + 1] - 1}"
+
+
+def _plain_axes(figure, x_title, y_title, y_log=False):
+    figure.update_layout(plot_bgcolor="white", margin={"l": 70, "r": 30, "t": 44, "b": 50},
+                         legend={"x": 0.98, "xanchor": "right", "y": 0.98, "bgcolor": "rgba(255,255,255,0.8)",
+                                 "bordercolor": GRID, "borderwidth": 1})
+    figure.update_xaxes(title_text=x_title, gridcolor=GRID, tickfont={"size": AXIS_FONT})
+    figure.update_yaxes(title_text=y_title, gridcolor=GRID, tickfont={"size": AXIS_FONT}, type="log" if y_log else "linear")
+    return figure
+
+
+def age_heterogeneity_figure(summary, name):
+    """For each age group and sex, how many 1 km cells have each share of the group in their people: one
+    narrow peak means the same age structure everywhere, the assumption of the model."""
+    groups = summary["age_groups"]
+    edges = np.asarray(summary["histogram"]["edges"])
+    middles = (edges[1:] + edges[:-1]) / 2
+    figure = make_subplots(rows=6, cols=3, shared_xaxes=True, shared_yaxes=True, vertical_spacing=0.04,
+                           horizontal_spacing=0.03, subplot_titles=[age_group_label(groups, i) for i in range(len(groups))])
+    for i in range(len(groups)):
+        row, col = i // 3 + 1, i % 3 + 1
+        for sex in ("f", "m"):
+            figure.add_trace(go.Bar(
+                x=middles, y=summary["histogram"][sex][i], width=(edges[1] - edges[0]) * 0.45,
+                offset=(-0.45 if sex == "f" else 0.0) * (edges[1] - edges[0]), marker={"color": SEX_COLOURS[sex]},
+                name=SEX_NAMES[sex], legendgroup=sex, showlegend=i == 0,
+                hovertemplate=f"{SEX_NAMES[sex]}, {age_group_label(groups, i)}: share %{{x:.3f}}, %{{y}} cells<extra></extra>",
+            ), row=row, col=col)
+    figure.update_layout(_base_layout(title=f"Spatial heterogeneity: {name}"), plot_bgcolor="white", bargap=0,
+                         margin={"l": 70, "r": 30, "t": 70, "b": 50},
+                         legend={"orientation": "h", "x": 1, "xanchor": "right", "y": 1.04, "yanchor": "bottom"})
+    figure.update_xaxes(range=list(edges[[0, -1]]), gridcolor=GRID)
+    figure.update_yaxes(type="log", gridcolor=GRID)
+    figure.update_xaxes(title_text="Share of the age group in the people of a cell", row=6, col=2)
+    figure.update_yaxes(title_text="Cells", row=3, col=1)
+    figure.update_annotations(font={"size": 12})
+    return figure
+
+
+def age_sex_figure(summary, name):
+    """The mean share of each age group in the people of a cell, female and male: the two are averaged for the model."""
+    groups = summary["age_groups"]
+    ends = summary["group_ends"]
+    figure = go.Figure(layout=_base_layout(title=f"Sex structure: {name}"))
+    for sex in ("f", "m"):
+        shares = summary["mean_share"][sex][:-1]  # 80 and over is left out, as for the model
+        figure.add_trace(go.Scatter(
+            x=ends, y=shares, mode="lines+markers", line={"color": SEX_COLOURS[sex], "width": 2}, marker={"size": 8},
+            name=SEX_NAMES[sex], customdata=[age_group_label(groups, i) for i in range(len(shares))],
+            hovertemplate=f"{SEX_NAMES[sex]}, %{{customdata}}: %{{y:.4f}}<extra></extra>",
+        ))
+    return _plain_axes(figure, "Age [year], at the end of each age group", "Mean share of the people of a cell")
+
+
+def age_cumulative_figure(summary, name):
+    """The cumulative weights by year of age that the model reads, interpolated through those of WorldPop's age groups."""
+    figure = go.Figure(layout=_base_layout(title=f"Cumulative weights: {name}"))
+    figure.add_trace(go.Scatter(
+        x=summary["ages"], y=summary["weights"], mode="lines+markers", line={"color": AGE_CUMULATIVE, "width": 2},
+        marker={"size": 4}, name="Interpolated (PCHIP), read by the model",
+        hovertemplate="Age %{x} or under: %{y:.4f}<extra></extra>",
+    ))
+    figure.add_trace(go.Scatter(
+        x=summary["group_ends"], y=summary["cumulative_groups"], mode="markers",
+        marker={"color": AGE_FRACTION, "size": 10, "line": {"color": "white", "width": 2}}, name="WorldPop age groups",
+        hovertemplate="Age %{x} or under: %{y:.4f}<extra></extra>",
+    ))
+    figure = _plain_axes(figure, "Age [year]", "Cumulative weight (log scale)", y_log=True)
+    # The curve rises to the top right corner: the legend goes in the empty bottom right
+    figure.update_layout(legend={"x": 0.98, "xanchor": "right", "y": 0.04, "yanchor": "bottom"})
+    return figure
+
+
+def age_fit_figure(summary, name):
+    """The weight of each year of age with the exponential decay fitted to it, A exp(-γ age), and its mean age 1/γ."""
+    ages = np.asarray(summary["ages"], dtype="float64")
+    fit = summary["fit"]
+    gamma, amplitude = fit["gamma"], fit["amplitude"]
+    figure = go.Figure(layout=_base_layout(title=f"Age structure and fitted mortality: {name}"))
+    figure.add_trace(go.Scatter(
+        x=ages, y=summary["density"], mode="lines+markers", line={"color": AGE_FRACTION, "width": 2}, marker={"size": 5},
+        name="Weight by year of age (WorldPop, interpolated)", hovertemplate="Age %{x}: %{y:.4f}<extra></extra>",
+    ))
+    figure.add_trace(go.Scatter(
+        x=ages, y=amplitude * np.exp(-gamma * ages), mode="lines", line={"color": TEXT, "width": 2, "dash": "dash"},
+        name=f"Fit A·exp(−γ·age): γ = {gamma:.4f} ± {fit['gamma_error']:.4f} per year",
+        hovertemplate="Age %{x}: %{y:.4f}<extra></extra>",
+    ))
+    mean = 1.0 / gamma
+    figure.add_trace(go.Scatter(
+        x=[mean], y=[amplitude * np.exp(-gamma * mean)], mode="markers", marker={"color": AMBER, "size": 10},
+        name=f"Mean age of the fit, 1/γ = {mean:.1f} years", hovertemplate=f"1/γ = {mean:.1f} years<extra></extra>",
+    ))
+    return _plain_axes(figure, "Age [year]", "Weight of the year of age")
+
+
 def message_figure(text):
     figure = go.Figure(layout=_base_layout())
     figure.update_layout(
