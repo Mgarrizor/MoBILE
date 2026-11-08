@@ -102,9 +102,10 @@ def setup_tab(config):
         _age_inputs(config),
         ui.accordion(
             ui.accordion_panel(
-                "Optional files",
+                ui.TagList("Optional files ", ui.tags.span("(Beta release - do not use)", class_="text-danger ms-1")),
                 *[_path_input(f"setup_{key}", label, setup_value(config, key), kind) for key, label, kind in OPTIONAL_FILES],
                 ui.input_switch("setup_counterfactual", "Counterfactual demography", value=config.inputs.get("counterfactual") == 1),
+                value="optional_files",
             ),
             open=False,
         ),
