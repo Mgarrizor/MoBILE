@@ -30,9 +30,10 @@ USE, INTRINSIC :: ISO_C_BINDING
 
     type malaria
         integer :: status   ! S=1, E= 2, I=3, A=4, R=5 Susceptible-Exposed-Infected-Asymptomatic-Recovered (SEIAR)
-        real    :: EIR_att  ! Entomological inoculation rate
-        real    :: P1_att   ! Probability of receiving at least one infective bite today
-        real    :: hbr_att  ! Human biting rate
+        ! Default 0: agents_diagnostics sums these on day 0, before transmission first sets them
+        real    :: EIR_att = 0.  ! Entomological inoculation rate
+        real    :: P1_att = 0.   ! Probability of receiving at least one infective bite today
+        real    :: hbr_att = 0.  ! Human biting rate
         real    :: imm      ! Immunity level [0,1]
         logical :: mat_im   ! Maternal immunity 
        ! real    :: par_load ! Parasite load [Gametocytes/microLiter] 

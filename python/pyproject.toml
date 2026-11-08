@@ -1,6 +1,6 @@
 [project]
 name = "mobile"
-version = "0.1.0"
+version = "1.2.0"
 description = "Python wrapper and local interface for running MoBILE"
 requires-python = ">=3.11"
 dependencies = [
