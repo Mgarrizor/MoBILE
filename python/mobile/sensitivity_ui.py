@@ -237,7 +237,6 @@ def _results_section():
 
 
 def sensitivity_card():
-    strong = ui.tags.strong
     return ui.card(
         ui.tags.style(SA_STYLE),
         ui.card_header("Sensitivity analysis (Sobol)"),

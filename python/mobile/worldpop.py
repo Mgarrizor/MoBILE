@@ -8,7 +8,6 @@ with MoBILE is in the package, so that it runs without a connection.
 """
 
 import json
-import math
 import shutil
 import tempfile
 import urllib.error
@@ -139,19 +138,6 @@ def raster_urls(product, country, year):
     template, code = PRODUCTS[product]["url"], PRODUCTS[product]["age_code"]
     return {(sex, age): template.format(year=year, iso=country, iso_lower=country.lower(), sex=sex, age=code.format(age))
             for sex in SEXES for age in AGE_GROUPS}
-
-
-def download_size(product, country, year, timeout=30):
-    """Total size in bytes of the rasters, from the server, without downloading them. Raises WorldPopError."""
-    total = 0
-    for url in raster_urls(product, country, year).values():
-        request = urllib.request.Request(url, method="HEAD")
-        try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                total += int(response.headers.get("Content-Length", 0))
-        except (urllib.error.URLError, OSError) as error:
-            raise WorldPopError(f"WorldPop has no {COUNTRIES[country]} {year} in {product}, or cannot be reached: {error}") from None
-    return total
 
 
 def read_raster(path):
@@ -292,6 +278,3 @@ def describe(summary):
     year = year_label(summary["year"], summary["product"]) if summary["product"] in PRODUCTS else summary["year"]
     return f"{COUNTRIES.get(summary['country'], summary['country'])} {year} (WorldPop {summary['product']})"
 
-
-def is_finite_summary(summary):
-    return all(math.isfinite(value) for value in summary["weights"])

@@ -9,7 +9,6 @@ import xarray as xr
 from plotly.subplots import make_subplots
 
 from .basemap import PADDING_DEGREES, cell_size
-from .driving import mean_age
 from .grid import mask_like
 
 
@@ -357,45 +356,6 @@ def envelope_figure(fields, seeds, description, cells):
 
 AGE_FRACTION = "#4682b4"  # As in the figures of fetch_age.sh
 AGE_CUMULATIVE = "#e34948"
-
-
-def age_figure(ages, fraction, cumulative, name):
-    """The fraction of the population at each year of age, with its mean, and on the right axis the
-    cumulative fraction the model reads, on a log scale: the figures of fetch_age.sh in one."""
-    mean = mean_age(ages, fraction)
-    at_mean = float(np.interp(mean, ages, fraction))
-    figure = go.Figure(layout=_base_layout(title=f"Age structure: {name}"))
-    figure.add_trace(go.Scatter(
-        x=ages, y=fraction, mode="lines+markers", line={"color": AGE_FRACTION, "width": 2}, marker={"size": 5},
-        name="Fraction by year of age (left axis)", hovertemplate="Age %{x}: %{y:.4f}<extra></extra>",
-    ))
-    figure.add_trace(go.Scatter(
-        x=[mean, mean], y=[0, at_mean], mode="lines", line={"color": AMBER, "width": 1}, opacity=0.6,
-        showlegend=False, hoverinfo="skip",
-    ))
-    figure.add_trace(go.Scatter(
-        x=[mean], y=[at_mean], mode="markers", marker={"color": AMBER, "size": 10}, name=f"Mean age: {mean:.1f} years",
-        hovertemplate=f"Mean age: {mean:.1f} years<extra></extra>",
-    ))
-    figure.add_trace(go.Scatter(
-        x=ages, y=cumulative, yaxis="y2", mode="lines+markers", line={"color": AGE_CUMULATIVE, "width": 2, "dash": "dot"},
-        marker={"size": 4}, name="Cumulative fraction (right axis)", hovertemplate="Age %{x} or under: %{y:.4f}<extra></extra>",
-    ))
-    # Ticks at 1, 2 and 5 of each power of 10 covered: plotly labels a short log axis poorly
-    positive = cumulative[cumulative > 0]
-    ticks = [m * 10.0**p for p in range(int(np.floor(np.log10(positive.min()))), 1) for m in (1, 2, 5)]
-    ticks = [tick for tick in ticks if tick <= positive.max() * 1.5]  # Those outside the range are not drawn
-    figure.update_layout(
-        plot_bgcolor="white",
-        margin={"l": 70, "r": 70, "t": 44, "b": 50},
-        legend={"x": 0.98, "xanchor": "right", "y": 0.5, "yanchor": "middle", "bgcolor": "rgba(255,255,255,0.8)", "bordercolor": GRID, "borderwidth": 1},
-        xaxis={"title_text": "Age [year]", "gridcolor": GRID, "tickfont": {"size": AXIS_FONT}},
-        yaxis={"title_text": "Fraction of the population", "gridcolor": GRID, "rangemode": "tozero", "tickfont": {"size": AXIS_FONT}},
-        yaxis2={"title_text": "Cumulative fraction (log scale)", "overlaying": "y", "side": "right", "type": "log",
-                "showgrid": False, "tickfont": {"size": AXIS_FONT}, "tickvals": ticks, "ticktext": [f"{tick:g}" for tick in ticks]},
-        meta={"view": "age"},
-    )
-    return figure
 
 
 SEX_COLOURS = {"f": "#e34948", "m": "#2a78d6"}  # Female, male: the first two categorical colours
