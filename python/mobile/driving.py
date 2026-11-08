@@ -83,16 +83,6 @@ def field_limits(field, log=False):
     return lowest, highest
 
 
-def read_age(path):
-    """(ages, fraction of the population at each year of age, cumulative fraction) of a cumulative age
-    file, as made by fetch_age.sh: one value per year of age from 0."""
-    cumulative = np.loadtxt(path, ndmin=1, dtype="float64")
-    if cumulative.ndim != 1 or cumulative.size < 2:
-        raise ValueError("expected one value per line, for at least two years of age")
-    fraction = np.insert(np.diff(cumulative), 0, cumulative[0])
-    return np.arange(cumulative.size), fraction, cumulative
-
-
 def mean_age(ages, fraction):
     """Mean age in years, the people at a year of age being on average half a year older."""
     return float(np.sum((ages + 0.5) * fraction) / np.sum(fraction))

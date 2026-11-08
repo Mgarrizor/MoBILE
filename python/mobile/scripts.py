@@ -196,7 +196,7 @@ function themeLayout(layout, plain) {
   layout.font = {...(layout.font || {}), color: colours.text};
   if (plain) layout.plot_bgcolor = colours.paper;
   // Every axis, also those of plots side by side (xaxis2, yaxis2...)
-  for (const axis of Object.keys(layout).filter(key => /^[xy]axis\d*$/.test(key))) if (layout[axis]) layout[axis].gridcolor = colours.grid;
+  for (const axis of Object.keys(layout).filter(key => /^[xy]axis\\d*$/.test(key))) if (layout[axis]) layout[axis].gridcolor = colours.grid;
   if (layout.legend) layout.legend.bgcolor = colours.legend;
   (layout.shapes || []).forEach(function(shape) { if (shape.line && isText(shape.line.color)) shape.line.color = colours.text; });
   return layout;
@@ -204,7 +204,7 @@ function themeLayout(layout, plain) {
 // A plot already drawn, when the theme changes
 function themePlot(plot) {
   if (!plot.layout) return;
-  const axes = Object.keys(plot.layout).filter(key => /^[xy]axis\d*$/.test(key));
+  const axes = Object.keys(plot.layout).filter(key => /^[xy]axis\\d*$/.test(key));
   const update = themeLayout({font: plot.layout.font, legend: plot.layout.legend ? {} : undefined,
                               ...Object.fromEntries(axes.map(axis => [axis, {}])),
                               shapes: JSON.parse(JSON.stringify(plot.layout.shapes || []))}, plot.plain);

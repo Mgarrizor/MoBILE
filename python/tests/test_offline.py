@@ -31,13 +31,13 @@ from mobile.app import free_port
 from mobile.layout import OUTPUT_FLAGS, logo_files, publications
 from mobile.outcome import Outcome, RunState, run_label, run_name_problem
 from mobile.plots import (
-    MAX_DOTS, add_dot, age_figure, cell_envelope, climate_figure, colour_values, default_dot, grid_step, index_map_figure,
+    MAX_DOTS, add_dot, cell_envelope, climate_figure, colour_values, default_dot, grid_step, index_map_figure,
     indices_figure, map_figure, monthly_figure, move_dot, next_cells, remove_dot, second_order_figure, units_label,
 )
 from mobile.setup_ui import AVAILABLE_MODEL, MODEL_TO_COME_NOTE, _model_select, available_model, setup_problems
 from mobile.variables import age_choices, age_groups, preferred_variable, resolve_variable, variable_choices
 from mobile.basemap import cell_size, load_basemap
-from mobile.driving import climatology, field_limits, mean_age, open_field, read_age
+from mobile.driving import climatology, field_limits, mean_age, open_field
 from mobile.results import list_runs, load_run, load_seed_band, write_seed_band
 from mobile.setup import (
     create_folder, from_fields, from_manifest, list_folder, load_setup, region_from_fields, region_mode, save_setup,
@@ -648,17 +648,10 @@ class TestDrivingPreview(unittest.TestCase):
         # On a log scale, from the positive values only
         self.assertEqual(field_limits(xr.DataArray([-1.0, 0.0, 0.0, 10.0]), log=True), (10.0, 100.0))
 
-    def test_age_structure(self):
+    def test_mean_age(self):
         import numpy as np
-        ages, fraction, cumulative = read_age(self.example / "age_structure" / "cumm_age.txt")
-        self.assertEqual((ages[0], ages[-1]), (0, len(cumulative) - 1))
-        self.assertAlmostEqual(float(fraction.sum()), float(cumulative[-1]))
-        self.assertEqual(fraction[0], cumulative[0])
         # As many people at each year of age from 0 to 9: a mean of 5 years
         self.assertAlmostEqual(mean_age(np.arange(10), np.full(10, 0.1)), 5.0)
-        figure = age_figure(ages, fraction, cumulative, "cumm_age.txt")
-        self.assertEqual(figure.layout.yaxis2.type, "log")
-        self.assertEqual([trace.yaxis or "y" for trace in figure.data], ["y", "y", "y", "y2"])
 
     def test_driving_maps_are_not_masked(self):
         import numpy as np
