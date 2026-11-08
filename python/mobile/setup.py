@@ -23,6 +23,7 @@ OPTIONAL_FILES = (
 SUFFIXES = {
     "netcdf": (".nc", ".nc4", ".cdf"),
     "text": (".txt", ".csv", ".dat"),
+    "data": (".nc", ".nc4", ".cdf", ".txt", ".csv", ".dat"),  # Observations: the standard netCDF file or a table
     "folder": (),
 }
 SETUP_FILE = "last_setup.json"
@@ -155,13 +156,14 @@ def list_folder(folder, kind):
 
 
 def start_folder(value):
-    """Where the file browser opens: the folder of the path in the box, or the home folder."""
+    """Where the file browser opens: the folder of the path in the box, or else the folder the GUI was started in (from
+    which typed relative paths are read too; the GUI never changes it)."""
     if value and str(value).strip():
         path = typed_path(value)
         for candidate in (path, path.parent):
             if candidate.is_dir():
                 return candidate
-    return Path.home()
+    return Path.cwd()
 
 
 def create_folder(parent, name):

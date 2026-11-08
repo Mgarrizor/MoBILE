@@ -16,7 +16,7 @@ from .driving import climatology, field_limits, open_field
 from .cells import CellSizeError
 from .grid import extent_key, load_grid, mask_like, read_grid
 from .layout import (
-    ANALYSIS_TABS, ASSETS, GUI_OUTPUT, HA_BELOW_ONE, OPTUNA_URL, OUTPUT_FLAGS, funders, help_tab, no_run_yet, output_groups, output_switch_id,
+    ANALYSIS_TABS, ASSETS, GUI_OUTPUT, HA_BELOW_ONE, OUTPUT_FLAGS, funders, help_tab, no_run_yet, output_groups, output_switch_id,
     page_header, page_title, player_controls, slider_grid, slider_tabs, with_tip,
 )
 from .outcome import RunState, load_outcome, run_label, run_model, run_name_problem
@@ -29,6 +29,7 @@ from .checks import driving_days, driving_problems
 from .period import length_text, parse_day, period_days, spin_up_problem
 from .region import region_problems
 from .results import list_runs
+from .calibration_ui import calibration_server, calibration_tab
 from .sensitivity_ui import sensitivity_card, sensitivity_server
 from .scripts import (
     BROWSER_HANDLER, CLOSED_HANDLER, DOTS_HANDLER, PARAMETER_MARKS, PARAMETER_STYLE, PLAYER, PLOT_HANDLER, SIDEBAR_FIT, SLIDER_FORMAT, THEME, PAGE_STYLE,
@@ -172,10 +173,7 @@ def create_app(config):
                 "Analysis (to come)",
                 *[ui.nav_panel(name, ui.p(text, class_="text-muted mt-3")) for name, text in ANALYSIS_TABS],
             ),
-            ui.nav_panel("Calibration (to come)",
-                         ui.p("Calibration of model parameters against observations, with the ", ui.a("Optuna", href=OPTUNA_URL, target="_blank"),
-                              " parameter optimisation suite: to come.", class_="text-muted mt-3"),
-                         value="calibration"),
+            ui.nav_panel("Calibration (in development)", calibration_tab(), value="calibration"),
             ui.nav_panel("Help", help_tab(), value="help"),
             id="tab",
             selected="setup",
@@ -1067,6 +1065,8 @@ def create_app(config):
                 open_browser(field, kind)
 
         browse_button("setup_runs_dir", "folder")
+        browse_button("cal_data_file", "data")
+        calibration_server(input, output, session, setup)
         for key, _, kind in (*REQUIRED_FILES, *OPTIONAL_FILES):
             browse_button(f"setup_{key}", kind)
 

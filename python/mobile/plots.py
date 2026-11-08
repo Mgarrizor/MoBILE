@@ -4,6 +4,7 @@ import json
 import re
 
 import numpy as np
+import pandas as pd
 import plotly.graph_objects as go
 import xarray as xr
 from plotly.subplots import make_subplots
@@ -463,6 +464,73 @@ def age_fit_figure(summary, name):
         name=f"Mean age of the fit, 1/γ = {mean:.1f} years", hovertemplate=f"1/γ = {mean:.1f} years<extra></extra>",
     ))
     return _plain_axes(figure, "Age [year]", "Weight of the year of age")
+
+
+OBSERVED = "#2a78d6"  # The first categorical colour: observations
+
+
+COMPARED = "#8a8984"  # The stage compared with: a neutral grey, behind the result
+X_TITLES = {"dated": "Time (each value at the middle of its period)", "climatology": "Calendar month", "season": "Season",
+            "yearly": "Year", "age": "Age band [years]", "single": ""}
+ONE_PANEL, TWO_PANELS = 380, 640  # Heights of the observations figure, in pixels
+
+
+def _observations_trace(observations, colour, label, faint=False):
+    """The trace of observations: a line over time for dated values, bars for the other shapes."""
+    n = len(observations)
+    labels = [observations.label(i) for i in range(n)]
+    error = None if observations.sd is None or faint else {"type": "data", "array": observations.sd, "color": INTERVAL, "thickness": 1.5}
+    if observations.shape == "dated":
+        start = pd.to_datetime(observations.index["start"]).to_numpy()
+        end = pd.to_datetime(observations.index["end"]).to_numpy()
+        return go.Scatter(x=start + (end - start) / 2, y=observations.values, mode="lines+markers",
+                          line={"color": colour, "width": 1 if faint else 1.5}, marker={"size": 3 if faint or n > 60 else 6},
+                          customdata=labels, error_y=error, name=label, opacity=0.8 if faint else 1,
+                          hovertemplate=f"{label}, %{{customdata}}: %{{y:.4g}}<extra></extra>")
+    return go.Bar(x=labels, y=observations.values, marker={"color": colour}, error_y=error, name=label,
+                  hovertemplate=f"{label}, %{{x}}: %{{y:.4g}}<extra></extra>")
+
+
+def observations_figure(observations, name, compare=None, compare_label=""):
+    """Observations of any shape: over time for dated values (each at the middle of its period), by calendar month or
+    season, by year, by age band, or a single value; with their uncertainty as error bars.
+
+    With compare, an earlier stage of their processing (compare_label, e.g. 'Values loaded'): overlaid in grey if it
+    has the same shape and units, else in a second panel below (sharing the time axis if both are dated), so that
+    values in different units never share an axis."""
+    title = f"{observations.name}: {name}"
+    if compare is None:
+        figure = go.Figure(_observations_trace(observations, OBSERVED, observations.name), layout=_base_layout(title=title))
+        figure = _plain_axes(figure, X_TITLES[observations.shape], observations.units)
+        figure.update_layout(showlegend=False, height=ONE_PANEL, meta={"view": "observations"})
+        if observations.shape != "dated":
+            figure.update_xaxes(type="category")
+        return figure
+    if compare.shape == observations.shape and compare.units == observations.units:
+        figure = go.Figure([_observations_trace(compare, COMPARED, compare_label, faint=True),
+                            _observations_trace(observations, OBSERVED, "After all steps")], layout=_base_layout(title=title))
+        figure = _plain_axes(figure, X_TITLES[observations.shape], observations.units)
+        # The legend below the axis title: above the plot it would cover the title
+        figure.update_layout(showlegend=True, height=ONE_PANEL + 40, barmode="group", meta={"view": "observations"},
+                             margin={"l": 70, "r": 30, "t": 44, "b": 90},
+                             legend={"orientation": "h", "x": 0.5, "xanchor": "center", "y": -0.22, "yanchor": "top"})
+        if observations.shape != "dated":
+            figure.update_xaxes(type="category")
+        return figure
+    shared = observations.shape == compare.shape == "dated"
+    figure = make_subplots(rows=2, cols=1, shared_xaxes=shared, vertical_spacing=0.16 if not shared else 0.1,
+                           subplot_titles=[f"After all steps: {observations.name}", f"{compare_label}: {compare.name}"])
+    figure.add_trace(_observations_trace(observations, OBSERVED, "After all steps"), row=1, col=1)
+    figure.add_trace(_observations_trace(compare, COMPARED, compare_label), row=2, col=1)
+    figure.update_layout(_base_layout(title=title), plot_bgcolor="white", showlegend=False, height=TWO_PANELS,
+                         margin={"l": 70, "r": 30, "t": 70, "b": 50}, meta={"view": "observations"})
+    for row, data in ((1, observations), (2, compare)):
+        figure.update_yaxes(title_text=data.units, gridcolor=GRID, tickfont={"size": AXIS_FONT}, row=row, col=1)
+        figure.update_xaxes(gridcolor=GRID, tickfont={"size": AXIS_FONT}, row=row, col=1,
+                            title_text=X_TITLES[data.shape] if row == 2 or not shared else None,
+                            type="category" if data.shape != "dated" else None)
+    figure.update_annotations(font={"size": 12})
+    return figure
 
 
 def message_figure(text):
