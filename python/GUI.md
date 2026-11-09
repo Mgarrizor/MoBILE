@@ -149,7 +149,9 @@ parameter not sampled at its slider value.
 4. **Runs at the same time**: each uses the threads of the setup; the line under the number of runs warns when
    they need more cores than the computer has. **Analysis name** (optional) names its folder.
 5. **Run analysis** shows the progress (runs done, running, failed, time left); **Cancel** stops it. A single
-   Run and an analysis cannot go on at the same time.
+   Run and an analysis cannot go on at the same time. The model is built once, by the first run, and kept in the
+   analysis folder (`bin/mobile.out`, its checksum in `sa.json`); the other runs, and those of a resumed analysis,
+   run it as it is (`mobile.sh -E`), side by side, without building again.
 
 **Earlier analyses** lists the analyses in the results folder, with their parameters. **Resume** goes on with a
 cancelled one, running only the runs left. The runs are kept, so a finished analysis can be analysed again in other

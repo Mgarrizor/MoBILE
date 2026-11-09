@@ -1,6 +1,7 @@
 """Checks that need no simulation: python -m unittest discover tests"""
 
 import datetime
+import hashlib
 import json
 import math
 import os
@@ -8,6 +9,7 @@ import re
 import shutil
 import socket
 import tempfile
+import time
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -1200,6 +1202,27 @@ echo 'Program finished successfully'
         self.assertLess(order["a build-end"], order["b build-start"])  # Builds do not overlap
         self.assertLess(order["b build-start"], order["a run-end"])   # The second built while the first ran
 
+    def test_prebuilt_run_needs_no_turn(self):
+        # A model built beforehand runs at once, also while another run builds and holds the lock
+        import time
+
+        _, first, _ = self.start("a", wait=True)
+        time.sleep(0.2)
+        binary = self.config.runs_dir.parent / "mobile.out"
+        binary.write_text("#!/bin/bash\n")
+        result = Runner(self.config, prebuilt=binary).run("p")  # Not RunnerBusy, without waiting
+        first.join(20)
+        order = {event: index for index, event in enumerate(self.events.read_text().split("\n"))}
+        self.assertLess(order["p build-start"], order["a build-end"])  # It started while a held the lock
+        script = (result.run_dir / "run_MOBILE.sh").read_text()
+        self.assertRegex(script, rf"(?m)^\s*prebuilt='{re.escape(str(binary))}'$")
+        manifest = json.loads((result.run_dir / "run.json").read_text())
+        self.assertEqual(manifest["prebuilt"], str(binary))
+        self.assertEqual(manifest["binary_md5"], hashlib.md5(binary.read_bytes()).hexdigest())
+        # Without one, the line keeps its default: the model is built, as by a MoBILE from before -E
+        plain = (self.config.runs_dir / "a" / "run_MOBILE.sh").read_text()
+        self.assertRegex(plain, r"(?m)^\s*prebuilt='NONE'$")
+
     def test_busy_or_cancelled_while_another_builds(self):
         import time
 
@@ -1304,6 +1327,75 @@ echo 'Program finished successfully'
         # Fixed: resuming runs them all
         record = run_study(folder, StudyState(), parallel=4)
         self.assertEqual((record["status"], record["finished"]), ("finished", 32))
+
+    # Builds the model unless given one with -E, and says which, with the name of its run folder
+    BUILDING = """#!/bin/bash
+prebuilt=""
+while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:i:l:M:B:T:C:O:E:" flag; do
+  case $flag in E) [ "$OPTARG" != "NONE" ] && prebuilt=$OPTARG ;; esac
+done
+if [ -n "$prebuilt" ]; then
+  echo "$(basename $PWD) prebuilt $prebuilt" >> $EVENTS
+else
+  echo "$(basename $PWD) build" >> $EVENTS
+  sleep ${FAKE_BUILD:-0.3}
+  mkdir -p output && printf '#!/bin/bash\\n' > output/mobile.out && chmod +x output/mobile.out
+fi
+echo '================= Running MoBILE ================='
+sleep ${FAKE_SLEEP:-0}
+mkdir -p output && touch output/output.nc
+echo 'Program finished successfully'
+"""
+
+    def building(self, **environ):
+        (self.config.mobile / "mobile.sh").write_text(self.BUILDING)
+        events = self.config.runs_dir.parent / "events.txt"
+        events.write_text("")
+        patch = mock.patch.dict(os.environ, {"EVENTS": str(events), **environ})
+        patch.start()
+        self.addCleanup(patch.stop)
+        return events
+
+    def test_model_built_once(self):
+        events = self.building(FAKE_SLEEP="0.3")
+        folder = create_study(self.config, self.parameters, 2, False, [1], name="once", sample_seed=1)  # 8 runs
+        started = time.time()
+        record = run_study(folder, StudyState(), parallel=4)
+        wall = time.time() - started
+        self.assertEqual((record["status"], record["finished"]), ("finished", 8))
+        lines = events.read_text().split()
+        binary = folder / "bin" / "mobile.out"
+        self.assertEqual(events.read_text().count(" build"), 1)
+        self.assertEqual(events.read_text().count(f" prebuilt {binary}"), 7)
+        self.assertEqual(record["binary_md5"], hashlib.md5(binary.read_bytes()).hexdigest())
+        manifest = json.loads((folder / "runs" / run_name(1, 7) / "run.json").read_text())
+        self.assertEqual((manifest["prebuilt"], manifest["binary_md5"]), (str(binary), record["binary_md5"]))
+        # Side by side: 0.3 s to build, then 8 runs of 0.3 s, 4 at a time, take well under 8 × 0.6 s
+        self.assertLess(wall, 3.5, lines)
+        # Resumed, the runs left use the model of the analysis: nothing is built again
+        for index in (2, 5):
+            shutil.rmtree(folder / "runs" / run_name(1, index))
+        events.write_text("")
+        record = run_study(folder, StudyState(), parallel=2)
+        self.assertEqual((record["status"], record["finished"]), ("finished", 8))
+        self.assertEqual(sorted(events.read_text().split("\n"))[1:], [f"{run_name(1, i).split('/')[-1]} prebuilt {binary}" for i in (2, 5)])
+
+    def test_cancelled_while_the_model_is_built(self):
+        import threading
+
+        events = self.building(FAKE_BUILD="2")
+        folder = create_study(self.config, self.parameters, 2, False, [1], name="cancel", sample_seed=1)
+        state = StudyState()
+        outcome = {}
+        worker = threading.Thread(target=lambda: outcome.update(record=run_study(folder, state, parallel=4)))
+        worker.start()
+        time.sleep(0.5)
+        state.cancel()
+        worker.join(10)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(outcome["record"]["status"], "cancelled")
+        # Only the run that built started; those waiting for its model never did
+        self.assertEqual(len(events.read_text().split("\n")) - 1, 1)
 
     def test_cancel_and_resume(self):
         import threading

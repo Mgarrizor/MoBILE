@@ -172,8 +172,9 @@ def age_record(config, run_dir):
     return {**config.age_choice(), "weights": weights}
 
 
-def write_manifest(config, result):
-    """Record what is needed to compare or repeat the run (see "Comparing runs" in MoBILE's LLM.md)."""
+def write_manifest(config, result, prebuilt=None):
+    """Record what is needed to compare or repeat the run (see "Comparing runs" in MoBILE's LLM.md). prebuilt: the
+    model run, if it was built beforehand (mobile.sh -E), not in the run folder."""
     mobile = config.mobile
     manifest = {
         "status": result.status,
@@ -184,7 +185,8 @@ def write_manifest(config, result):
         "mobile": str(mobile),
         "commit": _git(mobile, "rev-parse", "HEAD"),
         "dirty": bool(_git(mobile, "status", "--porcelain")),
-        "binary_md5": _md5(result.run_dir / "output" / "mobile.out"),
+        "binary_md5": _md5(Path(prebuilt) if prebuilt else result.run_dir / "output" / "mobile.out"),
+        "prebuilt": str(prebuilt) if prebuilt else None,
         "run": config.run,
         "inputs": config.inputs,
         "region": config.region,
