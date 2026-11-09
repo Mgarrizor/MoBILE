@@ -14,7 +14,7 @@ from .setup import OPTIONAL_FILES, REGION_MODES, REQUIRED_FILES, region_mode
 from .worldpop import COUNTRIES, PRODUCTS, product_countries, year_label
 
 
-SUFFIX_NAMES = {"netcdf": ("netCDF (.nc)",), "text": ("text (.txt, .csv)",), "data": ("netCDF (.nc)", "tables (.csv, .txt)"), "folder": ()}
+SUFFIX_NAMES = {"netcdf": ("netCDF (.nc)",), "text": ("text (.txt, .csv)",), "data": ("netCDF (.nc)", "tables (.csv, .txt)"), "shape": ("shapefiles (.shp, .zip)",), "folder": ()}
 
 
 FILE_LABELS = {key: label for key, label, _ in (*REQUIRED_FILES, *OPTIONAL_FILES)}
@@ -42,6 +42,28 @@ def _model_select(selected):
             tag.attrs["disabled"] = ""
         pending.extend(getattr(tag, "children", []))
     return menu
+
+
+def _shapes_inputs(config):
+    """A shapefile of areas, such as districts, drawn on the maps; its fields are chosen once it is read."""
+    return ui.div(
+        _path_input("setup_shapes_file", with_tip(
+            "Shapefile of areas (optional)",
+            "Areas such as districts or villages, drawn on the maps of the region and of the results: a .shp with its "
+            ".shx, .dbf and .prj next to it, or a .zip holding them. Any coordinates: they are converted to longitude and "
+            "latitude with the .prj. The model does not use them."),
+            (config.shapes or {}).get("file", ""), "shape"),
+        ui.output_ui("setup_shapes_fields"),
+    )
+
+
+HAS_SHAPES = "input.setup_shapes_file && input.setup_shapes_file.trim() !== ''"
+
+
+def shapes_switch(id):
+    """Outlines of the shapefile of Driving files on a map of the Setup tab; shown while a shapefile is in its box."""
+    return ui.panel_conditional(HAS_SHAPES, ui.input_switch(id, with_tip(
+        "Shapefile", "Outlines of the areas of the shapefile in Driving files, as named and merged there."), value=False))
 
 
 def _path_input(id, label, value, kind):
@@ -100,6 +122,7 @@ def setup_tab(config):
         ui.output_ui("example_note"),
         *[_path_input(f"setup_{key}", label, setup_value(config, key), kind) for key, label, kind in REQUIRED_FILES],
         _age_inputs(config),
+        _shapes_inputs(config),
         ui.accordion(
             ui.accordion_panel(
                 ui.TagList("Optional files ", ui.tags.span("(Beta release - do not use)", class_="text-danger ms-1")),
@@ -391,6 +414,7 @@ def _region_card(config):
                     ),
                     ui.panel_conditional("input.region_layer !== 'pop_file'",
                                          ui.input_select("region_month", "Mean over", REGION_MONTH_MENU, width="15rem")),
+                    shapes_switch("region_shapes"),
                     class_="d-flex flex-wrap align-items-end gap-4",
                 ),
                 ui.div(id="region_map", style="height: 480px;"),
@@ -419,7 +443,7 @@ def _preview_box():
             class_="small text-muted mb-1",
         ),
         ui.layout_columns(
-            ui.input_select("preview_file", "File", PREVIEW_FILES),
+            ui.div(ui.input_select("preview_file", "File", PREVIEW_FILES), shapes_switch("preview_shapes")),
             ui.panel_conditional(
                 daily,
                 ui.input_slider("preview_day", ui.TagList("Day ", ui.tags.span(id="preview_day_date", class_="ms-1")), min=1, max=2, value=1, step=1, width="100%"),

@@ -179,21 +179,42 @@ def _add_basemap(figure, basemap, terrain=None):
         figure.add_trace(go.Scatter(x=lines["x"], y=lines["y"], mode="lines", line={"color": color, "width": width}, hoverinfo="skip", showlegend=False))
 
 
-def _cells(lat, lon):
+SHAPE_LINE, SHAPE_HALO = "#1f1f1f", "rgba(255, 255, 255, 0.85)"  # Dark on a light halo: reads over any colour of the data
+
+
+def _add_shapes(figure, drawn):
+    """The outlines of the areas of a shapefile over the data, each named on hovering a point inside it. drawn is the
+    (lines, points) of shapes.outlines, or None."""
+    if drawn is None:
+        return
+    lines, points = drawn
+    for colour, width in ((SHAPE_HALO, 3), (SHAPE_LINE, 1.2)):
+        figure.add_trace(go.Scatter(x=lines["x"], y=lines["y"], mode="lines", line={"color": colour, "width": width},
+                                    hoverinfo="skip", showlegend=False))
+    figure.add_trace(go.Scatter(x=points["x"], y=points["y"], text=points["text"], mode="markers", showlegend=False,
+                                marker={"size": 12, "opacity": 0}, hovertemplate="%{text}<extra></extra>"))
+
+
+def _cells(lat, lon, steps=None):
     """The coordinates of a heatmap of the grid. A stripe one cell wide gives its single coordinate as a start and a cell
-    size, as Plotly would otherwise make that cell one degree wide."""
-    size = dict(zip("yx", cell_size(lat, lon)))
+    size (from the bounds of its file, steps, if any), as Plotly would otherwise make that cell one degree wide."""
+    size = dict(zip("yx", cell_size(lat, lon, known=steps)))
     return {key: value for axis, values in (("y", lat), ("x", lon))
             for key, value in ({axis: values} if len(values) > 1 else {f"{axis}0": float(values[0]), f"d{axis}": size[axis]}).items()}
 
 
-def _grid_step(lat, lon):
-    return grid_step(max(float(lon.max() - lon.min()), float(lat.max() - lat.min())))
+def _grid_step(lat, lon, shapes=None):
+    """The step of the coordinate lines, from the extent of the grid and of the areas of a shapefile."""
+    spans = []
+    for values, drawn in ((lon, shapes[0]["x"] if shapes else []), (lat, shapes[0]["y"] if shapes else [])):
+        values = [float(values.min()), float(values.max()), *[value for value in drawn if value is not None]]
+        spans.append(max(values) - min(values))
+    return grid_step(max(spans))
 
 
-def _add_graticule(figure, lat, lon):
+def _add_graticule(figure, lat, lon, shapes=None):
     """Coordinate lines over the data, where the lines of the axes, drawn under it, cannot be seen."""
-    step = _grid_step(lat, lon)
+    step = _grid_step(lat, lon, shapes)
     west, east = float(lon.min()) - PADDING_DEGREES, float(lon.max()) + PADDING_DEGREES
     south, north = float(lat.min()) - PADDING_DEGREES, float(lat.max()) + PADDING_DEGREES
     x, y = [], []
@@ -206,46 +227,53 @@ def _add_graticule(figure, lat, lon):
     figure.add_trace(go.Scatter(x=x, y=y, mode="lines", line={"color": GRATICULE, "width": 0.7}, hoverinfo="skip", showlegend=False))
 
 
-def _axes(figure, lat, lon):
-    """Show the grid. The view cannot leave the area of the basemap, and the plot, not the view,
-    takes the shape that keeps degrees of longitude and latitude equal. Ticks fall on the coordinate lines."""
+def _axes(figure, lat, lon, shapes=None, steps=None):
+    """Show the grid, and the areas of a shapefile if any (shapes.outlines). The view cannot leave the area of the
+    basemap, and the plot, not the view, takes the shape that keeps degrees of longitude and latitude equal. Ticks fall
+    on the coordinate lines."""
     def allowed(values):
         return {"minallowed": float(values.min()) - PADDING_DEGREES, "maxallowed": float(values.max()) + PADDING_DEGREES}
 
-    def shown(values, size):
-        """From the first to the last cell centre; a stripe one cell wide, that cell."""
+    def shown(values, size, drawn):
+        """From the first to the last cell centre; a stripe one cell wide, that cell; and all the areas."""
         half = 0 if len(values) > 1 else size / 2
-        return [float(values.min()) - half, float(values.max()) + half]
+        first, last = float(values.min()) - half, float(values.max()) + half
+        drawn = [value for value in drawn if value is not None]
+        return [min(first, *drawn), max(last, *drawn)] if drawn else [first, last]
 
-    size_lat, size_lon = cell_size(lat, lon)
-    ticks = {"tick0": 0, "dtick": _grid_step(lat, lon), "tickfont": {"size": AXIS_FONT}, "showgrid": False, "zeroline": False}
+    lines = shapes[0] if shapes is not None else {"x": [], "y": []}
+
+    size_lat, size_lon = cell_size(lat, lon, known=steps)
+    ticks = {"tick0": 0, "dtick": _grid_step(lat, lon, shapes), "tickfont": {"size": AXIS_FONT}, "showgrid": False, "zeroline": False}
     figure.update_xaxes(
-        title_text="Longitude [°E]", range=shown(lon, size_lon),
+        title_text="Longitude [°E]", range=shown(lon, size_lon, lines["x"]),
         constrain="domain", constraintoward="center", **ticks, **allowed(lon),
     )
     figure.update_yaxes(
-        title_text="Latitude [°N]", range=shown(lat, size_lat),
+        title_text="Latitude [°N]", range=shown(lat, size_lat, lines["y"]),
         scaleanchor="x", scaleratio=1, constrain="domain", **ticks, **allowed(lat),
     )
 
 
-def grid_figure(grid, basemap=None, terrain=None):
+def grid_figure(grid, basemap=None, terrain=None, shapes=None):
     """The fixed grid before the first run."""
     z = np.where(grid["mask"], 1.0, np.nan)
     figure = go.Figure(
-        go.Heatmap(**_cells(grid["lat"], grid["lon"]), z=z, colorscale=[[0, SEQUENTIAL[1]], [1, SEQUENTIAL[1]]], showscale=False, hoverinfo="skip"),
+        go.Heatmap(**_cells(grid["lat"], grid["lon"], grid.get("steps")), z=z, colorscale=[[0, SEQUENTIAL[1]], [1, SEQUENTIAL[1]]], showscale=False, hoverinfo="skip"),
         layout=_base_layout(title="Simulated cells (red) on the fixed grid. Press Run to see results."),
     )
     _add_basemap(figure, basemap, terrain)
-    _add_graticule(figure, grid["lat"], grid["lon"])
-    _axes(figure, grid["lat"], grid["lon"])
+    _add_graticule(figure, grid["lat"], grid["lon"], shapes)
+    _add_shapes(figure, shapes)
+    _axes(figure, grid["lat"], grid["lon"], shapes, grid.get("steps"))
     figure.update_layout(uirevision="grid")
     return figure
 
 
 def map_figure(data, grid, description, day, limits, cells=(), basemap=None, terrain=None, colour_map="Reds", log=False,
-               selected=None):
-    """A day of a field. With a grid, only its simulated cells; without, every cell of the field, as for a driving file."""
+               selected=None, shapes=None):
+    """A day of a field. With a grid, only its simulated cells; without, every cell of the field, as for a driving file.
+    shapes: the outlines of the areas of a shapefile, from shapes.outlines."""
     label, units = description
     if "time" in data.dims:
         date = str(data["time"].values[day - 1])[:10]
@@ -254,12 +282,14 @@ def map_figure(data, grid, description, day, limits, cells=(), basemap=None, ter
         date, data_now = "", data
     if grid is not None:
         data_now = data_now.where(mask_like(data, grid))
+    # The size of a single cell: from the bounds of the population file with a grid, else of the file of the field
+    steps = grid.get("steps") if grid is not None else data.attrs.get("cell_steps")
     values = data_now.values.astype("float64")
     z, zmin, zmax, ticks = colour_values(values, limits, log)
     colours = COLOUR_MAPS[colour_map]
     figure = go.Figure(
         go.Heatmap(
-            **_cells(data["lat"].values, data["lon"].values),
+            **_cells(data["lat"].values, data["lon"].values, steps),
             z=z,
             customdata=values,
             zmin=zmin,
@@ -283,7 +313,8 @@ def map_figure(data, grid, description, day, limits, cells=(), basemap=None, ter
     # Shown next to the Day slider when this map is drawn, so that the two stay together
     figure.update_layout(meta={"date": date})
     _add_basemap(figure, basemap, terrain)
-    _add_graticule(figure, data["lat"].values, data["lon"].values)
+    _add_graticule(figure, data["lat"].values, data["lon"].values, shapes)
+    _add_shapes(figure, shapes)
     for index, cell in enumerate(cells):
         # A black box with a white fill shows over any colour of the data, and so does the X
         # inside it, which has the colour of the cell's lines; the selected dot is larger
@@ -295,7 +326,7 @@ def map_figure(data, grid, description, day, limits, cells=(), basemap=None, ter
                     marker={"symbol": symbol, "size": size, "color": fill, "line": {"width": 2.5, "color": line}},
                 )
             )
-    _axes(figure, data["lat"].values, data["lon"].values)
+    _axes(figure, data["lat"].values, data["lon"].values, shapes, steps)
     figure.update_layout(uirevision="map")
     return figure
 

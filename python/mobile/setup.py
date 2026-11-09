@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 
 from .config import OPTIONAL_DEFAULTS, Config, ConfigError
+from .shapes import choice_problems as shape_problems
 
 # (key, label, kind) of the files of a run, in the order of the Setup panel
 REQUIRED_FILES = (
@@ -24,6 +25,7 @@ SUFFIXES = {
     "netcdf": (".nc", ".nc4", ".cdf"),
     "text": (".txt", ".csv", ".dat"),
     "data": (".nc", ".nc4", ".cdf", ".txt", ".csv", ".dat"),  # Observations: the standard netCDF file or a table
+    "shape": (".shp", ".zip"),  # A shapefile, or a .zip holding one
     "folder": (),
 }
 SETUP_FILE = "last_setup.json"
@@ -39,7 +41,7 @@ def typed_path(value):
     return Path(os.path.expandvars(os.path.expanduser(str(value).strip()))).resolve()
 
 
-def from_fields(mobile, project, runs_dir, run, inputs, region=None, period=None, age_structure=None):
+def from_fields(mobile, project, runs_dir, run, inputs, region=None, period=None, age_structure=None, shapes=None):
     """The Config of the fields of the Setup panel. An empty optional file is not used.
 
     Raises ConfigError, listing every problem, as for a configuration file.
@@ -68,6 +70,7 @@ def from_fields(mobile, project, runs_dir, run, inputs, region=None, period=None
         region=region,
         period=period,
         age_structure=age_structure,
+        shapes=shapes,
     )
     config.validate()
     return config
@@ -102,6 +105,7 @@ def to_dict(config):
         "region": config.region,
         "period": config.period,
         "age_structure": config.age_structure,
+        "shapes": config.shapes,
     }
 
 
@@ -121,16 +125,23 @@ def load_setup(mobile=None):
     try:
         saved = json.loads((settings_folder() / SETUP_FILE).read_text())
         return from_fields(mobile or saved["mobile"], saved["project"], saved["runs_dir"], saved["run"], saved["inputs"],
-                           saved.get("region"), saved.get("period"), saved.get("age_structure"))
+                           saved.get("region"), saved.get("period"), saved.get("age_structure"), usable_shapes(saved.get("shapes")))
     except (OSError, ValueError, KeyError, TypeError, ConfigError):
         return None
 
 
 def from_manifest(manifest, current):
     """The settings with which a run was made, from its run.json, in the project and results
-    folder of the current settings."""
+    folder of the current settings; with the shapes of the run, or the current ones for a run without."""
     return from_fields(current.mobile, current.project, current.runs_dir, manifest["run"], manifest["inputs"],
-                       manifest.get("region"), manifest.get("period"), manifest.get("age_structure"))
+                       manifest.get("region"), manifest.get("period"), manifest.get("age_structure"),
+                       usable_shapes(manifest.get("shapes", current.shapes)) or usable_shapes(current.shapes))
+
+
+def usable_shapes(choice):
+    """The shapes of a saved setup or a run if they can still be read, else None: they only draw on the maps, so a moved
+    shapefile does not stop the rest from loading."""
+    return choice if choice and not shape_problems(choice) else None
 
 
 def list_folder(folder, kind):

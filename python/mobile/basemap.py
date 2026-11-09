@@ -116,10 +116,12 @@ def _lines(geometries):
     return {"x": x, "y": y}
 
 
-def cell_size(lat, lon, single=0.05):
-    """(degrees of latitude, of longitude) of a grid cell. A stripe one cell wide takes the size of the other direction, as the
-    cells are square; a single cell, single."""
-    steps = [abs(float(values[1]) - float(values[0])) if len(values) > 1 else None for values in (lat, lon)]
+def cell_size(lat, lon, single=0.05, known=None):
+    """(degrees of latitude, of longitude) of a grid cell. A single coordinate takes its size from known, the (latitude,
+    longitude) sizes from the cell bounds of its file (cells.cell_steps), if any; else, a stripe one cell wide takes the
+    size of the other direction, as the cells are square; a single cell without bounds, single."""
+    known = known or (None, None)
+    steps = [abs(float(values[1]) - float(values[0])) if len(values) > 1 else known[i] for i, values in enumerate((lat, lon))]
     fallback = next((step for step in steps if step), single)
     return tuple(step or fallback for step in steps)
 

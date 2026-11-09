@@ -191,6 +191,7 @@ def write_manifest(config, result):
         "period": config.period,
         "age_structure": config.age_structure,
         "age_used": age_record(config, result.run_dir),
+        "shapes": config.shapes,
         "param_overrides": config.params,
         "params": config.final_params(),
         "output": list(config.output) if config.output is not None else None,
