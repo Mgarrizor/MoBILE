@@ -38,6 +38,7 @@ usage() { echo "Usage:              \n
                 -T: Age-AND-year mortality-rate file (Optional; blank = use -M/scalar mu; overrides -M if both given) \n
                 -C: Counterfactual mode [1: hold the age structure fixed; anything else: factual] (Optional; needs -M/-B/-T) \n
                 -O: Output selection file, out_*=.true./.false. lines for &OUTPUT (Optional; blank/NONE = default output) \n
+                -E: Already-built model (a mobile.out) to run instead of building one (Optional; blank/NONE = build) \n
 
                  "; }
 # Resources
@@ -51,8 +52,9 @@ birthrate_file=""
 mortality_time_file=""
 demog_counterfactual=".false."
 output_file=""
+prebuilt=""
 
-while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:i:l:M:B:T:C:O:" flag; do
+while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:i:l:M:B:T:C:O:E:" flag; do
  case $flag in
    h) # Handle the -h flag
    # Display script help information
@@ -144,6 +146,13 @@ while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:i:l:M:B:T:C:O:" flag; do
      output_file="$OPTARG"
    fi
    ;;
+   E) # Handle the -E flag (already-built model; 'NONE' = blank = build it)
+   if [ "$OPTARG" = "NONE" ]; then
+     prebuilt=""
+   else
+     prebuilt="$OPTARG"
+   fi
+   ;;
    \?) # Handle invalid options
    usage
    exit 1
@@ -165,6 +174,15 @@ if [[ $PWD == *${MOBILE}* ]]; then # If PWD contains ${MOBILE} stop
 fi
 
 mkdir -p $path
+
+# With -E the model is already built: nothing is linked into or touched in the shared src/ and nothing is
+# compiled, so runs with -E can go on side by side (e.g. the samples of an analysis, built once beforehand).
+# The model must have been built from this MOBILE with the same VECTRI coupling and mobility.
+if [[ -n ${prebuilt} ]]; then
+  [ -x "$prebuilt" ] || { echo "Already-built model not found or not executable: $prebuilt" >&2; exit 1; }
+  echo '================= Already-built model ============'
+  echo "${prebuilt}"
+else
 
 # 1) Link Makefile and src folder
 # https://www.man7.org/linux/man-pages/man1/ln.1.html
@@ -232,6 +250,8 @@ else
 fi
 #
 
+fi # -E: nothing to link
+
 if [[ ${mob} == 1 ]]; then
   echo '================= MOBILITY active ================'
 elif [[ ${mob} == 0 ]]; then
@@ -248,7 +268,8 @@ fi
 #
 bash fetch_age.sh # Create age weights 
 #
-# 2) Compile program
+# 2) Compile program (not with -E: the model is already built)
+if [[ -z ${prebuilt} ]]; then
 (cd $path && make ENABLE_COUPLING=${vectri} ENABLE_MOBILITY=${mob})
 exit=$? # Save exit status of 'make'.
 
@@ -272,6 +293,7 @@ if [ $exit != 0 ]; then
   echo "Makefile not successful" " --> Exit status:" $exit  
   exit 1
 fi
+fi # -E: nothing to compile
 #-------------------------------
 # A missing $const file leaves $lines empty, which writes a valid but EMPTY &CONST
 # block: every constant silently keeps its compiled-in default and the run
@@ -329,7 +351,7 @@ EOM
 # 4) Execute MOBILE (mobile.out)
 echo '================= Running MoBILE ================='
 touch ${path}/.run_start           # Marks the run start: only crash reports newer than this count
-${path}/mobile.out ${namelist}     # Pass namelist name as command line argument
+${prebuilt:-${path}/mobile.out} ${namelist}     # Pass namelist name as command line argument; with -E, the model given
 rc=$?
 # On macOS the crash backtrace has bare addresses; the system crash report has file:line
 # (with the .dSYM from MODE=debug). Print its top frames. macOS writes it a few seconds late.
