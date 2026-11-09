@@ -88,6 +88,8 @@ fi
             const='params.txt'
 #           -O Output selection file (Optional; blank/NONE = default output; example in output.txt)
             output_file='NONE'
+#           -E Already-built model (a mobile.out) to run instead of building one (Optional; blank/NONE = build)
+            prebuilt='NONE'
 #           -v VECTRI          0: Inactive 1: Coupled
             vectri=$disID
 
@@ -159,6 +161,7 @@ var_37="-C ${counterfactual}"
 # CONST
 var_40="-c ${const}"
 var_41="-O ${output_file}"
+var_42="-E ${prebuilt}"
 
 # VECTRI
 var_50="-v ${vectri}"
@@ -189,6 +192,7 @@ $var_37
 
 $var_40
 $var_41
+$var_42
 
 $var_50
 
