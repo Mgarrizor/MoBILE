@@ -3,7 +3,7 @@
 import numpy as np
 import xarray as xr
 
-from .cells import cell_areas
+from .cells import cell_areas, cell_steps
 from .driving import FIELD_NAMES, LAT_NAMES, LON_NAMES, POP_NAMES, TIME_NAMES, first_name
 from .region import region_ranges
 
@@ -39,7 +39,7 @@ def read_grid(pop_file, region=None, rain_file=None, temp_file=None):
     cells = (slice(lat_first, lat_end), slice(lon_first, lon_end))
     populated = np.isfinite(pop) & (np.nan_to_num(pop) > 0)
     grid = {"lat": lat[cells[0]], "lon": lon[cells[1]], "mask": np.isfinite(pop[cells]), "populated": int(populated[cells].sum()),
-            "full": (lon, lat)}
+            "full": (lon, lat), "steps": cell_steps(pop_file)}
     if rain_file is not None and temp_file is not None:
         simulated = populated & np.isfinite(first_day(rain_file, "rain_file")) & np.isfinite(first_day(temp_file, "temp_file"))
         people = np.where(simulated, np.nan_to_num(pop).astype("float64") * cell_areas(pop_file), 0.0)

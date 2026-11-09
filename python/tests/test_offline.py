@@ -566,6 +566,27 @@ class TestSetup(unittest.TestCase):
         saved.write_text(saved.read_text().replace("rain.nc", "moved.nc"))
         self.assertIsNone(load_setup(MOBILE))
 
+    def test_shapes_remembered_and_dropped_when_moved(self):
+        shapes = {"file": str(write_shapes(self.folder / "villages", TestShapes.SQUARES, "EPSG:32637")), "name": "village", "merge": None}
+        config = from_fields(MOBILE, "Study", "runs", self.run, self.files, age_structure=self.age, shapes=shapes)
+        save_setup(config)
+        self.assertEqual(load_setup(MOBILE).shapes, shapes)
+        with self.assertRaises(ConfigError) as caught:
+            from_fields(MOBILE, "Study", "runs", self.run, self.files, age_structure=self.age, shapes={**shapes, "name": "region"})
+        self.assertIn("no field 'region'", str(caught.exception))
+        # A moved shapefile only draws on the maps: the rest of the setup still loads, and a run made with it too
+        Path(shapes["file"]).rename(self.folder / "moved.shp")
+        self.assertIsNone(load_setup(MOBILE).shapes)
+        manifest = {"run": self.run, "inputs": self.files, "age_structure": self.age, "shapes": shapes}
+        self.assertIsNone(from_manifest(manifest, from_fields(MOBILE, "Study", "runs", self.run, self.files, age_structure=self.age)).shapes)
+        # In a configuration file, relative to it
+        Path(self.folder / "moved.shp").rename(shapes["file"])
+        yaml_file = self.folder / "with_shapes.yaml"
+        yaml_file.write_text(CONFIG.read_text().replace("$MOBILE", str(MOBILE)).replace("./", str(CONFIG.parent) + "/")
+                             + "shapes: {file: villages.shp, merge: district}\n")
+        loaded = Config.load(yaml_file, mobile=MOBILE)
+        self.assertEqual(loaded.shapes, {"file": str(Path(shapes["file"]).resolve()), "name": None, "merge": "district"})
+
     def test_restored_from_a_run(self):
         current = from_fields(MOBILE, "Study", "elsewhere", self.run, self.files, age_structure=self.age)
         manifest = {"run": {**self.run, "nagent": 5000}, "inputs": self.files, "age_structure": {**self.age, "product": "R2025A", "year": 2020}}
@@ -604,6 +625,144 @@ class TestSetup(unittest.TestCase):
     def test_results_folder_inside_the_repository(self):
         with self.assertRaises(ConfigError):
             from_fields(MOBILE, "Study", str(Path(MOBILE) / "runs"), self.run, self.files, age_structure=self.age)
+
+
+def write_shapes(stem, squares, crs=None, kind="polygon"):
+    """A shapefile of squares {(west, south, size): {field: value}} in degrees, written in the coordinates of crs
+    (e.g. "EPSG:32637", UTM zone 37N, with its .prj), or in longitude and latitude without a .prj."""
+    import pyproj
+    import shapefile
+    to = pyproj.Transformer.from_crs("EPSG:4326", crs, always_xy=True) if crs else None
+    with shapefile.Writer(str(stem), shapeType=shapefile.POLYGON if kind == "polygon" else shapefile.POINT) as writer:
+        fields = list(next(iter(squares.values())))
+        for field in fields:
+            writer.field(field, "C")
+        for (west, south, size), record in squares.items():
+            ring = [(west, south), (west, south + size), (west + size, south + size), (west + size, south), (west, south)]
+            if to:
+                ring = [to.transform(x, y) for x, y in ring]
+            if kind == "polygon":
+                writer.poly([ring])
+            else:
+                writer.point(*ring[0])
+            writer.record(*[record[field] for field in fields])
+    if crs:
+        Path(f"{stem}.prj").write_text(pyproj.CRS(crs).to_wkt(pyproj.enums.WktVersion.WKT1_ESRI))
+    return Path(f"{stem}.shp")
+
+
+class TestShapes(unittest.TestCase):
+    # Made-up villages in two made-up districts, in the highlands of the Horn of Africa (UTM zone 37N)
+    SQUARES = {(38.8, 8.6, 0.1): {"village": "A", "district": "North"}, (38.9, 8.6, 0.1): {"village": "B", "district": "North"},
+               (38.8, 8.5, 0.1): {"village": "C", "district": "South"}}
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.folder = Path(folder.name)
+
+    def test_projected_shapefile_in_longitude_and_latitude(self):
+        import shapely
+        from mobile.shapes import read_shapes
+        shapes = read_shapes(write_shapes(self.folder / "villages", self.SQUARES, "EPSG:32637"))
+        self.assertEqual(shapes.crs, "WGS 84 / UTM zone 37N")
+        self.assertTrue(shapes.converted)
+        self.assertEqual(shapes.fields, ("village", "district"))
+        self.assertEqual([record["village"] for record in shapes.records], ["A", "B", "C"])
+        # The corners come back where they were, to about a millimetre
+        np.testing.assert_allclose(shapely.total_bounds(np.array(shapes.geometries, dtype=object)), [38.8, 8.5, 39.0, 8.7], atol=1e-8)
+
+    def test_zip_and_longitude_latitude_without_prj(self):
+        import zipfile
+        from mobile.shapes import ShapeError, read_shapes
+        shp = write_shapes(self.folder / "villages", self.SQUARES, "EPSG:32637")
+        with zipfile.ZipFile(self.folder / "villages.zip", "w") as archive:
+            for suffix in (".shp", ".shx", ".dbf", ".prj"):
+                archive.write(shp.with_suffix(suffix), f"inside/villages{suffix}")
+        self.assertEqual(len(read_shapes(self.folder / "villages.zip").geometries), 3)
+        # Without a .prj: longitude and latitude are taken as such, with a note; metres cannot be
+        plain = read_shapes(write_shapes(self.folder / "plain", self.SQUARES))
+        self.assertFalse(plain.converted)
+        self.assertIn("no .prj", plain.note)
+        shp.with_suffix(".prj").unlink()
+        with self.assertRaisesRegex(ShapeError, "no .prj"):
+            read_shapes(shp)
+        with self.assertRaisesRegex(ShapeError, "only areas"):
+            read_shapes(write_shapes(self.folder / "points", self.SQUARES, kind="point"))
+        shp.with_suffix(".dbf").unlink()
+        with self.assertRaisesRegex(ShapeError, "needs its .dbf"):
+            read_shapes(shp)
+
+    def test_named_merged_and_outlined(self):
+        from mobile.shapes import ShapeError, areas, choice_problems, name_field, outlines, read_shapes
+        path = write_shapes(self.folder / "villages", self.SQUARES, "EPSG:32637")
+        shapes = read_shapes(path)
+        self.assertEqual(name_field(shapes), "village")  # The most different values
+        self.assertEqual([label for label, _ in areas(shapes, "village")], ["A", "B", "C"])
+        merged = dict(areas(shapes, "village", "district"))
+        self.assertEqual(sorted(merged), ["North", "South"])
+        # North is the two squares joined: one ring of their outline, with the area of both
+        self.assertEqual(merged["North"].geom_type, "Polygon")
+        self.assertAlmostEqual(merged["North"].area, 0.02, places=6)
+        lines, points = outlines(areas(shapes, "village", "district"))
+        self.assertEqual(lines["x"].count(None), 2)
+        self.assertEqual(points["text"], ["North", "South"])
+        self.assertTrue(all(merged[label].contains(__import__("shapely").Point(x, y))
+                            for x, y, label in zip(points["x"], points["y"], points["text"])))
+        with self.assertRaisesRegex(ShapeError, "no field 'region'"):
+            areas(shapes, "region")
+        self.assertEqual(choice_problems({"file": str(path), "name": "village", "merge": None}), [])
+        self.assertIn("no file", choice_problems({"file": str(self.folder / "moved.shp")})[0])
+
+    def test_single_cell_drawn_at_its_size(self):
+        # One cell of 0.5°, with its bounds: drawn 0.5° wide, as the model takes it; without bounds, 0.05° as before
+        from mobile.driving import field_limits, open_field
+        from mobile.grid import read_grid
+        from mobile.plots import grid_figure
+        for bounds in (True, False):
+            path = self.folder / f"one_{bounds}.nc"
+            with netCDF4.Dataset(path, "w") as data:
+                for axis, centre in (("lat", 8.75), ("lon", 38.75)):
+                    data.createDimension(axis, 1)
+                    variable = data.createVariable(axis, "f8", (axis,))
+                    variable[:] = [centre]
+                    if bounds:
+                        data.createDimension("bnds", 2) if "bnds" not in data.dimensions else None
+                        data.createVariable(f"{axis}_bnds", "f8", (axis, "bnds"))[:] = [[centre - 0.25, centre + 0.25]]
+                        variable.bounds = f"{axis}_bnds"
+                data.createVariable("pop", "f4", ("lat", "lon"))[:] = [[0.001]]
+            size = 0.5 if bounds else 0.05
+            field = open_field(path, "pop_file")
+            region_map = map_figure(field, None, ("Population", ""), 1, field_limits(field, log=True), log=True)
+            for figure in (region_map, grid_figure(read_grid(path))):
+                self.assertEqual((figure.data[0].dx, figure.data[0].dy), (size, size))
+                np.testing.assert_allclose(figure.layout.xaxis.range, [38.75 - size / 2, 38.75 + size / 2])
+
+    def test_merged_without_slivers(self):
+        # Areas that do not quite meet leave slivers when merged: holes and pieces under 1,000 m² go, a real hole stays
+        import shapely
+        from mobile.shapes import _square_metres, _without_slivers
+        metre = 1 / 111_000  # About a metre, in degrees, near the equator
+        outer = [(39, 8), (39.1, 8), (39.1, 8.1), (39, 8.1)]
+        sliver = [(39.05, 8.05), (39.05 + 2 * metre, 8.05), (39.05 + 2 * metre, 8.05 + 2 * metre), (39.05, 8.05 + 2 * metre)]
+        hole = [(39.01, 8.01), (39.02, 8.01), (39.02, 8.02), (39.01, 8.02)]  # About 1.2 km²
+        crumb = shapely.box(39.2, 8, 39.2 + 3 * metre, 8 + 3 * metre)
+        cleaned = _without_slivers(shapely.MultiPolygon([shapely.Polygon(outer, [sliver, hole]), crumb]))
+        self.assertEqual(cleaned.geom_type, "Polygon")
+        self.assertEqual(len(cleaned.interiors), 1)
+        self.assertAlmostEqual(_square_metres(cleaned.interiors[0]) / 1e6, 1.2, delta=0.05)
+
+    def test_drawn_on_the_maps(self):
+        from mobile.shapes import areas, outlines, read_shapes
+        drawn = outlines(areas(read_shapes(write_shapes(self.folder / "villages", self.SQUARES, "EPSG:32637")), "village"))
+        grid = {"lat": np.array([8.55, 8.65]), "lon": np.array([38.85, 38.95]), "mask": np.ones((2, 2), bool)}
+        from mobile.plots import grid_figure
+        without, with_shapes = len(grid_figure(grid).data), grid_figure(grid, shapes=drawn)
+        self.assertEqual(len(with_shapes.data), without + 3)  # Halo, line, and the names on hovering
+        self.assertEqual(list(with_shapes.data[-1].text), ["A", "B", "C"])
+        # The view shows all the areas, also beyond a grid of one cell
+        one = grid_figure({"lat": np.array([8.55]), "lon": np.array([38.85]), "mask": np.ones((1, 1), bool)}, shapes=drawn)
+        np.testing.assert_allclose([*one.layout.xaxis.range, *one.layout.yaxis.range], [38.8, 39.0, 8.5, 8.7], atol=1e-5)
 
 
 class TestDrivingPreview(unittest.TestCase):

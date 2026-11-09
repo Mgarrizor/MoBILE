@@ -74,6 +74,16 @@ Everything a run needs that is not a parameter or an output.
   forcing, counterfactual demography) are under *Optional files*. The files filled in at first are the
   example that comes with MoBILE (`utils/test_run` in the GitHub repository): Senegal, 2012 to 2014, on a 0.05°
   grid (rainfall CHIRPS, temperature CHIRTS, population WorldPop 2020). A note says so while they are in use.
+- **Shapefile of areas (optional)**, in the same card: areas such as districts or villages, each named on hovering. They
+  are drawn on the results map after Apply and, with the **Shapefile** switch that appears beside them once a shapefile
+  is in the box (off at first), on the region map and the driving-files preview, also before Apply. Choose the `.shp` (with its `.shx`, `.dbf` and `.prj` next to
+  it) or a `.zip` holding them. Any coordinates: they are converted to longitude and latitude with the `.prj` (pyproj);
+  without one, coordinates in degrees are taken as longitude and latitude, with a note. **Areas named by** a field of
+  the table (at first the one with the most different values) and, optionally, **Merged by** another, e.g. villages
+  into their districts; merging drops the slivers under 1,000 m² left between areas that do not quite meet. The maps
+  open on the grid and all the areas. The model does not use them; the setup and each run's `run.json` record them as
+  `shapes: {file, name, merge}`, also in a configuration file. A shapefile moved since is left out, and the rest of the
+  setup still loads.
 - **Apply setup**, centred above the region card, checks the settings and switches to the Parameters & SA tab. It also
   checks the driving files against each other (grid, days) and for the units of rainfall (mm/day) and temperature
   (°C); any difference opens a warning window, from which the setup can still be applied.

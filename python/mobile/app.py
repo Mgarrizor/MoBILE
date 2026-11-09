@@ -34,6 +34,7 @@ from .sensitivity_ui import sensitivity_card, sensitivity_server
 from .scripts import (
     BROWSER_HANDLER, CLOSED_HANDLER, DOTS_HANDLER, PARAMETER_MARKS, PARAMETER_STYLE, PLAYER, PLOT_HANDLER, SIDEBAR_FIT, SLIDER_FORMAT, THEME, PAGE_STYLE,
 )
+from .shapes import ShapeError, areas, name_field, outlines, read_shapes
 from .setup import (
     OPTIONAL_FILES, REQUIRED_FILES, from_fields, from_manifest, create_folder, list_folder, region_from_fields, region_mode,
     save_setup, start_folder, typed_path,
@@ -531,6 +532,7 @@ def create_app(config):
             for key, value in values.items():
                 ui.update_numeric(f"setup_{key}", value=value)
             ui.update_switch("setup_counterfactual", value=config.inputs.get("counterfactual") == 1)
+            ui.update_text("setup_shapes_file", value=(config.shapes or {}).get("file", ""))
 
         @reactive.effect
         @reactive.event(input.apply_setup)
@@ -563,7 +565,7 @@ def create_app(config):
             files["counterfactual"] = 1 if input.setup_counterfactual() else 0
             try:
                 new = from_fields(setup().mobile, input.setup_project(), input.setup_runs_dir(), run, files, typed_region(), period,
-                                  typed_age())
+                                  typed_age(), typed_shapes())
             except ConfigError as error:
                 setup_problem.set(setup_problems(error))
                 return
@@ -826,6 +828,79 @@ def create_app(config):
                 return example_note_box()
             return None
 
+        @reactive.calc
+        def typed_shapes_file():
+            """(path, Shapes, problem) of the shapefile in its box, before Apply; (None, None, None) without one."""
+            value = input.setup_shapes_file()
+            if not value or not value.strip():
+                return None, None, None
+            path = typed_path(value)
+            try:
+                return path, read_shapes(path), None
+            except (ShapeError, OSError) as error:
+                return path, None, str(error)
+
+        @render.ui
+        def setup_shapes_fields():
+            path, shapes, problem = typed_shapes_file()
+            if problem is not None:
+                return ui.p(f"Shapefile: {problem}.", class_="small text-danger")
+            if shapes is None:
+                return None
+            # The fields chosen for this file in the setup, else a guess at the field that names the areas
+            chosen = setup().shapes if setup().shapes and setup().shapes["file"] == str(path) else {}
+            fields = {field: field for field in shapes.fields}
+            return ui.div(
+                ui.layout_columns(
+                    ui.input_select("setup_shapes_name", "Areas named by", fields,
+                                    selected=chosen.get("name") or name_field(shapes)),
+                    ui.input_select("setup_shapes_merge", with_tip(
+                        "Merged by", "Areas with the same value of this field are drawn as one, named by it: e.g. "
+                                     "villages merged into their districts."),
+                                    {"": "Not merged", **fields}, selected=chosen.get("merge") or ""),
+                    col_widths=(6, 6),
+                ),
+                ui.p(f"{len(shapes.geometries):,} areas, in {shapes.crs}"
+                     + (", converted to longitude and latitude" if shapes.converted else "")
+                     + ". Drawn on the region map now, and on the results map after Apply.",
+                     class_="small text-muted mb-1"),
+                ui.p(shapes.note, class_="small text-warning-emphasis mb-1") if shapes.note else None,
+                class_="mb-3",
+            )
+
+        def typed_shapes():
+            """The shapes of the boxes of the Setup tab, {file, name, merge}; None without a shapefile."""
+            path, shapes, _ = typed_shapes_file()
+            if path is None:
+                return None
+            name = input.setup_shapes_name() if "setup_shapes_name" in input else None
+            merge = input.setup_shapes_merge() if "setup_shapes_merge" in input else None
+            return {"file": str(path), "name": name or (name_field(shapes) if shapes else None), "merge": merge or None}
+
+        def drawn_shapes(choice):
+            """The outlines of the areas of a setup's shapes, for the maps; None without, or if they cannot be drawn."""
+            if not choice:
+                return None
+            try:
+                return outlines(areas(read_shapes(choice["file"]), choice.get("name"), choice.get("merge")))
+            except (ShapeError, OSError):
+                return None
+
+        @reactive.calc
+        def typed_drawn():
+            return drawn_shapes(typed_shapes())
+
+        def shown_shapes(switch):
+            """The outlines of the shapefile in its box on a map of the Setup tab, if its switch is on."""
+            return typed_drawn() if switch in input and input[switch]() else None
+
+        def region_shapes():
+            return shown_shapes("region_shapes")
+
+        @reactive.calc
+        def applied_drawn():
+            return drawn_shapes(setup().shapes)
+
         def typed_region():
             """The region in the boxes of the Setup tab, before Apply."""
             return region_from_fields(input.setup_region(), *[input[f"setup_{key}"]() for key in ("north", "west", "south", "east")],
@@ -1000,7 +1075,7 @@ def create_app(config):
             if wanted is None:
                 title = "Population density"
                 figure = map_figure(data, None, (title, data.attrs.get("units", "")), 1, field_limits(data, log=True),
-                                    (), region_basemap(), colour_map="Reds", log=True)
+                                    (), region_basemap(), colour_map="Reds", log=True, shapes=region_shapes())
             else:
                 region_climates_added()
                 name = REGION_LAYERS[wanted[1]].lower()
@@ -1013,7 +1088,7 @@ def create_app(config):
                     return
                 title = region_climate_title(wanted, field)
                 figure = map_figure(field, None, (title, field.attrs.get("units", "")), 1, field_limits(field),
-                                    (), region_basemap(), colour_map=PREVIEW_STYLE[wanted[1]][0])
+                                    (), region_basemap(), colour_map=PREVIEW_STYLE[wanted[1]][0], shapes=region_shapes())
             outline = region_outline()
             if outline is not None:
                 west, east, south, north = outline
@@ -1028,8 +1103,8 @@ def create_app(config):
                 margin={"t": 66},  # Two lines of title
                 dragmode="drawrect" if mode == "box" else "zoom",
                 newshape={"line": {"color": BOX, "width": 2, "dash": "dot"}},
-                # The zoom is kept while the grid is the same
-                uirevision=str(region_map_extent()),
+                # The zoom is kept while the grid and the shapefile are the same
+                uirevision=str((region_map_extent(), region_shapes() is not None and typed_shapes())),
             )
             await send_figure(session, "region_map", figure)
 
@@ -1068,6 +1143,7 @@ def create_app(config):
         browse_button("setup_runs_dir", "folder")
         browse_button("cal_data_file", "data")
         browse_button("cal_model_folder", "folder")
+        browse_button("setup_shapes_file", "shape")
         calibration_server(input, output, session, setup)
         for key, _, kind in (*REQUIRED_FILES, *OPTIONAL_FILES):
             browse_button(f"setup_{key}", kind)
@@ -1348,18 +1424,20 @@ def create_app(config):
         async def draw_map():
             outcome = current()
             if outcome is None or not outcome.seeds:
-                await send_figure(session, "map", grid_figure(grid(), basemap(), terrain()))
+                figure = grid_figure(grid(), basemap(), terrain(), applied_drawn())
+                # A new shapefile shows its areas; otherwise the zoom is kept
+                figure.update_layout(uirevision=f"grid {setup().shapes}")
+                await send_figure(session, "map", figure)
                 return
             name = shown_variable(outcome)
             data = outcome.fields(name)[shown_member(outcome)]
             day = min(input.day(), outcome.days)
-            await send_figure(
-                session, "map",
-                map_figure(
-                    data, grid(), outcome.describe(name), day, shown_limits(), selected_cells(), basemap(), terrain(),
-                    input.colour_map(), input.scale() == "log",
-                ),
+            figure = map_figure(
+                data, grid(), outcome.describe(name), day, shown_limits(), selected_cells(), basemap(), terrain(),
+                input.colour_map(), input.scale() == "log", shapes=applied_drawn(),
             )
+            figure.update_layout(uirevision=f"map {setup().shapes}")
+            await send_figure(session, "map", figure)
 
         @reactive.effect
         @reactive.event(input.cell)
@@ -1532,9 +1610,11 @@ def create_app(config):
             figure = map_figure(
                 data, None, preview_description(), day, preview_limits(), preview_cells(), preview_basemap(),
                 colour_map=input.preview_colour_map(), log=input.preview_scale() == "log", selected=preview_selected(),
+                shapes=shown_shapes("preview_shapes"),
             )
-            # The zoom is kept while the grid is the same
-            figure.update_layout(meta={"date": figure.layout.meta["date"], "view": str(preview_extent())})
+            # The zoom is kept while the grid and the shapefile shown are the same
+            figure.update_layout(meta={"date": figure.layout.meta["date"],
+                                       "view": str((preview_extent(), shown_shapes("preview_shapes") is not None and typed_shapes()))})
             await send_figure(session, "preview_map", figure)
 
         @reactive.effect
