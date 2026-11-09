@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import xarray as xr
+from plotly.colors import sample_colorscale
 from plotly.subplots import make_subplots
 
 from .basemap import PADDING_DEGREES, cell_size
@@ -20,6 +21,13 @@ COLOUR_MAPS = {
     # matplotlib's coolwarm, at 11 points
     "Coolwarm": ["#3b4cc0", "#5977e3", "#7b9ff9", "#9ebeff", "#c0d4f5", "#dddcdc", "#f2cbb7", "#f7ac8e", "#ee8468", "#d65244", "#b40426"],
 }
+# Plotly's own scales, sampled at 11 points
+COLOUR_MAPS.update({
+    name: sample_colorscale(name, 11, colortype="rgb")
+    for name in ("Viridis", "Plasma", "Inferno", "Magma", "Cividis", "YlOrRd", "YlGnBu", "Greens", "Purples", "Greys", "Spectral_r", "RdBu_r")
+})
+# The population density map of the Senegal figure: white, greens, yellow, orange, red, purple, black (sampled from its colour bar)
+COLOUR_MAPS["Population density"] = ["#fffffe", "#ffffe7", "#e7f6c4", "#b9e09b", "#90c87b", "#d8e54f", "#f0cb44", "#ed8732", "#ea3624", "#a92317", "#791628", "#4e0a52", "#060006"]
 GRID_STEPS = (0.05, 0.1, 0.2, 0.25, 0.5, 1, 2, 5, 10, 20)
 GRATICULE = "rgba(11, 11, 11, 0.3)"
 AXIS_FONT = 14
