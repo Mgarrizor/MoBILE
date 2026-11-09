@@ -29,7 +29,7 @@ from .parameters import to_model
 from .region import cut_inputs
 from .rundir import OUTPUT_NAME, new_run_id, period_steps
 from .results import _md5
-from .runner import RunCancelled, Runner
+from .runner import BuildOnce, RunCancelled, Runner
 from .sensitivity import DISTRIBUTIONS, SampledParameter, run_count, sample
 
 STUDIES_FOLDER = "sensitivity"
@@ -38,7 +38,6 @@ SAMPLES = "samples.txt"
 RUNS = "runs"
 INPUTS = "inputs"
 BINARY = Path("bin") / "mobile.out"
-WAIT_SECONDS = 0.2  # How often a run waiting for the model to be built checks whether the analysis was cancelled
 ATTEMPTS = 2  # A failed run is tried once more before it counts as failed
 FAIL_FAST = 3  # The analysis stops if this many runs fail before any finishes: they would all fail alike
 
@@ -210,35 +209,13 @@ def run_study(folder, state, parallel=1, threads=None):
 
     # The first run builds the model; the others wait for it, then run it as it is. If it could not be built, they
     # build their own as before, and fail as it did. A resumed analysis has its model already.
-    binary = folder / BINARY
-    built = threading.Event()
-    if binary.is_file():
-        built.set()
-    builder = todo[0] if todo and not built.is_set() else None
-
-    def keep_model(path):
-        if not Path(path).is_file():
-            return  # Not where mobile.sh leaves it: the others build their own
-        binary.parent.mkdir(exist_ok=True)
-        temporary = binary.with_suffix(".tmp")
-        shutil.copy2(path, temporary)
-        temporary.replace(binary)
+    def record_model(binary):
         with state.lock:
             write_study(folder, {**read_study(folder), "binary_md5": _md5(binary)})
-        built.set()
+
+    once = BuildOnce(folder / BINARY, record_model)
 
     def one(job):
-        if job != builder:
-            while not built.wait(WAIT_SECONDS):
-                if state.cancelled:
-                    return
-        try:
-            attempts(job)
-        finally:
-            if job == builder:
-                built.set()  # Built or not: the others go on
-
-    def attempts(job):
         seed, index = job
         run_config = replace(
             config,
@@ -251,16 +228,22 @@ def run_study(folder, state, parallel=1, threads=None):
             run_dir = config.runs_dir / run_name(seed, index)
             if run_dir.exists():
                 shutil.rmtree(run_dir)  # Left by a cancelled or failed attempt
-            prebuilt = binary if binary.is_file() else None
+            prebuilt = once.acquire(lambda: state.cancelled)
+            if prebuilt is False:
+                return
             runner = Runner(run_config, prebuilt)
             if not state.add_runner(runner):
+                if prebuilt is None:
+                    once.release()
                 return
             try:
-                result = runner.run(run_name(seed, index), wait=True, on_built=keep_model if prebuilt is None else None)
+                result = runner.run(run_name(seed, index), wait=True, on_built=once.keep if prebuilt is None else None)
             except RunCancelled:
                 return
             finally:
                 state.remove_runner(runner)
+                if prebuilt is None:
+                    once.release()
             if result.status == "cancelled":
                 return
             if result.ok:

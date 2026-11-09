@@ -4,6 +4,7 @@ import fcntl
 import hashlib
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -11,6 +12,7 @@ import tempfile
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 from .results import RunResult, write_manifest
 from .rundir import OUTPUT_NAME, create_run_dir
@@ -99,9 +101,56 @@ def _lines(stream):
         yield buffer
 
 
-# Run folders are made one at a time in a process: they read the driving files, and the netCDF library is not safe
-# to call from several threads at once. Runs that build make theirs under the build lock anyway.
-_PREPARE_LOCK = threading.Lock()
+class BuildOnce:
+    """Runs that share one model, e.g. those of an analysis or a calibration: the first to start builds it and keeps
+    it at `binary`; the others wait for it, then run it as it is (mobile.sh -E), side by side. If the first could not
+    build it, each builds its own as before. A model kept earlier, as by a resumed analysis, is used at once.
+
+    For each attempt of a run: model = once.acquire(cancelled); a Runner(config, model) that builds (model None) gets
+    on_built=once.keep; the run that built calls once.release() when it ends, built or not."""
+
+    WAIT_SECONDS = 0.2  # How often a run waiting for the model checks whether it was cancelled
+
+    def __init__(self, binary, on_kept=None):
+        self.binary = Path(binary)
+        self.on_kept = on_kept  # Called with the path of the model once kept, e.g. to record its checksum
+        self._lock = threading.Lock()
+        self._ready = threading.Event()
+        self._claimed = False
+        if self.binary.is_file():
+            self._ready.set()
+
+    def acquire(self, cancelled=lambda: False):
+        """The model to run: its path, or None for a run that is to build one, or False if cancelled while waiting."""
+        with self._lock:
+            if not self._ready.is_set() and not self._claimed:
+                self._claimed = True
+                return None
+        while not self._ready.wait(self.WAIT_SECONDS):
+            if cancelled():
+                return False
+        return self.binary if self.binary.is_file() else None
+
+    def keep(self, path):
+        """on_built of the run that builds: keep a copy of its model for the others."""
+        if not Path(path).is_file():
+            return  # Not where mobile.sh leaves it: the others build their own
+        self.binary.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.binary.with_suffix(".tmp")
+        shutil.copy2(path, temporary)
+        temporary.replace(self.binary)
+        if self.on_kept is not None:
+            self.on_kept(self.binary)
+        self._ready.set()
+
+    def release(self):
+        """The run that was to build has ended, built or not: the others go on."""
+        self._ready.set()
+
+
+# The netCDF library is not safe to call from several threads at once: work on netCDF files done while runs go on
+# side by side, as making their run folders (which read the driving files), is done under this lock, one at a time.
+NETCDF_LOCK = threading.RLock()
 
 
 class Runner:
@@ -150,7 +199,7 @@ class Runner:
                 release()
 
     def _run_locked(self, name, on_progress, release_lock, on_built):
-        with _PREPARE_LOCK:
+        with NETCDF_LOCK:
             run_dir = create_run_dir(self.config, name, self.prebuilt)
         env = run_environment(self.config.mobile)
         parser = ProgressParser()
