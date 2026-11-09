@@ -210,7 +210,22 @@ and the relief (ETOPO 2022) when Terrain is first turned on. Without a connectio
 ### Calibration tab (in development)
 
 Calibration compares the model with observations, to tune its parameters with [Optuna](https://optuna.org/). The tab
-has a **Model** box (to come: a model output processed like the data) and a **Data** box, which works now:
+has a **Model** box and a **Data** box side by side, each with its own processing steps, and **Model and data** below,
+which compares them (the objectives and Optuna come next).
+
+The **Model** box takes an output of a finished run from the results folder (**Refresh** lists runs made since), or of a
+run in any other folder: type it under **Or a run in another folder**, or **Browse**, and press **Use this run** (the
+comparison only reads its outputs, and the setup does not change; **Earlier runs** in the sidebar stays on the results
+folder). Then choose the **Output** (as in the Results tab), how to put the cells together (**Over the cells**: the mean weighted by
+the people of each cell, which gives the value per person of the whole region for per-person outputs such as new cases;
+a plain mean; or a sum; a run on a point has one cell), whether it **aggregates** by sum (amounts per day, such as new
+cases or bites: summed by month they give the amount per month) or by mean (states, such as prevalence), and, for a seed
+band, one seed or all of them. It becomes a daily series in the same form as the data, processed by its own steps, as
+below, with its own plot and **Compare with**. With all the seeds of a band, each seed is processed by the steps, and
+the plot and the comparison show their **median** with their **range** (lowest to highest seed) as a shaded band, as the
+seed bands of the Results tab (of the processed values, e.g. of monthly sums); the metrics use the median. Dated values with an uncertainty, in either box, show it as a shaded band too.
+
+The **Data** box:
 
 1. Type the path of a file of observations, or **Browse**, and press **Load**. A file in the standard netCDF form of the
    GUI loads at once; a table (CSV, or text separated by blanks, as written by R) opens an import form.
@@ -252,6 +267,27 @@ has a **Model** box (to come: a model output processed like the data) and a **Da
    folder. The standard file has the values with their units and how they add up, their periods (CF `time_bnds`),
    calendar months, seasons, years or age bands, any uncertainty and other columns, the notes of what was done and the
    steps themselves, so they can be seen and applied again (e.g. to the model output, next).
+
+**Model and data** pairs the two on the periods (or months, seasons, years, age bands) they share, leaving out pairs
+with a missing value on either side, and says what to change when they cannot be paired (e.g. monthly data and a daily
+model output: aggregate the model by month). It plots both and gives the metrics, with the number of pairs:
+
+| Metric | What it says |
+|---|---|
+| RMSE | root mean square of model − data, in the units of the data |
+| RMSE of the series each divided by its mean | scale-free: the timing and the size of the swings, whatever the level (e.g. the share of cases reported) |
+| Correlation | scale-free: the timing only; 1 for the same timing, 0 for none, −1 for the opposite |
+| Bias | mean of model − data, in the units of the data |
+
+The RMSE of standardised series is not given: it carries the same information as the correlation. **Scale the model
+to the mean of the data** multiplies the model on the plot only, to compare timing by eye; the legend gives the factor.
+If the units of the two differ by name, an amber note asks to check that they are the same quantity.
+
+**Possible drivers** draws rainfall and temperature in panels below, as the model read them (the mean over the
+simulated cells of the run chosen in the Model box), within the periods the model and the data share and on the same
+time axis. Each is processed on its own, on the spot: into periods (as they are, week, month, season or year), by a
+statistic (sum, mean, minimum, maximum; monthly sums of rain are in mm per month), and optionally as a climatology by
+month. They are for looking only: they do not enter the metrics.
 
 ## What a run leaves behind
 

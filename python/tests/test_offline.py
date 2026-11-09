@@ -2073,5 +2073,148 @@ class TestCalibrationData(unittest.TestCase):
         seasonal = observations_figure(season, "file", two, "Values loaded")  # a climatology vs the months: two panels, by category
         self.assertEqual((seasonal.layout.xaxis.type, seasonal.layout.xaxis2.type), ("category", None))
 
+
+def fake_run(folder, values, pop, seed=1):
+    """A finished run folder with an output Human/Inew (time, lat, lon) on a 2 x 2 grid and its population file."""
+    folder = Path(folder)
+    (folder / "output").mkdir(parents=True)
+    lat, lon = np.array([10.0, 10.5]), np.array([30.0, 30.5])
+    pop_file = folder / "pop.nc"
+    with netCDF4.Dataset(pop_file, "w") as data:
+        data.createDimension("lat", 2), data.createDimension("lon", 2)
+        data.createVariable("lat", "f8", ("lat",))[:] = lat
+        data.createVariable("lon", "f8", ("lon",))[:] = lon
+        data.createVariable("pop", "f8", ("lat", "lon"), fill_value=np.nan)[:] = pop
+    with netCDF4.Dataset(folder / "output" / "output.nc", "w") as data:
+        for name, size in (("time", values.shape[0]), ("lat", 2), ("lon", 2)):
+            data.createDimension(name, size)
+        time = data.createVariable("time", "f8", ("time",))
+        time.units, time.calendar = "days since 2001-1-1 0:0:0", "gregorian"
+        time[:] = np.arange(values.shape[0])
+        data.createVariable("lat", "f8", ("lat",))[:] = lat
+        data.createVariable("lon", "f8", ("lon",))[:] = lon
+        variable = data.createGroup("Human").createVariable("Inew", "f4", ("time", "lat", "lon"), fill_value=np.float32(np.nan))
+        variable.units, variable.long_name = "fraction", "NEW symptomatic population per person"
+        variable[:] = values
+        climate = data.createGroup("Climate")
+        for name, units, value in (("rain", "mm/day", 2.0), ("t2m", "celsius", 20.0)):
+            field = climate.createVariable(name, "f4", ("time", "lat", "lon"), fill_value=np.float32(np.nan))
+            field.units, field.long_name = units, name
+            field[:] = np.where(np.isnan(values), np.nan, value + np.arange(values.shape[0])[:, None, None] * 0.0)
+    (folder / "run.json").write_text(json.dumps({"status": "finished", "date": "2026-11-08T12:00:00", "returncode": 0, "wall_seconds": 1,
+                                                 "spinup_years": 0, "run": {"seed": seed}, "inputs": {"pop_file": str(pop_file)},
+                                                 "region": None, "period": None}))
+    return folder
+
+
+class TestCalibrationModel(unittest.TestCase):
+    """The model side of a calibration, and the metrics that compare it with the observations."""
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.folder = Path(folder.name)
+
+    def test_model_series(self):
+        from mobile.calibration_model import default_aggregation, model_series, run_choices
+        from mobile.calibration_steps import apply_steps
+        from mobile.cells import cell_areas
+        days = 59  # January and February 2001
+        values = np.zeros((days, 2, 2))
+        values[:, 0, 0], values[:, 0, 1], values[:, 1, 0] = 0.001, 0.003, 0.002
+        values[:, 1, 1] = np.nan  # Not simulated
+        pop = np.array([[100.0, 300.0], [50.0, 999.0]])
+        run = fake_run(self.folder / "runs" / "one", values, pop)
+        series = model_series(run, "Inew")
+        self.assertEqual((series.shape, len(series), series.label(0), series.units, series.aggregation), ("dated", 59, "2001-01-01", "fraction", "sum"))
+        # People-weighted over the simulated cells (control: by hand, without the cell that is not simulated)
+        people = pop * cell_areas(run / "pop.nc")
+        expected = (0.001 * people[0, 0] + 0.003 * people[0, 1] + 0.002 * people[1, 0]) / (people[0, 0] + people[0, 1] + people[1, 0])
+        self.assertLess(abs(series.values[0] / (expected) - 1), 1e-6)
+        self.assertLess(abs(model_series(run, "Inew", "mean").values[0] / (0.002) - 1), 1e-6)
+        self.assertLess(abs(model_series(run, "Inew", "sum").values[0] / (0.006) - 1), 1e-6)
+        # Daily amounts per person summed by month: cases per person per month
+        months = apply_steps(series, [{"kind": "aggregate", "period": "month", "how": "sum", "complete": True, "days": 1}])
+        self.assertLess(abs(months.values[0] / (31 * expected) - 1), 1e-6)
+        self.assertEqual(default_aggregation("I", {"units": "fraction"}), "mean")
+        # A seed band: one seed, or the mean over the seeds
+        band = self.folder / "runs" / "band"
+        fake_run(band / "seed_1", values, pop, 1), fake_run(band / "seed_2", values * 3, pop, 2)
+        (band / "seed_band.json").write_text(json.dumps({"status": "finished", "date": "2026-11-08T13:00:00", "seeds": [1, 2]}))
+        self.assertLess(abs(model_series(band, "Inew", seed=2).values[0] / (3 * expected) - 1), 1e-6)
+        self.assertLess(abs(model_series(band, "Inew").values[0] / (2 * expected) - 1), 1e-6)
+        # A seed band processed seed by seed: the median, with the range across seeds as a band (control: by hand)
+        from mobile.calibration_model import model_members, seed_spread
+        members = model_members(band, "Inew")
+        spread = seed_spread(members, [{"kind": "aggregate", "period": "month", "how": "sum", "complete": True, "days": 1}])
+        january = 31 * expected
+        for got, want in ((spread.values[0], 2 * january), (spread.extra["lowest"][0], january), (spread.extra["highest"][0], 3 * january)):
+            self.assertLess(abs(got / want - 1), 1e-6)
+        self.assertIn("median over the 2 seeds", spread.notes[-1])
+        from mobile.plots import comparison_figure, observations_figure
+        drawn = observations_figure(spread, "band")
+        self.assertEqual([trace.fill for trace in drawn.data], [None, "tonexty", None])
+        self.assertIn("range across seeds", drawn.data[1].name)
+        paired_labels = [spread.label(i) for i in range(2)]
+        shown = comparison_figure(spread, spread, paired_labels, spread.values, spread.values)
+        self.assertEqual(sum(trace.fill == "tonexty" for trace in shown.data), 1)
+        self.assertIn("median across seeds", shown.data[-1].name)
+        self.assertEqual(len(run_choices(self.folder / "runs")), 2)
+        # Drivers from the same run, processed on their own: monthly sums of rain in mm per month, a climatology of temperature
+        from mobile.calibration_model import driver_series
+        rain = driver_series(run, "rain", "month")
+        self.assertEqual((len(rain), rain.units), (2, "mm per month"))
+        self.assertLess(abs(rain.values[0] / (31 * 2.0) - 1), 1e-6)  # Control: 31 days of 2 mm
+        self.assertEqual(len(driver_series(run, "rain", "month", first="2001-02-01")), 1)
+        temperature = driver_series(run, "t2m", "as_is")
+        self.assertEqual((temperature.units, len(temperature), temperature.aggregation), ("celsius", 59, "mean"))
+        from mobile.plots import comparison_figure
+        months_model = apply_steps(series, [{"kind": "aggregate", "period": "month", "how": "sum", "complete": True, "days": 1}])
+        figure = comparison_figure(months_model, months_model, [months_model.label(i) for i in range(2)], months_model.values, months_model.values,
+                                   drivers=[("rain", "Rainfall", rain), ("t2m", "Temperature", driver_series(run, "t2m", "month"))])
+        self.assertEqual(len(figure.data), 4)
+        self.assertEqual((figure.data[2].xaxis, figure.data[3].xaxis, figure.layout.xaxis2.matches), ("x2", "x3", "x3"))
+        self.assertEqual((figure.layout.yaxis2.title.text, figure.layout.yaxis3.title.text), ("mm per month", "celsius"))
+        # A run in any folder, for the Model box; a folder that is not a finished run is refused, saying why
+        from mobile.calibration_data import DataError
+        from mobile.calibration_model import run_elsewhere
+        found = run_elsewhere(run)
+        self.assertEqual(list(found), [str(run.resolve())])
+        self.assertIn(f"in {run.parent.resolve()}", found[str(run.resolve())])
+        with self.assertRaisesRegex(DataError, "not a finished run"):
+            run_elsewhere(self.folder)
+        with self.assertRaisesRegex(DataError, "no folder"):
+            run_elsewhere(self.folder / "nowhere")
+
+    def test_metrics(self):
+        import pandas as pd
+        from mobile.calibration_data import DataError, import_table
+        from mobile.calibration_metrics import metrics, pair
+        months = lambda values, start="2001-01": import_table(pd.DataFrame({"d": pd.date_range(f"{start}-01", periods=len(values), freq="MS").strftime("%Y-%m-15"),
+                                                                             "v": values}), "dated", "v", "sum", "cases per person", date="d", period="month")
+        season = 1 + np.sin(2 * np.pi * np.arange(24) / 12)
+        data = months(season)
+        # A reporting fraction: scale-free metrics see no difference (control: the RMSE does)
+        reported = metrics(*pair(months(0.3 * season), data)[:2])
+        self.assertAlmostEqual(reported["rmse_relative"], 0.0)
+        self.assertAlmostEqual(reported["correlation"], 1.0)
+        self.assertGreater(reported["rmse"], 0.1)
+        # The right timing with half the swing: correlation perfect, the relative RMSE is not
+        half = metrics(*pair(months(1 + 0.5 * np.sin(2 * np.pi * np.arange(24) / 12)), data)[:2])
+        self.assertAlmostEqual(half["correlation"], 1.0)
+        self.assertGreater(half["rmse_relative"], 0.2)
+        # Six months late: the timing is wrong
+        self.assertLess(metrics(*pair(months(1 + np.sin(2 * np.pi * (np.arange(24) - 6) / 12)), data)[:2])["correlation"], -0.9)
+        # Only the periods in common, without missing values
+        m, d, labels = pair(months(np.r_[season[6:], np.nan]), data)
+        self.assertEqual((len(m), labels[0]), (18, "2001-01"))  # 19 months in common, the last missing in the model
+        self.assertIsNone(metrics(np.ones(5), np.arange(5.0))["correlation"])
+        with self.assertRaisesRegex(DataError, "aggregate the model into the periods of the other"):
+            days = import_table(pd.DataFrame({"d": pd.date_range("2001-01-01", periods=60).strftime("%Y-%m-%d"), "v": np.ones(60)}),
+                                "dated", "v", "sum", "x", date="d", period="day")
+            pair(days, data)
+        with self.assertRaisesRegex(DataError, "process them into the same shape"):
+            pair(import_table(pd.DataFrame({"y": [2001], "v": [1.0]}), "yearly", "v", "sum", "x", year="y"), data)
+
 if __name__ == "__main__":
     unittest.main()

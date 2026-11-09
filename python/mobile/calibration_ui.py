@@ -1,24 +1,31 @@
-"""The Calibration tab: a Model box and a Data box side by side. For now, the Data box: load observations from the
-standard netCDF file or import them from a table, process them with a pipeline of steps the user builds (see
-calibration_steps.py), see them, and save them as standard netCDF. The Model box, the objectives and the calibration
-with Optuna come next (see calibration-plan)."""
+"""The Calibration tab: a Model box and a Data box side by side, and their comparison below. The Data box loads
+observations (the standard netCDF file, or a table to import); the Model box takes an output of a finished run, reduced
+over the cells of its region. Each is processed by a pipeline of steps the user builds (calibration_steps.py), and the
+comparison pairs the two on the periods they share and gives the metrics (calibration_metrics.py). The objectives and
+the calibration with Optuna come next (see calibration-plan)."""
 
 import datetime
 import itertools
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
 from shiny import reactive, render, ui
 
 from .calibration_data import AGGREGATIONS, PERIODS, SEASONS, SHAPES, DataError, import_table, read_observations, read_table, write_observations
+from .calibration_metrics import METRICS, metrics, pair
+from .calibration_model import (
+    DRIVER_PERIODS, DRIVERS, SEED_MEAN, SPACES, chosen_seeds, default_aggregation, driver_series, members_mean, model_members, run_choices,
+    run_elsewhere, run_seeds, run_variables, seed_spread,
+)
 from .calibration_steps import (
     AGGREGATE_PERIODS, COMBINATIONS, FILTER_MISSING, FILTERS, OPERATIONS, SELECTIONS, STATISTICS, STEP_KINDS, TIME_UNITS, TRANSFORMS, apply_steps,
     default_step,
 )
 from .layout import OPTUNA_URL, with_tip
-from .plots import message_figure, observations_figure, send_figure
+from .plots import comparison_figure, message_figure, observations_figure, send_figure
 from .setup import typed_path
 
 NONE = "__none__"  # Menu entry for "no column"
@@ -29,18 +36,21 @@ MONTH_NAMES = {str(m): datetime.date(2000, m, 1).strftime("%b") for m in range(1
 # The selections that apply to each shape of observations
 SELECTIONS_OF_SHAPE = {"dated": ("window", "months", "years"), "yearly": ("window", "years"), "climatology": ("months",),
                        "season": ("seasons",), "age": ("bands",), "single": ()}
-STEP_ACTION = ("Shiny.setInputValue('cal_step_action', {{uid: '{uid}', action: '{action}', at: Date.now()}}, "
+STEP_ACTION = ("Shiny.setInputValue('{prefix}_step_action', {{uid: '{uid}', action: '{action}', at: Date.now()}}, "
                "{{priority: 'event'}})")
+DATA, MODEL = "cal_data", "cal_model"  # The prefixes of the ids of the two boxes
 
 
 def calibration_tab():
-    """The Calibration tab: what it is for, then the Model and the Data boxes."""
+    """The Calibration tab: what it is for, the Model and the Data boxes, and their comparison."""
     return ui.div(
-        ui.p("Calibration compares the model with observations: the Model box chooses a model output and processes it, the "
-             "Data box loads observations and processes them the same way, and a metric compares the two. Several such "
-             "objectives are then optimised together with ", ui.a("Optuna", href=OPTUNA_URL, target="_blank"),
-             ". This tab is in development: for now, the Data box.", class_="text-muted"),
-        ui.layout_columns(_model_box(), _data_box(), col_widths=(5, 7)),
+        ui.p("Calibration compares the model with observations: the Model box takes an output of a finished run and the "
+             "Data box loads observations, each processed by steps you choose, and the comparison below pairs them on the "
+             "periods they share and gives the metrics. Several such objectives are then optimised together with ",
+             ui.a("Optuna", href=OPTUNA_URL, target="_blank"), ". This tab is in development: the objectives and Optuna come next.",
+             class_="text-muted"),
+        ui.layout_columns(_model_box(), _data_box(), col_widths=(6, 6)),
+        _comparison_card(),
         class_="mt-3",
     )
 
@@ -48,8 +58,21 @@ def calibration_tab():
 def _model_box():
     return ui.card(
         ui.card_header("Model"),
-        ui.p("To come: choose a model output (e.g. new cases, EIR), reduce it over the cells of the site, and process it with "
-             "the same steps as the data, to compare the two.", class_="text-muted mb-0"),
+        ui.p("An output of a finished run, reduced over the cells of its region into a daily series. Run the model from the "
+             "sidebar first; its runs are listed here.", class_="small text-muted mb-2"),
+        ui.div(ui.input_select(f"{MODEL}_run", "Run", {}, width="100%"),
+               ui.input_action_button(f"{MODEL}_refresh", "Refresh", class_="btn-sm ms-2 mb-3", title="List the runs again"),
+               class_="d-flex align-items-end"),
+        ui.input_text(f"{MODEL}_folder", with_tip("Or a run in another folder", "Any finished run or seed band: the comparison "
+                      "only reads its outputs, and the setup does not change."), placeholder="its folder", width="100%"),
+        ui.div(ui.input_action_button(f"browse_{MODEL}_folder", "Browse", class_="btn-sm"),
+               ui.input_action_button(f"{MODEL}_add", "Use this run", class_="btn-sm ms-2"), class_="mb-2"),
+        ui.output_ui(f"{MODEL}_add_problem"),
+        ui.output_ui(f"{MODEL}_options"),
+        ui.output_ui(f"{MODEL}_status"),
+        ui.output_ui(f"{MODEL}_pipeline"),
+        ui.output_ui(f"{MODEL}_compare_choice"),
+        ui.div(id=f"{MODEL}_plot", style="min-height: 380px;"),
     )
 
 
@@ -66,12 +89,44 @@ def _data_box():
         ),
         ui.output_ui("cal_dataset_choice"),
         ui.output_ui("cal_import_form"),
-        ui.output_ui("cal_data_status"),
-        ui.output_ui("cal_pipeline"),
-        ui.output_ui("cal_compare_choice"),
-        ui.div(id="cal_data_plot", style="min-height: 380px;"),
+        ui.output_ui(f"{DATA}_status"),
+        ui.output_ui(f"{DATA}_pipeline"),
+        ui.output_ui(f"{DATA}_compare_choice"),
+        ui.div(id=f"{DATA}_plot", style="min-height: 380px;"),
         ui.output_ui("cal_data_table"),
         ui.output_ui("cal_save_box"),
+    )
+
+
+def _comparison_card():
+    return ui.card(
+        ui.card_header("Model and data"),
+        ui.input_switch("cal_scale_model", with_tip("Scale the model to the mean of the data, on the plot", "Only to compare "
+                        "their timing by eye when their levels differ, e.g. because only part of the cases are reported. The "
+                        "metrics are not changed."), value=False),
+        ui.div(
+            ui.tags.strong(with_tip("Possible drivers", "Rainfall and temperature as the model read them (the mean over the "
+                                    "simulated cells of the run in the Model box), each processed on its own and drawn below, "
+                                    "within the periods the model and the data share."), class_="small"),
+            *[_driver_controls(name) for name in DRIVERS],
+            class_="border rounded p-2 mb-2",
+        ),
+        ui.output_ui("cal_drivers_problem"),
+        ui.div(id="cal_comparison_plot", style="min-height: 380px;"),
+        ui.output_ui("cal_comparison"),
+        class_="mt-3",
+    )
+
+
+def _driver_controls(name):
+    """A row of choices for one driver: show it, into which periods, by which statistic, and as a climatology."""
+    label, how = DRIVERS[name]
+    return ui.layout_columns(
+        ui.input_switch(f"cal_driver_{name}", label, value=False),
+        ui.input_select(f"cal_driver_{name}_period", None, DRIVER_PERIODS, selected="month"),
+        ui.input_select(f"cal_driver_{name}_how", None, {key: STATISTICS[key] for key in ("sum", "mean", "min", "max")}, selected=how),
+        ui.input_switch(f"cal_driver_{name}_climatology", "Climatology by month", value=False),
+        col_widths=(3, 3, 3, 3), fill=False, class_="align-items-center",
     )
 
 
@@ -137,8 +192,8 @@ def import_form(table):
 
 # ---------------------------------------------------------------- the steps, as controls
 
-def step_id(uid, name):
-    return f"cal_step_{uid}_{name}"
+def step_id(prefix, uid, name):
+    return f"{prefix}_step_{uid}_{name}"
 
 
 def item_choices(what, observations):
@@ -169,15 +224,15 @@ def _span(observations):
     return None, None
 
 
-def step_controls(step, number, count, before, others):
+def step_controls(step, number, count, before, others, prefix=DATA):
     """The card of one step: its number and kind, its buttons, and its choices, filled with its values. before is the
     observations the step applies to (after the steps above it), for the choices that depend on them."""
     uid, kind = step["uid"], step["kind"]
-    sid = lambda name: step_id(uid, name)
+    sid = lambda name: step_id(prefix, uid, name)
     when = lambda name, value, *children: ui.panel_conditional(f"input.{sid(name)} === '{value}'", *children)
     button = lambda action, text, title, disabled=False: ui.tags.button(
         text, type="button", class_="btn btn-sm btn-outline-secondary py-0 px-2 ms-1", title=title,
-        onclick=STEP_ACTION.format(uid=uid, action=action), **({"disabled": ""} if disabled else {}))
+        onclick=STEP_ACTION.format(prefix=prefix, uid=uid, action=action), **({"disabled": ""} if disabled else {}))
     header = ui.div(
         ui.tags.strong(f"{number}. {STEP_KINDS[kind]}", class_="small"),
         ui.div(button("up", "↑", "Move up", number == 1), button("down", "↓", "Move down", number == count), button("remove", "×", "Remove")),
@@ -217,8 +272,7 @@ def step_controls(step, number, count, before, others):
         body = [ui.input_radio_buttons(sid("by"), with_tip("By", "The mean of each calendar month, or season, over the values "
                                        "in it, with their spread as the uncertainty. From monthly values, a season is the mean "
                                        "month of the season; for seasonal totals, aggregate into seasons (sum) first."),
-                                       {"month": "Month", "season": "Season"},
-                                       selected=step["by"], inline=True)]
+                                       {"month": "Month", "season": "Season"}, selected=step["by"], inline=True)]
     elif kind == "transform":
         body = [ui.input_select(sid("transform"), None, TRANSFORMS, selected=step["transform"]),
                 ui.panel_conditional(f"['log', 'log10'].includes(input.{sid('transform')})",
@@ -227,10 +281,9 @@ def step_controls(step, number, count, before, others):
     elif kind == "filter":
         body = [ui.input_select(sid("type"), with_tip("Filter", "A Butterworth filter of order 4, run forward and backward, so "
                                 "nothing shifts in time. The cut-off is gradual: at the cut-off period half the amplitude is kept, so "
-                                "to remove the annual cycle with a low pass, cut at about 2 years. Needs a regular series without "
-                                "gaps or missing values. The filter starts "
-                                "up at each end: values within about two of the longest periods kept from each end are less "
-                                "reliable, so a band of several years needs a series of decades."), FILTERS, selected=step["type"]),
+                                "to remove the annual cycle with a low pass, cut at about 2 years. The filter starts up at each "
+                                "end: values within about two of the longest periods kept from each end are less reliable, so a "
+                                "band of several years needs a series of decades."), FILTERS, selected=step["type"]),
                 ui.layout_columns(
                     ui.panel_conditional(f"input.{sid('type')} !== 'low'", ui.input_numeric(sid("short"), "Shorter period", value=step["short"])),
                     ui.panel_conditional(f"input.{sid('type')} !== 'high'", ui.input_numeric(sid("long"), "Longer period", value=step["long"])),
@@ -241,11 +294,11 @@ def step_controls(step, number, count, before, others):
                                     "are filled by a straight line only for the filter to run, and put back as missing after; the "
                                     "notes say how many. Filter each stretch separately: no interpolation. Either way, longer gaps "
                                     "split the series into stretches filtered separately, and stretches too short for the cut-off "
-                                    "stay missing."), FILTER_MISSING,
-                                    selected=step.get("missing", "interpolate"), width="100%"),
-                    when("missing", "interpolate", ui.input_numeric(sid("max_gap"), with_tip("N (values)", "The longest gap, in values (e.g. months), bridged "
-                                                 "for the filter only and left missing after. A longer gap splits the series "
-                                                 "into stretches filtered separately."), value=step.get("max_gap", 3), min=1, step=1)),
+                                    "stay missing."), FILTER_MISSING, selected=step.get("missing", "interpolate"), width="100%"),
+                    when("missing", "interpolate", ui.input_numeric(sid("max_gap"), with_tip("N (values)", "The longest gap, in values "
+                                                                    "(e.g. months), bridged for the filter only and left missing after. "
+                                                                    "A longer gap splits the series into stretches filtered separately."),
+                                                                    value=step.get("max_gap", 3), min=1, step=1)),
                     col_widths=(9, 3), fill=False)]
     else:
         body = [ui.layout_columns(
@@ -315,21 +368,200 @@ def steps_before(raw, steps, others):
     return result
 
 
+def metrics_table(values, model, data):
+    """The metrics as an HTML table: name, value and what it means."""
+    rows = []
+    for key, text in METRICS.items():
+        value = values[key]
+        shown = "not defined" if value is None else f"{value:.4g}"
+        name, meaning = text.split(": ", 1)
+        if key in ("rmse", "bias"):
+            meaning = meaning.replace("in the units of the data", f"in {data.units}")
+        rows.append(ui.tags.tr(ui.tags.td(name), ui.tags.td(shown, class_="text-end"), ui.tags.td(meaning, class_="text-muted")))
+    return ui.tags.table(ui.tags.tbody(*rows), class_="table table-sm small mb-1")
+
+
 # ---------------------------------------------------------------- server
 
 def calibration_server(input, output, session, setup):
-    """The server side of the tab. setup() is the applied setup, whose results folder holds the saved observations."""
+    """The server side of the tab. setup() is the applied setup, whose results folder holds the runs and the saved
+    observations."""
     datasets = reactive.value({})  # {name: {"path", "table" (a table to import), "raw" (Observations), "steps": [step with uid]}}
     chosen = reactive.value(None)  # The name of the data set shown
     problem = reactive.value(None)
     saved = reactive.value(None)
     uids = itertools.count()
 
-    def update(name, **changes):
-        datasets.set({**datasets(), name: {**datasets()[name], **changes}})
+    def pipeline(prefix, raw, others, name, members=lambda: []):
+        """The steps of one box, with their cards, the comparison with an earlier stage and the plot. raw() is the
+        observations before the steps (or None), others() the observations to combine with, name() the title. With
+        several members() (the seeds of a seed band), each is processed by the steps, and the result is their mean with
+        their standard deviation as the uncertainty."""
+        steps = reactive.value([])
+
+        def control(uid):
+            def value(key):
+                id = step_id(prefix, uid, key)
+                return input[id]() if id in input else None
+            return value
+
+        @reactive.calc
+        def live():
+            return [read_step(step, control(step["uid"])) for step in steps()]
+
+        def snapshot():
+            """Keep the choices of the controls in the steps, before the controls are drawn again."""
+            with reactive.isolate():
+                steps.set(live())
+
+        def draw_pipeline():
+            observations = raw()
+            if observations is None:
+                return None
+            current, other = steps(), others()
+            befores = steps_before(observations, current, other)
+            return ui.div(
+                ui.tags.strong("Processing", class_="small"),
+                ui.p("Steps applied in order. Add, change, move or remove them; the plot follows.", class_="small text-muted mb-1"),
+                *[step_controls(step, i + 1, len(current), befores[i], other, prefix) for i, step in enumerate(current)],
+                ui.div(ui.input_select(f"{prefix}_add_kind", None, STEP_KINDS, width="24rem"),
+                       ui.input_action_button(f"{prefix}_add_step", "Add step", class_="btn-sm ms-2 mb-3"),
+                       class_="d-flex align-items-start"),
+                class_="border rounded p-2 mb-3",
+            )
+
+        draw_pipeline.__name__ = f"{prefix}_pipeline"  # Shiny names an output after its function
+        render.ui(draw_pipeline)
+
+        @reactive.effect
+        @reactive.event(input[f"{prefix}_add_step"])
+        def add_step():
+            observations = raw()
+            if observations is None:
+                return
+            snapshot()
+            try:
+                before = apply_steps(observations, [without_uid(s) for s in steps()], others())
+            except DataError:
+                before = observations
+            step = {"uid": str(next(uids)), **default_step(input[f"{prefix}_add_kind"](), before)}
+            if step["kind"] == "combine":
+                step["other"] = next(iter(others()), None)
+            steps.set([*steps(), step])
+
+        @reactive.effect
+        @reactive.event(input[f"{prefix}_step_action"])
+        def step_action():
+            action = input[f"{prefix}_step_action"]()
+            if not isinstance(action, dict):
+                return
+            snapshot()
+            current = list(steps())
+            i = next((k for k, step in enumerate(current) if step["uid"] == action.get("uid")), None)
+            if i is None:
+                return
+            if action.get("action") == "remove":
+                current.pop(i)
+            elif action.get("action") == "up" and i > 0:
+                current[i - 1], current[i] = current[i], current[i - 1]
+            elif action.get("action") == "down" and i < len(current) - 1:
+                current[i + 1], current[i] = current[i], current[i + 1]
+            steps.set(current)
+
+        @reactive.calc
+        def processed():
+            """(observations after the steps, or None, and what is wrong)."""
+            observations = raw()
+            if observations is None:
+                return None, None
+            try:
+                seeds = members()
+                if len(seeds) > 1:
+                    return seed_spread(seeds, [without_uid(s) for s in live()], others(), observations.notes[0]), None
+                return apply_steps(observations, [without_uid(s) for s in live()], others()), None
+            except DataError as error:
+                return None, str(error)
+
+        def draw_compare_choice():
+            """Which earlier stage to draw with the result: the values before the steps, or after one of them but the last."""
+            if raw() is None or not steps():
+                return None
+            n = len(steps())
+            choices = {"none": "Nothing", "0": "Before the steps", **{str(k): f"After step {k}" for k in range(1, n)}}
+            id = f"{prefix}_compare"
+            with reactive.isolate():
+                previous = input[id]() if id in input else "none"
+            return ui.input_select(id, with_tip("Compare with", "An earlier stage of the processing, drawn with the result: on "
+                                   "the same axes if it has the same shape and units, else in a second panel below."),
+                                   choices, selected=previous if previous in choices else "none", width="16rem")
+
+        draw_compare_choice.__name__ = f"{prefix}_compare_choice"
+        render.ui(draw_compare_choice)
+
+        @reactive.calc
+        def compared():
+            id = f"{prefix}_compare"
+            choice = input[id]() if id in input else "none"
+            observations = raw()
+            if observations is None or choice in (None, "none"):
+                return None, ""
+            k, current = int(choice), live()
+            if k > len(current) - 1:
+                return None, ""
+            try:
+                stage = apply_steps(observations, [without_uid(s) for s in current[:k]], others())
+            except DataError:
+                return None, ""
+            return stage, "Before the steps" if k == 0 else f"After step {k}"
+
+        @reactive.effect
+        async def draw_plot():
+            observations, error = processed()
+            if observations is None:
+                await send_figure(session, f"{prefix}_plot", message_figure(error or name()[1]))
+                return
+            await send_figure(session, f"{prefix}_plot", observations_figure(observations, name()[0], *compared()))
+
+        return SimpleNamespace(steps=steps, live=live, snapshot=snapshot, processed=processed)
+
+    # ---------------------------------------------------------------- data
 
     def current():
         return datasets().get(chosen()) if chosen() is not None else None
+
+    def data_raw():
+        entry = current()
+        return None if entry is None else entry.get("raw")
+
+    def others_for(name):
+        """{name: processed observations} of the other data sets, to combine with."""
+        result = {}
+        for other, entry in datasets().items():
+            if other != name and entry.get("raw") is not None:
+                try:
+                    result[other] = apply_steps(entry["raw"], [without_uid(s) for s in entry["steps"]])
+                except DataError:
+                    pass
+        return result
+
+    def data_name():
+        entry = current()
+        if entry is None:
+            return "", "Load a file of observations to see them."
+        return entry["path"].name, "Import the table to see it."
+
+    data = pipeline(DATA, data_raw, lambda: others_for(chosen()), data_name)
+
+    def keep_steps():
+        """Keep the steps of the data set shown with it, before another is shown."""
+        if current() is not None:
+            data.snapshot()
+            with reactive.isolate():
+                datasets.set({**datasets(), chosen(): {**datasets()[chosen()], "steps": data.steps()}})
+
+    def show(name):
+        chosen.set(name)
+        data.steps.set(list(datasets()[name]["steps"]))
 
     @reactive.effect
     @reactive.event(input.cal_load)
@@ -350,10 +582,10 @@ def calibration_server(input, output, session, setup):
         except (DataError, OSError, UnicodeDecodeError) as error:
             problem.set(str(error))
             return
+        keep_steps()
         # A saved file already holds the steps that made it (in its notes); new steps start from it
-        snapshot_steps()
         datasets.set({**datasets(), path.stem: {**entry, "steps": []}})
-        chosen.set(path.stem)
+        show(path.stem)
 
     @render.ui
     def cal_dataset_choice():
@@ -366,8 +598,8 @@ def calibration_server(input, output, session, setup):
     @reactive.event(input.cal_dataset)
     def choose_dataset():
         if input.cal_dataset() in datasets() and input.cal_dataset() != chosen():
-            snapshot_steps()
-            chosen.set(input.cal_dataset())
+            keep_steps()
+            show(input.cal_dataset())
             saved.set(None)
 
     @render.ui
@@ -399,166 +631,29 @@ def calibration_server(input, output, session, setup):
             problem.set(f"Not imported: {error}")
             return
         problem.set(None)
-        update(chosen(), raw=raw, steps=[])
+        datasets.set({**datasets(), chosen(): {**entry, "raw": raw, "steps": []}})
+        data.steps.set([])
 
-    def control_value(uid):
-        def value(name):
-            id = step_id(uid, name)
-            return input[id]() if id in input else None
-        return value
-
-    @reactive.calc
-    def live_steps():
-        """The steps of the data set shown, with the choices of their controls."""
-        entry = current()
-        if entry is None:
-            return []
-        return [read_step(step, control_value(step["uid"])) for step in entry["steps"]]
-
-    def snapshot_steps():
-        """Keep the choices of the controls in the steps, before the controls are drawn again."""
-        with reactive.isolate():
-            if current() is not None:
-                update(chosen(), steps=live_steps())
-
-    def others_for(name):
-        """{name: processed observations} of the other data sets, to combine with."""
-        result = {}
-        for other, entry in datasets().items():
-            if other != name and entry.get("raw") is not None:
-                try:
-                    result[other] = apply_steps(entry["raw"], [without_uid(s) for s in entry["steps"]])
-                except DataError:
-                    pass
-        return result
-
-    @render.ui
-    def cal_pipeline():
-        entry = current()
-        if entry is None or entry.get("raw") is None:
-            return None
-        steps = entry["steps"]
-        others = others_for(chosen())
-        befores = steps_before(entry["raw"], steps, others)
-        cards = [step_controls(step, i + 1, len(steps), befores[i], others) for i, step in enumerate(steps)]
-        return ui.div(
-            ui.tags.strong("Processing", class_="small"),
-            ui.p("Steps applied in order to the values loaded. Add, change, move or remove them; the plot follows.",
-                 class_="small text-muted mb-1"),
-            *cards,
-            ui.div(ui.input_select("cal_add_kind", None, STEP_KINDS, width="24rem"),
-                   ui.input_action_button("cal_add_step", "Add step", class_="btn-sm ms-2 mb-3"),
-                   class_="d-flex align-items-start"),
-            class_="border rounded p-2 mb-3",
-        )
-
-    @reactive.effect
-    @reactive.event(input.cal_add_step)
-    def add_step():
-        if current() is None or current().get("raw") is None:
-            return
-        snapshot_steps()
-        entry = current()
-        others = others_for(chosen())
-        try:
-            before = apply_steps(entry["raw"], [without_uid(s) for s in entry["steps"]], others)
-        except DataError:
-            before = entry["raw"]
-        step = {"uid": str(next(uids)), **default_step(input.cal_add_kind(), before)}
-        if step["kind"] == "combine":
-            step["other"] = next(iter(others), None)
-        update(chosen(), steps=[*entry["steps"], step])
-
-    @reactive.effect
-    @reactive.event(input.cal_step_action)
-    def step_action():
-        action = input.cal_step_action()
-        if current() is None or not isinstance(action, dict):
-            return
-        snapshot_steps()
-        steps = list(current()["steps"])
-        i = next((k for k, step in enumerate(steps) if step["uid"] == action.get("uid")), None)
-        if i is None:
-            return
-        if action.get("action") == "remove":
-            steps.pop(i)
-        elif action.get("action") == "up" and i > 0:
-            steps[i - 1], steps[i] = steps[i], steps[i - 1]
-        elif action.get("action") == "down" and i < len(steps) - 1:
-            steps[i + 1], steps[i] = steps[i], steps[i + 1]
-        update(chosen(), steps=steps)
-
-    @reactive.calc
-    def processed():
-        """(observations after the steps, or None, and what is wrong)."""
-        entry = current()
-        if entry is None or entry.get("raw") is None:
-            return None, None
-        try:
-            return apply_steps(entry["raw"], [without_uid(s) for s in live_steps()], others_for(chosen())), None
-        except DataError as error:
-            return None, str(error)
-
-    @render.ui
-    def cal_compare_choice():
-        """Which earlier stage to draw with the result: the values loaded, or after one of the steps but the last."""
-        entry = current()
-        if entry is None or entry.get("raw") is None or not entry["steps"]:
-            return None
-        n = len(entry["steps"])
-        choices = {"none": "Nothing", "0": "Values loaded", **{str(k): f"After step {k}" for k in range(1, n)}}
-        with reactive.isolate():
-            previous = input.cal_compare() if "cal_compare" in input else "none"
-        return ui.input_select("cal_compare", with_tip("Compare with", "An earlier stage of the processing, drawn with the "
-                               "result: on the same axes if it has the same shape and units, else in a second panel below."),
-                               choices, selected=previous if previous in choices else "none", width="16rem")
-
-    @reactive.calc
-    def compared():
-        """(the stage chosen to compare with, its label), or (None, '')."""
-        entry = current()
-        choice = input.cal_compare() if "cal_compare" in input else "none"
-        if entry is None or entry.get("raw") is None or choice in (None, "none"):
-            return None, ""
-        k = int(choice)
-        steps = live_steps()
-        if k > len(steps) - 1:
-            return None, ""
-        try:
-            stage = apply_steps(entry["raw"], [without_uid(s) for s in steps[:k]], others_for(chosen()))
-        except DataError:
-            return None, ""
-        return stage, "Values loaded" if k == 0 else f"After step {k}"
-
-    @render.ui
-    def cal_data_status():
-        if problem():
-            return ui.p(problem(), class_="small text-danger")
-        entry = current()
-        observations, error = processed()
+    def status(observations, error, title):
         if error:
             return ui.p(f"Processing, {error}", class_="small text-danger")
         if observations is None:
             return None
         notes = [ui.tags.li(note) for note in observations.notes]
-        return ui.div(
-            ui.p(ui.tags.strong(f"{entry['path'].name}: "), summary_text(observations), class_="small mb-1"),
-            ui.tags.ul(*notes, class_="small text-muted mb-2") if notes else None,
-        )
+        return ui.div(ui.p(ui.tags.strong(f"{title}: "), summary_text(observations), class_="small mb-1"),
+                      ui.tags.ul(*notes, class_="small text-muted mb-2") if notes else None)
 
-    @reactive.effect
-    async def draw_data():
-        entry = current()
-        observations, error = processed()
-        if observations is None:
-            text = error or ("Import the table to see it." if entry is not None else "Load a file of observations to see them.")
-            await send_figure(session, "cal_data_plot", message_figure(text))
-            return
-        await send_figure(session, "cal_data_plot", observations_figure(observations, entry["path"].name, *compared()))
+    def draw_data_status():
+        if problem():
+            return ui.p(problem(), class_="small text-danger")
+        return status(*data.processed(), data_name()[0])
+
+    draw_data_status.__name__ = f"{DATA}_status"
+    render.ui(draw_data_status)
 
     @render.ui
     def cal_data_table():
-        observations, _ = processed()
+        observations, _ = data.processed()
         if observations is None:
             return None
         frame = observations.frame()
@@ -571,7 +666,7 @@ def calibration_server(input, output, session, setup):
 
     @render.ui
     def cal_save_box():
-        observations, _ = processed()
+        observations, _ = data.processed()
         if observations is None:
             return None
         return ui.div(
@@ -588,7 +683,7 @@ def calibration_server(input, output, session, setup):
     @reactive.effect
     @reactive.event(input.cal_save)
     def save_observations():
-        observations, _ = processed()
+        observations, _ = data.processed()
         name = input.cal_save_name().strip().removesuffix(".nc")
         if observations is None:
             return
@@ -611,3 +706,196 @@ def calibration_server(input, output, session, setup):
             return None
         kind, text = state
         return ui.p(f"Saved: {text}" if kind == "ok" else text, class_="small " + ("text-success" if kind == "ok" else "text-danger"))
+
+    # ---------------------------------------------------------------- model
+
+    elsewhere = reactive.value({})  # {folder: label} of the runs added from other folders
+    add_problem = reactive.value(None)
+    to_select = reactive.value(None)
+
+    @reactive.effect
+    @reactive.event(input[f"{MODEL}_refresh"], setup, elsewhere)
+    def list_model_runs():
+        try:
+            choices = run_choices(setup().runs_dir)
+        except OSError:
+            choices = {}
+        choices = {**choices, **{folder: label for folder, label in elsewhere().items() if folder not in choices}}
+        with reactive.isolate():
+            previous = to_select() or input[f"{MODEL}_run"]()
+            to_select.set(None)
+        ui.update_select(f"{MODEL}_run", choices=choices or {NONE: "(no finished run in the results folder)"},
+                         selected=previous if previous in choices else next(iter(choices), NONE))
+
+    @reactive.effect
+    @reactive.event(input[f"{MODEL}_add"])
+    def add_model_run():
+        typed = input[f"{MODEL}_folder"]().strip()
+        if not typed:
+            add_problem.set("Type the folder of a run, or use Browse.")
+            return
+        try:
+            found = run_elsewhere(typed_path(typed))
+        except DataError as error:
+            add_problem.set(f"Not used: {error}.")
+            return
+        add_problem.set(None)
+        to_select.set(next(iter(found)))
+        elsewhere.set({**elsewhere(), **found})
+
+    def draw_add_problem():
+        return ui.p(add_problem(), class_="small text-danger") if add_problem() else None
+
+    draw_add_problem.__name__ = f"{MODEL}_add_problem"
+    render.ui(draw_add_problem)
+
+    @reactive.calc
+    def model_outputs():
+        """(the run folder, {name: info} of its daily outputs), or (None, {})."""
+        folder = input[f"{MODEL}_run"]()
+        if folder in (None, "", NONE):
+            return None, {}
+        try:
+            return folder, {name: info for name, info in run_variables(folder).items() if not info["static"]}
+        except (OSError, KeyError, ValueError):
+            return None, {}
+
+    @render.ui
+    def cal_model_options():
+        folder, outputs = model_outputs()
+        if folder is None:
+            return None
+        grouped = {}
+        for name, info in outputs.items():
+            grouped.setdefault(info["group"] or "Other", {})[name] = f"{info['long_name']} ({name})"
+        with reactive.isolate():
+            previous = input[f"{MODEL}_variable"]() if f"{MODEL}_variable" in input else None
+        name = previous if previous in outputs else ("Inew" if "Inew" in outputs else next(iter(outputs)))
+        seeds = run_seeds(folder)
+        return ui.div(
+            ui.input_select(f"{MODEL}_variable", "Output", grouped, selected=name, width="100%"),
+            ui.layout_columns(
+                ui.input_select(f"{MODEL}_space", with_tip("Over the cells", "How the cells of the run are put together: for "
+                                "per-person outputs, the mean weighted by the people of each cell gives the value per person of "
+                                "the whole region. A run on a single point has one cell."), SPACES, width="100%"),
+                ui.input_radio_buttons(f"{MODEL}_aggregation", with_tip("How it aggregates", "Sum for amounts per day (new cases, "
+                                       "bites): summed by month they give the amount per month. Mean for states (prevalence)."),
+                                       AGGREGATIONS, selected=default_aggregation(name, outputs[name])),
+                col_widths=(7, 5), fill=False),
+            ui.input_select(f"{MODEL}_seed", "Seed", {SEED_MEAN: "All seeds: median and range", **{str(s): f"Seed {s}" for s in seeds}}) if seeds else None,
+        )
+
+    @reactive.effect
+    @reactive.event(input[f"{MODEL}_variable"])
+    def model_variable_changed():
+        _, outputs = model_outputs()
+        name = input[f"{MODEL}_variable"]()
+        if name in outputs:
+            ui.update_radio_buttons(f"{MODEL}_aggregation", selected=default_aggregation(name, outputs[name]))
+
+    @reactive.calc
+    def model_members_or_error():
+        """(the daily series of each run taken: every seed of a band, one seed, or the single run, and what is wrong)."""
+        folder, outputs = model_outputs()
+        id = f"{MODEL}_variable"
+        if folder is None or id not in input or input[id]() not in outputs:
+            return [], None
+        seed = input[f"{MODEL}_seed"]() if f"{MODEL}_seed" in input else None
+        try:
+            return model_members(folder, input[id](), input[f"{MODEL}_space"](), seed, input[f"{MODEL}_aggregation"]()), None
+        except (DataError, OSError, KeyError, ValueError) as error:
+            return [], str(error)
+
+    @reactive.calc
+    def model_raw_or_error():
+        members, error = model_members_or_error()
+        if not members:
+            return None, error
+        seed = input[f"{MODEL}_seed"]() if f"{MODEL}_seed" in input else None
+        return members_mean(members, chosen_seeds(model_outputs()[0], seed)), None
+
+    def model_name():
+        folder = input[f"{MODEL}_run"]()
+        return (Path(folder).name if folder not in (None, "", NONE) else "",
+                model_raw_or_error()[1] or "Choose a run and an output.")
+
+    model = pipeline(MODEL, lambda: model_raw_or_error()[0], dict, model_name, lambda: model_members_or_error()[0])
+
+    def draw_model_status():
+        return status(*model.processed(), model_name()[0])
+
+    draw_model_status.__name__ = f"{MODEL}_status"
+    render.ui(draw_model_status)
+
+    # ---------------------------------------------------------------- comparison
+
+    @reactive.calc
+    def paired():
+        """(model, data, model values, data values, labels, metrics), or a message saying what is missing or wrong."""
+        model_values, _ = model.processed()
+        data_values, _ = data.processed()
+        if model_values is None or data_values is None:
+            return "Choose a run and an output in the Model box, and load observations in the Data box: they are compared here."
+        try:
+            m, d, labels = pair(model_values, data_values)
+        except DataError as error:
+            return f"Not comparable yet: {error}."
+        return model_values, data_values, m, d, labels, metrics(m, d)
+
+    @reactive.calc
+    def drivers():
+        """([(name, label, observations)] of the drivers shown, and what is wrong with any of them)."""
+        result = paired()
+        folder = model_outputs()[0]
+        if isinstance(result, str) or folder is None:
+            return [], None
+        _, data_values, _, _, labels, _ = result
+        first = last = None
+        if data_values.shape == "dated":
+            rows = [i for i in range(len(data_values)) if data_values.label(i) in set(labels)]
+            first = str(pd.Timestamp(data_values.index["start"].iloc[rows[0]]).date())
+            last = str(pd.Timestamp(data_values.index["end"].iloc[rows[-1]]).date())
+        seed = input[f"{MODEL}_seed"]() if f"{MODEL}_seed" in input else None
+        shown, problems = [], []
+        for name, (label, _) in DRIVERS.items():
+            if not input[f"cal_driver_{name}"]():
+                continue
+            try:
+                shown.append((name, label, driver_series(folder, name, input[f"cal_driver_{name}_period"](), input[f"cal_driver_{name}_how"](),
+                                                         input[f"cal_driver_{name}_climatology"](), first, last, seed)))
+            except (DataError, OSError, KeyError) as error:
+                problems.append(f"{label}: {error}")
+        return shown, "; ".join(problems) or None
+
+    @render.ui
+    def cal_drivers_problem():
+        problem_ = drivers()[1]
+        return ui.p(problem_, class_="small text-danger") if problem_ else None
+
+    @reactive.effect
+    async def draw_comparison():
+        result = paired()
+        if isinstance(result, str):
+            await send_figure(session, "cal_comparison_plot", message_figure(result))
+            return
+        model_values, data_values, m, d, labels, _ = result
+        await send_figure(session, "cal_comparison_plot", comparison_figure(model_values, data_values, labels, m, d, input.cal_scale_model(),
+                                                                            drivers()[0]))
+
+    @render.ui
+    def cal_comparison():
+        result = paired()
+        if isinstance(result, str):
+            return None
+        model_values, data_values, m, d, labels, values = result
+        units = None
+        if model_values.units.strip() != data_values.units.strip():
+            units = ui.p(f"The units differ by name: model in {model_values.units or 'no units'}, data in {data_values.units or 'no units'}. "
+                         "Check that they are the same quantity: the RMSE and the bias only mean something if they are.",
+                         class_="small mb-1", style="color: #d97706;")
+        return ui.div(
+            ui.p(f"{values['n']} pairs, from {labels[0]} to {labels[-1]}: the periods the model and the data share, without a "
+                 "missing value on either side.", class_="small mb-1"),
+            units,
+            metrics_table(values, model_values, data_values),
+        )
