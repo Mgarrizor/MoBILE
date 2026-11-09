@@ -13,7 +13,7 @@ from .calibration_data import DataError, Observations
 from .cells import cell_areas
 from .driving import LAT_NAMES, LON_NAMES, POP_NAMES, first_name
 from .region import region_ranges
-from .results import list_runs, load_run
+from .results import list_runs, load_run, read_run
 
 SPACES = {"people": "Mean over the simulated cells, weighted by their people", "mean": "Mean over the simulated cells",
           "sum": "Sum over the simulated cells"}
@@ -22,14 +22,15 @@ SEED_MEAN = "mean"  # The seed choice of a seed band for all its seeds: their me
 
 def run_choices(runs_dir):
     """{folder: label} of the finished runs and seed bands in a results folder, the newest first."""
-    choices = {}
-    for folder, manifest in list_runs(runs_dir).items():
-        seeds = manifest.get("seeds")
-        period = manifest.get("period") or {}
-        when = f"{period.get('start', '')[:4]}–{period.get('end', '')[:4]}" if period else "all the driving data"
-        what = f"{len(seeds)} seeds" if seeds else f"seed {manifest['run']['seed']}"
-        choices[folder] = f"{Path(folder).name} ({when}, {what})"
-    return choices
+    return {folder: _label(folder, manifest) for folder, manifest in list_runs(runs_dir).items()}
+
+
+def _label(folder, manifest):
+    seeds = manifest.get("seeds")
+    period = manifest.get("period") or {}
+    when = f"{period.get('start', '')[:4]}–{period.get('end', '')[:4]}" if period else "all the driving data"
+    what = f"{len(seeds)} seeds" if seeds else f"seed {manifest['run']['seed']}"
+    return f"{Path(folder).name} ({when}, {what})"
 
 
 def run_elsewhere(folder):
@@ -37,11 +38,11 @@ def run_elsewhere(folder):
     folder = Path(folder).resolve()
     if not folder.is_dir():
         raise DataError(f"no folder {folder}")
-    found = run_choices(folder.parent)
-    if str(folder) not in found:
+    manifest = read_run(folder)  # This folder only: its neighbours may not even be readable
+    if manifest is None:
         raise DataError(f"{folder.name} is not a finished run or seed band with its output (run.json, or seed_band.json, "
                         f"and output/output.nc)")
-    return {str(folder): f"{found[str(folder)]}, in {folder.parent}"}
+    return {str(folder): f"{_label(folder, manifest)}, in {folder.parent}"}
 
 
 def run_seeds(folder):

@@ -2186,6 +2186,22 @@ class TestCalibrationModel(unittest.TestCase):
         with self.assertRaisesRegex(DataError, "no folder"):
             run_elsewhere(self.folder / "nowhere")
 
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root reads any folder")
+    def test_unreadable_neighbour(self):
+        # A folder that cannot be read, next to the runs (as in /tmp), is skipped, not an error
+        from mobile.calibration_model import run_elsewhere
+        from mobile.results import list_runs
+        pop = np.ones((2, 2))
+        run = fake_run(self.folder / "runs" / "one", np.ones((3, 2, 2)), pop)
+        locked = self.folder / "runs" / "locked"
+        locked.mkdir()
+        locked.chmod(0)
+        try:
+            self.assertEqual(list(list_runs(self.folder / "runs")), [str(run)])
+            self.assertEqual(list(run_elsewhere(run)), [str(run.resolve())])
+        finally:
+            locked.chmod(0o755)
+
     def test_metrics(self):
         import pandas as pd
         from mobile.calibration_data import DataError, import_table
