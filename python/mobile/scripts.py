@@ -279,6 +279,17 @@ Shiny.addCustomMessageHandler('plot', function(message) {
     if (zoom.x) layout.xaxis.range = zoom.x;
     if (zoom.y) layout.yaxis.range = zoom.y;
   }
+  // A figure that says how tall it is (e.g. two panels, or three with the drivers) sets the height of its container:
+  // the responsive resizing of Plotly sizes a plot to its container, which would otherwise squeeze it back to the
+  // container's minimum height when the window or the browser zoom changes. A later figure without one gives it back.
+  const container = document.getElementById(message.id);
+  if (layout.height) {
+    container.style.height = layout.height + 'px';
+    container.heightFromFigure = true;
+  } else if (container.heightFromFigure) {
+    container.style.height = '';
+    container.heightFromFigure = false;
+  }
   // On the region map, a way back to drawing after zooming
   const extra = message.id === 'region_map' ? {modeBarButtonsToAdd: ['drawrect'], modeBarButtonsToRemove: ['select2d', 'lasso2d']} : {};
   const drawing = Plotly.react(message.id, message.figure.data, layout,

@@ -475,20 +475,48 @@ X_TITLES = {"dated": "Time (each value at the middle of its period)", "climatolo
 ONE_PANEL, TWO_PANELS = 380, 640  # Heights of the observations figure, in pixels
 
 
-def _observations_trace(observations, colour, label, faint=False):
-    """The trace of observations: a line over time for dated values, bars for the other shapes."""
+def _rgba(colour, alpha):
+    colour = colour.lstrip("#")
+    return f"rgba({int(colour[0:2], 16)}, {int(colour[2:4], 16)}, {int(colour[4:6], 16)}, {alpha})"
+
+
+def _band(x, lower, upper, colour, label, what, factor=1.0):
+    """A shaded band between lower and upper, as two traces: its top, then its bottom filled up to it."""
+    return [go.Scatter(x=x, y=upper * factor, mode="lines", line={"width": 0}, hoverinfo="skip", showlegend=False, legendgroup=label),
+            go.Scatter(x=x, y=lower * factor, mode="lines", line={"width": 0}, fill="tonexty", fillcolor=_rgba(colour, 0.2),
+                       hoverinfo="skip", name=f"{label}: {what}", legendgroup=label)]
+
+
+def _spread(observations, rows=None):
+    """(lower, upper, what) of the uncertainty of observations, for a band: the range of a seed band (lowest to highest
+    seed), else ±1 standard deviation; None if they have none. rows picks some of the values."""
+    pick = (lambda values: values) if rows is None else (lambda values: values[rows])
+    if "lowest" in observations.extra and "highest" in observations.extra:
+        return pick(observations.extra["lowest"]), pick(observations.extra["highest"]), "range across seeds"
+    if observations.sd is not None:
+        values, sd = pick(observations.values), pick(observations.sd)
+        return values - sd, values + sd, "±1 standard deviation"
+    return None
+
+
+def _observations_traces(observations, colour, label, faint=False):
+    """The traces of observations: a line over time for dated values, with their uncertainty as a shaded band; bars for
+    the other shapes, with error bars."""
     n = len(observations)
     labels = [observations.label(i) for i in range(n)]
-    error = None if observations.sd is None or faint else {"type": "data", "array": observations.sd, "color": INTERVAL, "thickness": 1.5}
     if observations.shape == "dated":
         start = pd.to_datetime(observations.index["start"]).to_numpy()
         end = pd.to_datetime(observations.index["end"]).to_numpy()
-        return go.Scatter(x=start + (end - start) / 2, y=observations.values, mode="lines+markers",
-                          line={"color": colour, "width": 1 if faint else 1.5}, marker={"size": 3 if faint or n > 60 else 6},
-                          customdata=labels, error_y=error, name=label, opacity=0.8 if faint else 1,
-                          hovertemplate=f"{label}, %{{customdata}}: %{{y:.4g}}<extra></extra>")
-    return go.Bar(x=labels, y=observations.values, marker={"color": colour}, error_y=error, name=label,
-                  hovertemplate=f"{label}, %{{x}}: %{{y:.4g}}<extra></extra>")
+        x = start + (end - start) / 2
+        spread = None if faint else _spread(observations)
+        band = _band(x, spread[0], spread[1], colour, label, spread[2]) if spread else []
+        return [*band, go.Scatter(x=x, y=observations.values, mode="lines+markers",
+                                  line={"color": colour, "width": 1 if faint else 1.5}, marker={"size": 3 if faint or n > 60 else 6},
+                                  customdata=labels, name=label, opacity=0.8 if faint else 1,
+                                  hovertemplate=f"{label}, %{{customdata}}: %{{y:.4g}}<extra></extra>")]
+    error = None if observations.sd is None or faint else {"type": "data", "array": observations.sd, "color": INTERVAL, "thickness": 1.5}
+    return [go.Bar(x=labels, y=observations.values, marker={"color": colour}, error_y=error, name=label,
+                   hovertemplate=f"{label}, %{{x}}: %{{y:.4g}}<extra></extra>")]
 
 
 def observations_figure(observations, name, compare=None, compare_label=""):
@@ -500,15 +528,15 @@ def observations_figure(observations, name, compare=None, compare_label=""):
     values in different units never share an axis."""
     title = f"{observations.name}: {name}"
     if compare is None:
-        figure = go.Figure(_observations_trace(observations, OBSERVED, observations.name), layout=_base_layout(title=title))
+        figure = go.Figure(_observations_traces(observations, OBSERVED, observations.name), layout=_base_layout(title=title))
         figure = _plain_axes(figure, X_TITLES[observations.shape], observations.units)
         figure.update_layout(showlegend=False, height=ONE_PANEL, meta={"view": "observations"})
         if observations.shape != "dated":
             figure.update_xaxes(type="category")
         return figure
     if compare.shape == observations.shape and compare.units == observations.units:
-        figure = go.Figure([_observations_trace(compare, COMPARED, compare_label, faint=True),
-                            _observations_trace(observations, OBSERVED, "After all steps")], layout=_base_layout(title=title))
+        figure = go.Figure([*_observations_traces(compare, COMPARED, compare_label, faint=True),
+                            *_observations_traces(observations, OBSERVED, "After all steps")], layout=_base_layout(title=title))
         figure = _plain_axes(figure, X_TITLES[observations.shape], observations.units)
         # The legend below the axis title: above the plot it would cover the title
         figure.update_layout(showlegend=True, height=ONE_PANEL + 40, barmode="group", meta={"view": "observations"},
@@ -520,8 +548,10 @@ def observations_figure(observations, name, compare=None, compare_label=""):
     shared = observations.shape == compare.shape == "dated"
     figure = make_subplots(rows=2, cols=1, shared_xaxes=shared, vertical_spacing=0.16 if not shared else 0.1,
                            subplot_titles=[f"After all steps: {observations.name}", f"{compare_label}: {compare.name}"])
-    figure.add_trace(_observations_trace(observations, OBSERVED, "After all steps"), row=1, col=1)
-    figure.add_trace(_observations_trace(compare, COMPARED, compare_label), row=2, col=1)
+    for trace in _observations_traces(observations, OBSERVED, "After all steps"):
+        figure.add_trace(trace, row=1, col=1)
+    for trace in _observations_traces(compare, COMPARED, compare_label):
+        figure.add_trace(trace, row=2, col=1)
     figure.update_layout(_base_layout(title=title), plot_bgcolor="white", showlegend=False, height=TWO_PANELS,
                          margin={"l": 70, "r": 30, "t": 70, "b": 50}, meta={"view": "observations"})
     for row, data in ((1, observations), (2, compare)):
@@ -529,6 +559,83 @@ def observations_figure(observations, name, compare=None, compare_label=""):
         figure.update_xaxes(gridcolor=GRID, tickfont={"size": AXIS_FONT}, row=row, col=1,
                             title_text=X_TITLES[data.shape] if row == 2 or not shared else None,
                             type="category" if data.shape != "dated" else None)
+    figure.update_annotations(font={"size": 12})
+    return figure
+
+
+MODELLED = "#e34948"  # The second categorical colour: the model, beside the observations in the first
+
+
+DRIVER_COLOURS = {"rain": "#0f9aa8", "t2m": "#d99a0b"}  # Teal for rainfall, ochre for temperature
+
+
+def _driver_trace(observations, colour, label):
+    if observations.shape == "dated":
+        start = pd.to_datetime(observations.index["start"]).to_numpy()
+        end = pd.to_datetime(observations.index["end"]).to_numpy()
+        x = start + (end - start) / 2
+    else:
+        x = [observations.label(i) for i in range(len(observations))]
+    kind = go.Bar if observations.aggregation == "sum" else go.Scatter
+    style = {"marker": {"color": colour}} if kind is go.Bar else {"mode": "lines+markers", "line": {"color": colour, "width": 1.5}, "marker": {"size": 3}}
+    return kind(x=x, y=observations.values, name=label, hovertemplate=f"{label}: %{{y:.4g}} {observations.units}<extra></extra>", **style)
+
+
+def comparison_figure(model, data, labels, model_values, data_values, scale=False, drivers=()):
+    """The model and the observations on the periods (months, seasons, years, age bands) they share, as paired by
+    calibration_metrics.pair. With scale, the model times the ratio of the means, to compare timing by eye; the legend
+    says by how much. drivers are (name, label, observations) of possible drivers such as rainfall, each drawn in a panel
+    below, sharing the time (or month) axis when they are on it too."""
+    factor = float(np.mean(data_values) / np.mean(model_values)) if scale and np.mean(model_values) > 0 else 1.0
+    middle = ", median across seeds" if "lowest" in model.extra else ""
+    model_label = f"Model{middle} × {factor:.3g} (scaled to the mean of the data)" if factor != 1.0 else f"Model: {model.name}{middle}"
+    if data.shape == "dated":
+        middle = {data.label(i): pd.Timestamp(data.index["start"].iloc[i]) + (pd.Timestamp(data.index["end"].iloc[i])
+                  - pd.Timestamp(data.index["start"].iloc[i])) / 2 for i in range(len(data))}
+        x = [middle[label] for label in labels]
+        spread = []
+        model_at = {model.label(i): i for i in range(len(model))}
+        found = _spread(model, [model_at[label] for label in labels])
+        if found:  # A seed band: its spread over the seeds, on the paired periods
+            spread = _band(x, found[0], found[1], MODELLED, "Model", found[2], factor)
+        traces = [go.Scatter(x=x, y=data_values, mode="lines+markers", line={"color": OBSERVED, "width": 1.5}, marker={"size": 4},
+                             name=f"Data: {data.name}", customdata=labels, hovertemplate="Data, %{customdata}: %{y:.4g}<extra></extra>"),
+                  *spread,
+                  go.Scatter(x=x, y=model_values * factor, mode="lines+markers", line={"color": MODELLED, "width": 1.5},
+                             marker={"size": 4}, name=model_label, customdata=labels,
+                             hovertemplate="Model, %{customdata}: %{y:.4g}<extra></extra>")]
+    else:
+        traces = [go.Bar(x=labels, y=data_values, marker={"color": OBSERVED}, name=f"Data: {data.name}"),
+                  go.Bar(x=labels, y=model_values * factor, marker={"color": MODELLED}, name=model_label)]
+    title = "Model and data, on the periods they share"
+    if not drivers:
+        figure = go.Figure(traces, layout=_base_layout(title=title))
+        figure = _plain_axes(figure, X_TITLES[data.shape], data.units)
+        figure.update_layout(showlegend=True, height=ONE_PANEL + 40, barmode="group", margin={"l": 70, "r": 30, "t": 44, "b": 90},
+                             legend={"orientation": "h", "x": 0.5, "xanchor": "center", "y": -0.22, "yanchor": "top"})
+        if data.shape != "dated":
+            figure.update_xaxes(type="category")
+        return figure
+    rows = 1 + len(drivers)
+    shared = all(observations.shape == data.shape for _, _, observations in drivers)
+    figure = make_subplots(rows=rows, cols=1, shared_xaxes=shared, vertical_spacing=0.06 if shared else 0.1,
+                           row_heights=[0.5] + [0.5 / len(drivers)] * len(drivers),
+                           subplot_titles=[title, *[f"{label} ({observations.units})" for _, label, observations in drivers]])
+    for trace in traces:
+        figure.add_trace(trace, row=1, col=1)
+    for row, (name, label, observations) in enumerate(drivers, start=2):
+        figure.add_trace(_driver_trace(observations, DRIVER_COLOURS.get(name, INTERVAL), label), row=row, col=1)
+    figure.update_layout(_base_layout(), plot_bgcolor="white", barmode="group", height=ONE_PANEL + 40 + 200 * len(drivers),
+                         margin={"l": 70, "r": 30, "t": 50, "b": 90}, showlegend=True,
+                         legend={"orientation": "h", "x": 0.5, "xanchor": "center", "y": -0.08, "yanchor": "top"})
+    figure.update_yaxes(title_text=data.units, row=1, col=1)
+    for row, (_, _, observations) in enumerate(drivers, start=2):
+        figure.update_yaxes(title_text=observations.units, row=row, col=1)
+    figure.update_xaxes(gridcolor=GRID, tickfont={"size": AXIS_FONT})
+    figure.update_yaxes(gridcolor=GRID, tickfont={"size": AXIS_FONT})
+    figure.update_xaxes(title_text=X_TITLES[data.shape], row=rows, col=1)
+    if data.shape != "dated":
+        figure.update_xaxes(type="category")
     figure.update_annotations(font={"size": 12})
     return figure
 

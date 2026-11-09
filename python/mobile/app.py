@@ -50,6 +50,7 @@ from .variables import (
 
 STATIC_MESSAGE = "This variable does not change over time: see the map."
 HUMANS_PER_AGENT_RANGE = (0.5, 2)  # Outside it, the sidebar suggests a number of agents
+FEW_AGENTS = 1000  # Below it, with HA above 1, the sidebar warns that the results will be noisy
 REGION_MAP_TITLES = {
     "all": "The whole grid is simulated",
     "box": "Drag a rectangle to choose the subregion",
@@ -1066,6 +1067,7 @@ def create_app(config):
 
         browse_button("setup_runs_dir", "folder")
         browse_button("cal_data_file", "data")
+        browse_button("cal_model_folder", "folder")
         calibration_server(input, output, session, setup)
         for key, _, kind in (*REQUIRED_FILES, *OPTIONAL_FILES):
             browse_button(f"setup_{key}", kind)
@@ -1162,6 +1164,11 @@ def create_app(config):
                 text += f". HA = 1 would be {max(round(people), 1):,} agents."
             if input.ha() < 1:
                 return ui.TagList(text, ui.div(HA_BELOW_ONE, class_="text-danger"))
+            if nagent < FEW_AGENTS and input.ha() > 1:
+                # E.g. an HA left from an earlier setup: the run would still go, but not unnoticed
+                return ui.TagList(text, ui.div(
+                    f"Only {nagent:,} agents (HA {input.ha():,.8g}): results will be very noisy, or meaningless. "
+                    f"Lower HA for more agents.", class_="text-warning-emphasis"))
             return text
 
         @render.ui

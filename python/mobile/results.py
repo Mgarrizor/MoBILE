@@ -134,6 +134,17 @@ def _read_seed_band(band_dir):
     return {**manifests[0], "date": record["date"], "seeds": record["seeds"]}
 
 
+def read_run(folder):
+    """Manifest of a finished run or seed band (that of its first seed, plus the list `seeds`) that still has its
+    output, otherwise None: also for a folder that cannot be read."""
+    folder = Path(folder)
+    try:
+        band = (folder / "seed_band.json").exists()
+    except OSError:  # E.g. a folder without the permission to read it, next to the runs
+        return None
+    return _read_seed_band(folder) if band else _read_finished(folder)
+
+
 def list_runs(runs_dir, pop_file=None):
     """Finished runs and seed bands that still have their output, newest first: {folder: manifest}.
 
@@ -143,7 +154,7 @@ def list_runs(runs_dir, pop_file=None):
     runs = {}
     root = Path(runs_dir)
     for folder in root.iterdir() if root.is_dir() else []:
-        manifest = _read_seed_band(folder) if (folder / "seed_band.json").exists() else _read_finished(folder)
+        manifest = read_run(folder)
         if manifest is None:
             continue
         if pop_file is not None and manifest.get("inputs", {}).get("pop_file") != pop_file:
