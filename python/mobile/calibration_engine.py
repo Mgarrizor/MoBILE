@@ -365,12 +365,14 @@ def _run_locked(folder, record, state, parallel, threads):
         # Left running by a calibration that stopped without finishing it, e.g. the GUI closed: done again
         study._storage.set_trial_user_attr(trial._trial_id, "cancelled", True)
         study._storage.set_trial_state_values(trial._trial_id, optuna.trial.TrialState.FAIL)
+    queued = False
     if record.get("temperature") and not study.get_trials(deepcopy=False):
         # The first trial has no offset (the temperatures of the file), if the ranges allow it: where the calibration starts
         # from. Its output is processed and scored as every trial's.
         start = baseline(record["temperature"])
         if start is not None:
             study.enqueue_trial(start, user_attrs={"baseline": True})
+            queued = True
     completed, failed = counts(study)
     todo = max(record["n_trials"] - completed - failed, 0)
     state.begin(record["n_trials"], completed + failed)
@@ -454,7 +456,13 @@ def _run_locked(folder, record, state, parallel, threads):
             study.stop()
 
     state.update(message="Running")
-    if todo:
+    if todo and queued:
+        # The queued trial on its own: Optuna takes a queued trial with a row lock, which SQLite does not have, so trials
+        # run side by side could both take it (it is the run that builds the model, which the others would wait for anyway)
+        study.optimize(objective, n_trials=1, n_jobs=1, catch=(TrialFailed, RunCancelled), callbacks=[stop_when_cancelled],
+                       gc_after_trial=False)
+        todo -= 1
+    if todo and not state.cancelled:
         study.optimize(objective, n_trials=todo, n_jobs=max(1, parallel), catch=(TrialFailed, RunCancelled),
                        callbacks=[stop_when_cancelled], gc_after_trial=False)
     completed, failed = counts(study)
