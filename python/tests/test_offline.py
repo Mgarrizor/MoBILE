@@ -2576,8 +2576,8 @@ sleep ${FAKE_SLEEP:-0}
         cells = offset_cells(self.config)
         self.assertEqual([(c["lat"], c["lon"]) for c in cells], [(8.75, 38.75), (8.75, 39.25)])
         np.testing.assert_allclose([c["mean"] for c in cells], self.t2m.mean(axis=0).ravel(), rtol=1e-6)
-        with mock.patch("mobile.calibration_run_ui.MAX_CELLS", 1):
-            self.assertIn("at most 1", offset_cells(self.config))
+        with mock.patch("mobile.calibration_run_ui.MAX_SIMULATED", 1):
+            self.assertIn("at most 1 cells", offset_cells(self.config))
         folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=6, name="shown")
         record = run_calibration(folder, StudyState(), parallel=2)
         self.assertEqual(calibration_label(folder, record), "shown (finished, 6 of 6 trials, 2 objectives)")
@@ -2658,6 +2658,91 @@ sleep ${FAKE_SLEEP:-0}
         self.assertEqual((record["status"], status_of(killed, record)), ("running", "interrupted"))
         self.assertIn("(interrupted,", calibration_label(killed, record))
         self.assertEqual(run_calibration(killed, StudyState(), parallel=2)["status"], "finished")  # And it goes on
+
+    def test_regions_share_an_offset(self):
+        from mobile.calibration_engine import create_calibration, read_calibration, region_mean, run_calibration, trials_table
+        from mobile.calibration_run_ui import offset_cells, regions
+        from mobile.plots import regions_figure
+        from mobile.sensitivity_runs import StudyState
+
+        # The two cells as one region of a 2° box (38-40°E, 8-10°N): one offset for both, its mean weighted by their people (2:3 here)
+        cells = offset_cells(self.config)
+        from mobile.cells import cell_areas
+        self.assertEqual(round(sum(cell["people"] for cell in cells)), round(float((self.pop * cell_areas(self.root / "pop.nc")).sum())))
+        found = regions(cells, 2.0)
+        self.assertEqual(len(found), 1)
+        region = found[0]
+        self.assertEqual((region["lat"], region["lon"], len(region["members"])), (9.0, 39.0, 2))
+        self.assertEqual([len(r["members"]) for r in regions(cells, 1.0)], [1, 1])  # Edges on whole degrees: 38-39 and 39-40
+        means = self.t2m.mean(axis=0).ravel()
+        people = np.array([cell["people"] for cell in sorted(cells, key=lambda c: c["lon"])])
+        self.assertAlmostEqual(region["mean"], float(np.average(means, weights=people)), places=4)
+        self.assertAlmostEqual(region_mean(self.root / "temperature.nc", self.root / "pop.nc", region), region["mean"], places=4)
+        # Boxes of 0.5°: each cell its own region, as one offset per cell
+        self.assertEqual([len(r["members"]) for r in regions(cells, 0.5)], [1, 1])
+        figure = regions_figure(cells, found, [True], 2.0)
+        self.assertEqual(int(np.nanmax(figure.data[0].z)), 0)  # Both cells coloured as region 1
+        # With the areas of a shapefile over them: its outline (halo and line) and their names on hovering
+        outline = ({"x": [38.6, 39.4, 39.4, 38.6, 38.6, None], "y": [8.6, 8.6, 8.9, 8.9, 8.6, None]}, {"x": [39.0], "y": [8.75], "text": ["A"]})
+        with_shapes = regions_figure(cells, found, [True], 2.0, outline)
+        self.assertEqual(len(with_shapes.data), len(figure.data) + 3)
+        self.assertEqual(list(with_shapes.data[-1].text), ["A"])
+        folder = create_calibration(self.config, self.objectives(), temperature={"cells": [region], "first": (-2.0, 2.0)}, n_trials=4,
+                                    name="one_region")
+        record = run_calibration(folder, StudyState(), parallel=2)
+        self.assertEqual(record["status"], "finished")
+        self.assertAlmostEqual(read_calibration(folder)["temperature"]["means"][0], region["mean"], places=4)
+        row = next(row for row in trials_table(folder) if not row["baseline"])
+        with netCDF4.Dataset(folder / "trials" / f"trial_{row['number']:05d}" / "t2m.nc") as data:
+            shift = data["temperature"][:] - self.t2m
+        np.testing.assert_allclose(shift, row["offsets"]["dT_1"], atol=1e-5)  # Every cell of the region moved by the same dT
+
+    def test_model_parameters(self):
+        from mobile.calibration_engine import create_calibration, read_calibration, run_calibration, trials_table
+        from mobile.calibration_results import results_figure
+        from mobile.sensitivity import SampledParameter
+        from mobile.sensitivity_runs import StudyState
+
+        # Calibrated with the offsets, in the units of their sliders: mu per year, b_rate on a log scale
+        parameters = [SampledParameter("mu", "uniform", 0.02, 0.04), SampledParameter("b_rate", "loguniform", 0.2, 20.0)]
+        folder = create_calibration(self.config, self.objectives(), parameters=parameters, temperature=self.temperature(), n_trials=6,
+                                    name="parameters")
+        record = run_calibration(folder, StudyState(), parallel=2)
+        self.assertEqual(record["status"], "finished")
+        self.assertEqual([p["name"] for p in read_calibration(folder)["parameters"]], ["mu", "b_rate"])
+        for row in trials_table(folder):
+            self.assertTrue(0.02 <= row["params"]["mu"] <= 0.04 and 0.2 <= row["params"]["b_rate"] <= 20.0)
+            given = read_params(folder / "trials" / f"trial_{row['number']:05d}" / "seed_12345" / "params.txt")
+            self.assertAlmostEqual(float(given["mu"]), row["params"]["mu"] / 365)  # Per day in the model
+            self.assertAlmostEqual(float(given["b_rate"]), row["params"]["b_rate"])
+        # The distributions: the two offsets, then the two parameters, b_rate on a log scale
+        figure = results_figure(folder, "distributions", 0)
+        titles = [annotation.text for annotation in figure.layout.annotations]
+        self.assertEqual([title.split(":")[0].split(" (")[0] for title in titles], ["dT1", "dT2", "mu", "b_rate"])
+        self.assertEqual(figure.layout.xaxis4.title.text, "log10 of b_rate")
+        # Parameters alone, without offsets
+        alone = create_calibration(self.config, self.objectives(), parameters=parameters[:1], n_trials=3, name="alone")
+        self.assertEqual(run_calibration(alone, StudyState(), parallel=2)["status"], "finished")
+        self.assertEqual(len(results_figure(alone, "distributions", 0).layout.annotations), 1)
+
+    def test_independent_offsets(self):
+        from mobile.calibration_engine import create_calibration, read_calibration, run_calibration, trials_table
+        from mobile.sensitivity_runs import StudyState
+
+        folder = create_calibration(self.config, self.objectives(), temperature={**self.temperature(), "first": (-3.0, 3.0), "ordered": False},
+                                    n_trials=16, name="independent")
+        self.assertEqual(run_calibration(folder, StudyState(), parallel=2)["status"], "finished")
+        record = read_calibration(folder)
+        self.assertFalse(record["temperature"]["ordered"])
+        rows = trials_table(folder)
+        start = next(row for row in rows if row["baseline"])
+        self.assertEqual(start["offsets"], {"dT_1": 0.0, "dT_2": 0.0})
+        self.assertEqual(sorted(start["params"]), ["dT_1", "dT_2"])  # Each sampled on its own, no gap
+        means = record["temperature"]["means"]
+        for row in rows:
+            self.assertTrue(all(-3.0 <= row["offsets"][key] <= 3.0 for key in ("dT_1", "dT_2")))
+        # The order can change: the east, warmer by 1.5 °C, cooler than the west in some trials
+        self.assertTrue(any(means[1] + row["offsets"]["dT_2"] < means[0] + row["offsets"]["dT_1"] for row in rows))
 
     def test_earlier_versions_are_not_resumed(self):
         from mobile.calibration_engine import (CalibrationError, calibration_label, create_calibration, read_calibration, run_calibration,

@@ -938,3 +938,62 @@ def calibration_history_figure(rows, objectives):
                          legend={"orientation": "h", "x": 0.5, "xanchor": "center", "y": -0.12, "yanchor": "top"})
     figure.update_annotations(font={"size": 12})
     return figure
+
+
+UNTICKED = "#d4d3cf"  # A region not calibrated: its cells keep the temperatures of the file
+
+
+def regions_figure(cells, units, ticked, size=None, shapes=None):
+    """The simulated cells, each in the colour of its region (or of itself), in the order of the table (coolest first), grey
+    if not ticked; with the boxes of the regions and their numbers. cells: [{lat, lon, mean, people}]; units: the regions
+    (with members) or cells; ticked: whether each unit is calibrated; shapes: the outlines of the areas of a shapefile (shapes.outlines), or None."""
+    lats = np.array(sorted({cell["lat"] for cell in cells}))
+    lons = np.array(sorted({cell["lon"] for cell in cells}))
+    step = min([float(np.min(np.diff(axis))) for axis in (lats, lons) if len(axis) > 1] or [size or 0.1])
+    lat = np.arange(lats.min(), lats.max() + step / 2, step)
+    lon = np.arange(lons.min(), lons.max() + step / 2, step)
+    unit_of = {}
+    for k, unit in enumerate(units):
+        for member in unit.get("members") or [unit]:
+            unit_of[(round(member["lat"], 6), round(member["lon"], 6))] = k
+    z = np.full((len(lat), len(lon)), np.nan)
+    text = np.full((len(lat), len(lon)), "", dtype=object)
+    for cell in cells:
+        i, j = int(round((cell["lat"] - lat[0]) / step)), int(round((cell["lon"] - lon[0]) / step))
+        k = unit_of.get((round(cell["lat"], 6), round(cell["lon"], 6)))
+        if k is None:
+            continue
+        z[i, j] = k if ticked[k] else len(units)
+        text[i, j] = (f"{cell['lat']:g}°N, {cell['lon']:g}°E: {cell['mean']:.2f} °C, {cell['people']:,.0f} people<br>"
+                      f"{'region' if size else 'cell'} {k + 1}{'' if ticked[k] else ', not calibrated'}")
+    colours = [DOT_COLOURS[k % len(DOT_COLOURS)] for k in range(len(units))] + [UNTICKED]
+    n = len(colours)
+    scale = [[position, colour] for k, colour in enumerate(colours) for position in (k / n, (k + 1) / n)]
+    figure = go.Figure(go.Heatmap(x=lon, y=lat, z=z, zmin=-0.5, zmax=n - 0.5, colorscale=scale, showscale=False, xgap=1, ygap=1,
+                                  customdata=text, hovertemplate="%{customdata}<extra></extra>"),
+                       layout=_base_layout(title=("Regions" if size else "Cells") + " to offset, in the order of the table "
+                                           "(coolest first; grey: not calibrated)"))
+    for k, unit in enumerate(units):
+        if size:
+            figure.add_shape(type="rect", x0=unit["lon"] - size / 2, x1=unit["lon"] + size / 2, y0=unit["lat"] - size / 2,
+                             y1=unit["lat"] + size / 2, line={"color": TEXT, "width": 1.5})
+        # The number of the region in the middle of its cells, on a white tag that reads over any colour
+        inside = unit.get("members") or [unit]
+        figure.add_annotation(x=float(np.mean([m["lon"] for m in inside])), y=float(np.mean([m["lat"] for m in inside])),
+                              text=f"<b>{k + 1}</b>", showarrow=False, font={"size": 13 if size else 10, "color": TEXT},
+                              bgcolor="rgba(255,255,255,0.85)", borderpad=2)
+    # The view on the boxes (or the cells), degrees of latitude and longitude kept equal by the shape of the plot
+    half = (size or step) / 2
+    west = min(min(u["lon"] for u in units) - half, lon[0] - step / 2)
+    east = max(max(u["lon"] for u in units) + half, lon[-1] + step / 2)
+    south = min(min(u["lat"] for u in units) - half, lat[0] - step / 2)
+    north = max(max(u["lat"] for u in units) + half, lat[-1] + step / 2)
+    if shapes is not None:
+        _add_shapes(figure, shapes)
+        xs, ys = [x for x in shapes[0]["x"] if x is not None], [y for y in shapes[0]["y"] if y is not None]
+        west, east, south, north = min(west, *xs), max(east, *xs), min(south, *ys), max(north, *ys)
+    figure.update_xaxes(title_text="Longitude [°E]", showgrid=False, zeroline=False, range=[west, east], constrain="domain")
+    figure.update_yaxes(title_text="Latitude [°N]", showgrid=False, zeroline=False, range=[south, north], scaleanchor="x", scaleratio=1,
+                        constrain="domain")
+    figure.update_layout(plot_bgcolor="white", height=420)
+    return figure

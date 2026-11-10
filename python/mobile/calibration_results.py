@@ -18,9 +18,10 @@ warnings.filterwarnings("ignore", message="PedAnovaImportanceEvaluator computes 
 DOCS = "https://optuna.readthedocs.io/en/stable/reference/visualization/generated/optuna.visualization.{}.html"
 # {kind: (label, what it shows, Optuna's function or None for ours, whether it is of one objective)}
 FIGURES = {
-    "distributions": ("Distributions of the offsets", "The offset of each cell in all the trials (grey), in the best tenth of them "
-                      "by the objective chosen (blue) and on the Pareto front (red). A narrow spread of the best means the data "
-                      "tell the offset well; a wide one, that they hardly do (it is not identified).", None, True),
+    "distributions": ("Distributions of the calibrated values", "Each offset and model parameter calibrated, in all the trials "
+                      "(grey), in the best tenth of them by the objective chosen (blue) and on the Pareto front (red). A narrow "
+                      "spread of the best means the data tell the value well; a wide one, that they hardly do (it is not "
+                      "identified).", None, True),
     "pareto": ("Pareto front", "Each trial by its objectives (two or three, the first ones): the front, the trials no other beats "
                "on every objective, are the best trade-offs.", "plot_pareto_front", False),
     "importances": ("Parameter importances", "How much each sampled parameter matters for doing well on the objective: how "
@@ -95,37 +96,50 @@ def _cell(record, k):
 
 
 def distributions_figure(record, complete, index, front):
-    """A histogram of each offset over the trials: all, the best tenth by objective `index`, and the Pareto front."""
+    """A histogram of each calibrated value over the trials: all, the best tenth by objective `index`, and the Pareto
+    front. The offsets of the temperature in °C; the model parameters in the units of their sliders, log-uniform ones on a
+    log scale."""
     temperature = record.get("temperature")
-    if not temperature:
-        raise ResultsError("this calibration has no temperature offsets")
+    panels = []  # (title, value of a trial, axis title, line at)
+    if temperature:
+        for k in range(len(temperature["cells"])):
+            key = f"dT_{k + 1}"
+            panels.append((f"dT{k + 1}: {_cell(record, k)}, mean {temperature['means'][k]:.2f} °C",
+                           lambda trial, key=key: trial.user_attrs.get(key, np.nan), "offset [°C]", 0.0))
+    for parameter in record.get("parameters", []):
+        name, log = parameter["name"], parameter["distribution"] == "loguniform"
+        panels.append((f"{name} ({'log-uniform' if log else 'uniform'}, {parameter['low']:.4g} to {parameter['high']:.4g})",
+                       lambda trial, name=name, log=log: (np.log10(trial.params[name]) if log else trial.params[name])
+                       if name in trial.params else np.nan, f"log10 of {name}" if log else name, None))
+    if not panels:
+        raise ResultsError("this calibration has nothing calibrated to show")
     objective = record["objectives"][index]
     maximize = objective["direction"] == "maximize"
     values = np.array([trial.values[index] for trial in complete])
     order = np.argsort(-values if maximize else values)
     best = {complete[i].number for i in order[:max(1, int(round(BEST_SHARE * len(complete))))]}
-    keys = [f"dT_{k + 1}" for k in range(len(temperature["cells"]))]
-    columns = min(3, len(keys))
-    rows = -(-len(keys) // columns)
-    figure = make_subplots(rows=rows, cols=columns, subplot_titles=[f"dT{k + 1}: {_cell(record, k)}, mean {temperature['means'][k]:.2f} °C"
-                                                                    for k in range(len(keys))], vertical_spacing=0.18, horizontal_spacing=0.08)
-    for k, key in enumerate(keys):
+    columns = min(3, len(panels))
+    rows = -(-len(panels) // columns)
+    figure = make_subplots(rows=rows, cols=columns, subplot_titles=[title for title, _, _, _ in panels], vertical_spacing=0.18,
+                           horizontal_spacing=0.08)
+    for k, (_, value_of, axis_title, line_at) in enumerate(panels):
         row, column = k // columns + 1, k % columns + 1
-        every = np.array([trial.user_attrs.get(key, np.nan) for trial in complete])
+        every = np.array([value_of(trial) for trial in complete], dtype="f8")
         edges = np.histogram_bin_edges(every[np.isfinite(every)], bins=20)
-        bins = {"start": float(edges[0]), "end": float(edges[-1]), "size": float(edges[1] - edges[0])}
+        bins = {"start": float(edges[0]), "end": float(edges[-1]), "size": float(edges[1] - edges[0]) or 1.0}
         for group, colour, label in ((None, COMPARED, "All trials"), (best, OBSERVED, f"Best {BEST_SHARE:.0%} by {objective['name']}")):
-            shown = every if group is None else np.array([trial.user_attrs.get(key, np.nan) for trial in complete if trial.number in group])
+            shown = every if group is None else np.array([value_of(trial) for trial in complete if trial.number in group], dtype="f8")
             figure.add_trace(go.Histogram(x=shown, xbins=bins, histnorm="percent", marker={"color": colour}, opacity=0.6, name=label,
                                           legendgroup=label, showlegend=k == 0,
-                                          hovertemplate=f"{label}: %{{y:.0f}}% of them at %{{x}} °C<extra></extra>"), row=row, col=column)
-        on_front = [trial.user_attrs.get(key) for trial in complete if trial.number in front]
+                                          hovertemplate=f"{label}: %{{y:.0f}}% of them at %{{x}}<extra></extra>"), row=row, col=column)
+        on_front = [value_of(trial) for trial in complete if trial.number in front]
         figure.add_trace(go.Scatter(x=on_front, y=[0] * len(on_front), mode="markers", name="Pareto front",
                                     marker={"color": MODELLED, "size": 10, "symbol": "line-ns-open", "line": {"width": 3}},
-                                    legendgroup="front", showlegend=k == 0, hovertemplate="Pareto front: %{x:.2f} °C<extra></extra>"),
+                                    legendgroup="front", showlegend=k == 0, hovertemplate="Pareto front: %{x:.4g}<extra></extra>"),
                          row=row, col=column)
-        figure.add_vline(x=0, line={"color": GRID, "dash": "dot"}, row=row, col=column)
-        figure.update_xaxes(title_text="offset [°C]", gridcolor=GRID, row=row, col=column)
+        if line_at is not None:
+            figure.add_vline(x=line_at, line={"color": GRID, "dash": "dot"}, row=row, col=column)
+        figure.update_xaxes(title_text=axis_title, gridcolor=GRID, row=row, col=column)
         figure.update_yaxes(title_text="% of the trials" if column == 1 else None, gridcolor=GRID, row=row, col=column)
     figure.update_layout(_base_layout(), plot_bgcolor="white", barmode="overlay", height=max(HEIGHT, 300 * rows + 120),
                          legend={"orientation": "h", "x": 0.5, "xanchor": "center", "y": -0.15, "yanchor": "top"})

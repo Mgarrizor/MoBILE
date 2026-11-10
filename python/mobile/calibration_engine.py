@@ -31,8 +31,9 @@ from .calibration_data import DataError, read_observations
 from .calibration_metrics import DIRECTIONS, pair, metrics
 from .calibration_model import SPACES, model_members, seed_spread
 from .calibration_steps import apply_steps
+from .cells import cell_areas
 from .config import MAX_PATH_LENGTH, ConfigError
-from .driving import LAT_NAMES, LON_NAMES, TEMP_NAMES, first_name
+from .driving import LAT_NAMES, LON_NAMES, POP_NAMES, TEMP_NAMES, first_name
 from .grid import pop_coordinates
 from .parameters import to_model
 from .region import cut_inputs
@@ -124,9 +125,12 @@ def cell_means(temp_file, cells):
 
 
 def offsets_from(temperature, values):
-    """{dT name: offset} of each cell from the sampled values: dT_1 for the first (coolest) cell, and for each next one
-    the gap above the one before, in their means: mean_k + dT_k = mean_(k-1) + dT_(k-1) + gap_k."""
+    """{dT name: offset} of each cell from the sampled values: with the order kept, dT_1 for the first (coolest) cell, and
+    for each next one the gap above the one before, in their means: mean_k + dT_k = mean_(k-1) + dT_(k-1) + gap_k; without,
+    each dT_k as sampled."""
     cells, means = temperature["cells"], temperature["means"]
+    if not temperature.get("ordered", True):
+        return {f"dT_{k + 1}": values[f"dT_{k + 1}"] for k in range(len(cells))}
     offsets = [values["dT_1"]]
     for k in range(1, len(cells)):
         offsets.append(means[k - 1] + offsets[k - 1] + values[f"gap_{k + 1}"] - means[k])
@@ -137,21 +141,45 @@ def baseline(temperature):
     """The sampled values of no offset at all (dT_1 = 0 and each gap the difference of the cell means), or None if they are
     outside the ranges of the calibration."""
     means = temperature["means"]
-    values = {"dT_1": 0.0, **{f"gap_{k + 1}": means[k] - means[k - 1] for k in range(1, len(means))}}
     low, high = temperature["first"]
+    if not temperature.get("ordered", True):
+        return {f"dT_{k + 1}": 0.0 for k in range(len(means))} if low <= 0.0 <= high else None
+    values = {"dT_1": 0.0, **{f"gap_{k + 1}": means[k] - means[k - 1] for k in range(1, len(means))}}
     inside = low <= 0.0 <= high and all(temperature["gap"][0] <= values[f"gap_{k + 1}"] <= temperature["gap"][1] for k in range(1, len(means)))
     return values if inside else None
 
 
+def members(cell):
+    """The cells a calibrated cell stands for: those of a region ({lat, lon, members}), or the cell itself."""
+    return cell.get("members") or [{"lat": cell["lat"], "lon": cell["lon"]}]
+
+
+def region_mean(temp_file, pop_file, cell):
+    """The mean temperature of a cell, or of a region weighted by the people of its cells (by the cell areas of the model):
+    where people live. A region without people takes the plain mean of its cells."""
+    cells = members(cell)
+    means = np.array(cell_means(temp_file, cells))
+    if len(cells) == 1:
+        return float(means[0])
+    with netCDF4.Dataset(pop_file) as data:
+        lat, lon = _coordinates(data)
+        pop = np.ma.filled(data[first_name(POP_NAMES, data.variables)][:].astype("f8"), np.nan)
+    areas = cell_areas(pop_file)
+    people = np.array([np.nan_to_num(pop[_cell(lat, lon, member)]) * areas[_cell(lat, lon, member)] for member in cells])
+    return float(np.average(means, weights=people)) if people.sum() > 0 else float(means.mean())
+
+
 def offset_temperature(source, target, cells, offsets):
-    """Write a copy of the temperature file with each cell shifted by its offset (°C), the others as they are."""
+    """Write a copy of the temperature file with each cell, or every cell of each region, shifted by its offset (°C), the
+    others as they are."""
     shutil.copyfile(source, target)
     with netCDF4.Dataset(target, "a") as data:
         lat, lon = _coordinates(data)
         field = data[first_name(TEMP_NAMES, data.variables)]
         for k, cell in enumerate(cells):
-            i, j = _cell(lat, lon, cell)
-            field[:, i, j] = field[:, i, j] + offsets[f"dT_{k + 1}"]
+            for member in members(cell):
+                i, j = _cell(lat, lon, member)
+                field[:, i, j] = field[:, i, j] + offsets[f"dT_{k + 1}"]
         data.mobile_offsets = json.dumps({f"{cell['lat']},{cell['lon']}": round(offsets[f"dT_{k + 1}"], 6)
                                           for k, cell in enumerate(cells)})
 
@@ -166,8 +194,10 @@ def create_calibration(config, objectives, parameters=(), temperature=None, seed
     objectives: [{name, data (observations file), variable, space, aggregation, steps (applied to the model output),
     metric}]; each is minimised or maximised as its metric says (calibration_metrics.DIRECTIONS).
     parameters: SampledParameter of the model to calibrate (uniform or log-uniform), in the units of the sliders.
-    temperature: {cells: [{lat, lon}] from the coolest to the warmest, first: (low, high) of dT_1 in °C, gap: (low,
-    high) of each next gap, low at least 0}, or None."""
+    temperature: {cells: [{lat, lon}, or {lat, lon, members: [{lat, lon}]} for a region whose cells share one offset] from
+    the coolest to the warmest (regions by their mean weighted by people), first: (low, high) of dT_1 in °C, gap: (low,
+    high) of each next gap, low at least 0, ordered: True (default) to keep their order, or False for each dT_k sampled on
+    its own within the range of dT_1}, or None."""
     if not objectives:
         raise CalibrationError("give at least one objective")
     if not parameters and not temperature:
@@ -198,7 +228,7 @@ def create_calibration(config, objectives, parameters=(), temperature=None, seed
         if too_long:
             raise ConfigError(f"paths in the calibration folder longer than {MAX_PATH_LENGTH - 40} characters: {too_long}")
         if temperature:
-            temperature = _temperature(temperature, run_inputs["temp_file"])
+            temperature = _temperature(temperature, run_inputs["temp_file"], run_inputs["pop_file"])
     except (ConfigError, CalibrationError, DataError):
         shutil.rmtree(folder)
         raise
@@ -225,15 +255,18 @@ def create_calibration(config, objectives, parameters=(), temperature=None, seed
     return folder
 
 
-def _temperature(temperature, temp_file):
-    cells = [{"lat": float(cell["lat"]), "lon": float(cell["lon"])} for cell in temperature["cells"]]
+def _temperature(temperature, temp_file, pop_file):
+    cells = [{"lat": float(cell["lat"]), "lon": float(cell["lon"]),
+              **({"members": [{"lat": float(m["lat"]), "lon": float(m["lon"])} for m in cell["members"]]} if cell.get("members") else {})}
+             for cell in temperature["cells"]]
     first, gap = [float(value) for value in temperature["first"]], [float(value) for value in temperature.get("gap", (0, 0))]
+    ordered = bool(temperature.get("ordered", True))
     if first[0] >= first[1]:
         raise CalibrationError("the range of dT_1 needs its low below its high")
-    if len(cells) > 1 and not 0 <= gap[0] < gap[1]:
+    if ordered and len(cells) > 1 and not 0 <= gap[0] < gap[1]:
         raise CalibrationError("the range of the gaps needs a low of at least 0, below its high")
-    means = cell_means(temp_file, cells)
-    return {"cells": cells, "first": first, "gap": gap, "means": means}
+    means = [region_mean(temp_file, pop_file, cell) for cell in cells]
+    return {"cells": cells, "first": first, "gap": gap, "means": means, "ordered": ordered}
 
 
 def setup_config(folder, record):
@@ -255,7 +288,11 @@ def suggest(trial, record):
                                                         log=parameter["distribution"] == "loguniform")
     offsets = {}
     temperature = record["temperature"]
-    if temperature:
+    if temperature and not temperature.get("ordered", True):
+        # Each cell or region on its own, within the same range: no order kept
+        offsets = offsets_from(temperature, {f"dT_{k}": trial.suggest_float(f"dT_{k}", *temperature["first"])
+                                             for k in range(1, len(temperature["cells"]) + 1)})
+    elif temperature:
         sampled = {"dT_1": trial.suggest_float("dT_1", *temperature["first"])}
         for k in range(2, len(temperature["cells"]) + 1):
             sampled[f"gap_{k}"] = trial.suggest_float(f"gap_{k}", *temperature["gap"])

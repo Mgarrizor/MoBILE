@@ -7,8 +7,10 @@ import os
 from dataclasses import replace
 from types import SimpleNamespace
 
+import netCDF4
 import numpy as np
 import pandas as pd
+import xarray as xr
 import plotly.graph_objects as go
 from shiny import reactive, render, ui
 from sqlalchemy.exc import SQLAlchemyError
@@ -22,16 +24,20 @@ from .calibration_model import DRIVER_PERIODS, DRIVERS, driver_panel
 from .calibration_results import FIGURES, ResultsError, figure_help, results_figure
 from .calibration_steps import STATISTICS
 from .config import ConfigError
-from .driving import climatology, open_field
-from .layout import HA_BELOW_ONE, OUTPUT_FLAGS, with_tip
-from .plots import calibration_history_figure, comparison_figure, message_figure, send_figure
+from .cells import cell_areas
+from .driving import LAT_NAMES, LON_NAMES, climatology, first_name, open_field
+from .layout import HA_BELOW_ONE, OUTPUT_FLAGS, UNIT_LABELS, parameter_label, sections, with_tip
+from .plots import calibration_history_figure, comparison_figure, message_figure, regions_figure, send_figure
 from .region import region_ranges
 from .runner import NETCDF_LOCK
+from .shapes import ShapeError, areas, outlines, read_shapes
+from .sensitivity import SampledParameter
 from .sensitivity_runs import StudyState
 from .outcome import run_name_problem
 
 DRIVER_FLAGS = ("out_vect", "out_vecinfc")  # Written by every run of a calibration, for its possible drivers
-MAX_CELLS = 20  # Temperature offsets are chosen cell by cell: for a region of a few cells
+MAX_CELLS = 20  # Temperature offsets are calibrated for at most this many cells or regions
+MAX_SIMULATED = 5000  # And the cells of the setup, grouped in regions or not, at most this many
 REFRESH_SECONDS = 3  # How often the progress of a calibration is drawn again while it runs
 
 
@@ -46,16 +52,26 @@ def calibration_run_card():
         ui.h6("Objectives"),
         ui.output_ui("cal_objectives"),
         ui.h6("What to calibrate", class_="mt-2"),
-        ui.input_switch("cal_offsets", with_tip("Temperature offsets per cell", "A shift dT of the temperature of each cell "
-                        "ticked, e.g. for the temperature where people live within a coarse cell. The cells keep the order of their "
+        ui.input_switch("cal_offsets", with_tip("Temperature offsets", "A shift dT of the temperature of each cell, or region of "
+                        "cells, ticked, e.g. for the temperature where people live within a coarse cell. They keep the order of their "
                         "mean temperatures (coolest first): the first gets dT₁, each next one a gap of at least 0 above the one "
                         "before, so no trial changes which is warmer."), value=True),
-        ui.panel_conditional("input.cal_offsets", ui.output_ui("cal_cells"), ui.layout_columns(
+        ui.panel_conditional("input.cal_offsets", ui.div(
+            ui.input_radio_buttons("cal_regions", None, {"cells": "One offset per cell", "boxes": "One offset per region: the cells "
+                                   "in each box of"}, selected="cells", inline=True),
+            ui.panel_conditional("input.cal_regions === 'boxes'", ui.input_numeric("cal_region_size", None, value=0.5, min=0.01, step=0.05,
+                                                                                     width="7rem"), ui.span("degrees", class_="small ms-1")),
+            class_="d-flex flex-wrap align-items-center gap-2"),
+            ui.output_ui("cal_cells"), ui.output_ui("cal_regions_shapes_switch"), ui.div(id="cal_regions_map", style="min-height: 420px;"),
+            ui.layout_columns(
             ui.input_numeric("cal_dt_low", "dT₁ from [°C]", value=-3.0, step=0.5),
             ui.input_numeric("cal_dt_high", "dT₁ to [°C]", value=3.0, step=0.5),
             ui.output_ui("cal_gap_inputs"),
-            col_widths=(3, 3, 6), fill=False), ui.output_ui("cal_offset_equation")),
-        ui.p("Model parameters (with the ranges of the sensitivity analysis): to come.", class_="small text-muted"),
+            col_widths=(3, 3, 6), fill=False), ui.output_ui("cal_order_switch"), ui.output_ui("cal_offset_equation")),
+        ui.tags.strong(with_tip("Model parameters", "Tick a parameter to calibrate it within a range, sampled uniformly or "
+                                "log-uniformly (for ranges over orders of magnitude), in the units of its slider; at first the range "
+                                "of the slider. Those not ticked keep their slider value."), class_="small d-block mt-2"),
+        ui.output_ui("cal_parameters"),
         ui.layout_columns(
             ui.div(
                 ui.h6("Optuna"),
@@ -98,9 +114,21 @@ def calibration_run_card():
         ),
         ui.output_ui("cal_previous_info"),
         ui.div(id="cal_history_plot", style="min-height: 380px;"),
+        ui.output_ui("cal_front_sort_choice"),
         ui.output_ui("cal_front"),
-        ui.output_ui("cal_best_choice"),
-        ui.div(id="cal_best_plot", style="min-height: 380px;"),
+        ui.div(
+            ui.h6(with_tip("A trial of the Pareto front", "One of the best trade-offs so far (the first of the front at first), "
+                           "against the data of an objective; with the possible drivers of its run below it, to see how they "
+                           "differ from where the calibration started."), class_="mb-1"),
+            ui.output_ui("cal_best_choice"),
+            ui.tags.strong(with_tip("Possible drivers", "Rainfall and temperature as the run of this trial read them, and the vector "
+                                    "densities it gave (the mean over its simulated cells), each processed on its own and drawn below, "
+                                    "within the periods the model and the data share. All the panels zoom together."), class_="small"),
+            *[driver_controls(name, "cal_best_driver") for name in DRIVERS],
+            ui.output_ui("cal_best_problem"),
+            ui.div(id="cal_best_plot", style="min-height: 380px;"),
+            class_="border rounded p-2 mt-3",
+        ),
         ui.div(
             ui.h6(with_tip("Where the calibration started", "Its first trial, with no temperature offset when the ranges allow it, "
                            "processed and scored like every trial, against the same data as the trial above; with the possible "
@@ -157,9 +185,28 @@ def paired_span(data, labels):
     return (str(pd.Timestamp(data.index["start"].iloc[rows[0]]).date()), str(pd.Timestamp(data.index["end"].iloc[rows[-1]]).date()))
 
 
+CALIBRATED_DISTRIBUTIONS = {"uniform": "Uniform", "loguniform": "Log-uniform"}
+
+
+def _parameter_row(name, spec, value):
+    """A checkbox to calibrate the parameter and, once ticked, how it is sampled and within which range."""
+    use = f"input.cal_use_{name}"
+    return ui.div(
+        ui.div(ui.input_checkbox(f"cal_use_{name}", parameter_label(spec.get("label", name) + UNIT_LABELS.get(spec.get("display"), ""), spec),
+                                 value=False), class_="sa-name"),
+        ui.panel_conditional(use, ui.div(
+            ui.input_select(f"cal_dist_{name}", None, CALIBRATED_DISTRIBUTIONS, selected="uniform"),
+            ui.input_numeric(f"cal_low_{name}", None, value=float(f"{spec['min']:.4g}"), step="any"),
+            ui.input_numeric(f"cal_high_{name}", None, value=float(f"{spec['max']:.4g}"), step="any"),
+            class_="sa-fields")),
+        ui.panel_conditional(f"!{use}", ui.span(f"Not calibrated: {value:.4g}, as on its slider", class_="small text-muted")),
+        class_="sa-row",
+    )
+
+
 def offset_cells(config):
-    """[{lat, lon, mean}] of the simulated cells of a setup (people, and temperature), with their mean temperature over its
-    period; or a str saying why not, e.g. too many cells."""
+    """[{lat, lon, mean, people}] of the simulated cells of a setup (people, and temperature), with their mean temperature
+    over its period and their people as the model counts them, the coolest first; or a str saying why not."""
     inputs = config.inputs
     try:
         pop = open_field(inputs["pop_file"], "pop_file")
@@ -168,9 +215,14 @@ def offset_cells(config):
         (lon_first, lon_end), (lat_first, lat_end) = ranges if ranges is not None else ((0, len(lon)), (0, len(lat)))
         pop = pop.isel(lat=slice(lat_first, lat_end), lon=slice(lon_first, lon_end))
         populated = np.isfinite(pop.values) & (np.nan_to_num(pop.values) > 0)
-        if populated.sum() > MAX_CELLS:
-            return (f"The setup simulates {int(populated.sum()):,} cells: temperature offsets are chosen cell by cell, for a region of "
-                    f"at most {MAX_CELLS}. Choose a subregion in Setup.")
+        if populated.sum() > MAX_SIMULATED:
+            return (f"The setup simulates {int(populated.sum()):,} cells: temperature offsets are for a region of at most "
+                    f"{MAX_SIMULATED:,} cells. Choose a subregion in Setup.")
+        # The people of each cell, with the cell areas of the model (from the population file, which open_field sorts)
+        areas = xr.DataArray(cell_areas(inputs["pop_file"]), dims=("lat", "lon"),
+                             coords={"lat": _file_axis(inputs["pop_file"], "lat"), "lon": _file_axis(inputs["pop_file"], "lon")})
+        areas = areas.sortby(["lat", "lon"])
+        people = (pop * areas.sel(lat=pop["lat"], lon=pop["lon"])).values
         period = config.period or {}
         mean = climatology(inputs["temp_file"], "temp_file", period.get("start"), period.get("end"))
         mean = mean.sel(lat=pop["lat"], lon=pop["lon"], method="nearest")
@@ -180,8 +232,36 @@ def offset_cells(config):
     for i, j in zip(*np.nonzero(populated)):
         value = float(mean.values[i, j])
         if np.isfinite(value):
-            cells.append({"lat": float(pop["lat"].values[i]), "lon": float(pop["lon"].values[j]), "mean": value})
+            cells.append({"lat": float(pop["lat"].values[i]), "lon": float(pop["lon"].values[j]), "mean": value,
+                          "people": float(people[i, j])})
     return sorted(cells, key=lambda cell: cell["mean"]) or "The setup has no simulated cell with a temperature."
+
+
+def _file_axis(path, axis):
+    """The coordinate of a file as it is stored (cell_areas follows the file's order)."""
+    with netCDF4.Dataset(path) as data:
+        return np.asarray(data[first_name(LAT_NAMES if axis == "lat" else LON_NAMES, data.variables)][:], dtype="f8")
+
+
+def regions(cells, size=None):
+    """The units whose temperature is offset: each cell (size None), or regions, the cells in each box of `size` degrees
+    (edges on multiples of it), as {lat, lon (the centre of the box), members, mean (weighted by people), people, label},
+    the coolest first."""
+    if not size:
+        return [{**cell, "label": f"{cell['lat']:g}°N, {cell['lon']:g}°E"} for cell in cells]
+    boxes = {}
+    for cell in cells:
+        key = (int(np.floor(cell["lat"] / size + 1e-9)), int(np.floor(cell["lon"] / size + 1e-9)))
+        boxes.setdefault(key, []).append(cell)
+    found = []
+    for (row, column), inside in boxes.items():
+        people = np.array([cell["people"] for cell in inside])
+        means = np.array([cell["mean"] for cell in inside])
+        lat, lon = round((row + 0.5) * size, 6), round((column + 0.5) * size, 6)
+        found.append({"lat": lat, "lon": lon, "members": [{"lat": c["lat"], "lon": c["lon"]} for c in inside],
+                      "mean": float(np.average(means, weights=people)) if people.sum() > 0 else float(means.mean()),
+                      "people": float(people.sum()), "label": f"box at {lat:g}°N, {lon:g}°E ({len(inside)} cells)"})
+    return sorted(found, key=lambda region: region["mean"])
 
 
 def _clock(seconds):
@@ -189,10 +269,34 @@ def _clock(seconds):
     return f"{seconds // 3600}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
 
 
-def calibration_run_server(input, output, session, setup, objectives, overrides, selected_output, busy, agents, ha):
+def calibration_run_server(input, output, session, setup, objectives, overrides, selected_output, busy, agents, ha, slider_setup):
     """The server side of the card. objectives() are those added in the comparison card; busy() is true while a single run
-    or an analysis goes on. Returns running() and cancel() for the rest of the app."""
+    or an analysis goes on; slider_setup() the sliders, with their ranges and starts. Returns running() and cancel() for the
+    rest of the app."""
     state = StudyState()
+
+    @output(suspend_when_hidden=False)
+    @render.ui
+    def cal_parameters():
+        sliders = slider_setup()
+        groups = []
+        for group, found in sections(sliders["sliders"]).items():
+            rows = []
+            for section, names in found.items():
+                if section != group:
+                    rows.append(ui.h6(section, class_="mt-2 mb-1 small fw-semibold"))
+                rows += [_parameter_row(name, sliders["sliders"][name], sliders["defaults"][name]) for name in names]
+            header = ui.div(ui.span("Sampled", class_="sa-dist"), ui.span("Minimum"), ui.span("Maximum"), class_="sa-head")
+            groups.append(ui.accordion_panel(group, header, *rows))
+        return ui.accordion(*groups, open=False, multiple=True)
+
+    def chosen_parameters():
+        """The parameters ticked, as typed: SampledParameter, in the units of their sliders."""
+        found = []
+        for name in slider_setup()["sliders"]:
+            if f"cal_use_{name}" in input and input[f"cal_use_{name}"]():
+                found.append(SampledParameter(name, input[f"cal_dist_{name}"](), input[f"cal_low_{name}"](), input[f"cal_high_{name}"]()))
+        return found
     changed = reactive.value(0)
     last = reactive.value(None)  # The record of the last calibration run in this session, or "error"
     running_folder = reactive.value(None)
@@ -202,30 +306,99 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
     def cells():
         return offset_cells(setup())
 
-    @render.ui
-    def cal_cells():
+    @reactive.calc
+    def units():
+        """The cells, or the regions, whose temperature can be offset; or a str saying why not."""
         found = cells()
         if isinstance(found, str):
+            return found
+        size = input.cal_region_size() if input.cal_regions() == "boxes" else None
+        if input.cal_regions() == "boxes" and not (isinstance(size, (int, float)) and size > 0):
+            return "Give the size of the boxes, in degrees."
+        found = regions(found, size)
+        if len(found) > MAX_CELLS:
+            what = "regions" if size else "cells"
+            return (f"The setup has {len(found):,} {what} to offset: at most {MAX_CELLS} can be calibrated. "
+                    + ("Use larger boxes, or a subregion in Setup." if size else "Use regions (boxes of cells), or a subregion in Setup."))
+        return found
+
+    @render.ui
+    def cal_cells():
+        found = units()
+        if isinstance(found, str):
             return ui.p(found, class_="small text-warning-emphasis")
-        rows = [ui.tags.tr(ui.tags.td(ui.input_checkbox(f"cal_cell_{i}", None, value=True)), ui.tags.td(f"{cell['lat']:g}°N, {cell['lon']:g}°E"),
-                           ui.tags.td(f"{cell['mean']:.2f} °C"))
-                for i, cell in enumerate(found)]
+        boxes = input.cal_regions() == "boxes"
+        rows = [ui.tags.tr(ui.tags.td(ui.input_checkbox(f"cal_cell_{i}", None, value=True)), ui.tags.td(unit["label"]),
+                           ui.tags.td(f"{unit['mean']:.2f} °C"), ui.tags.td(f"{unit['people']:,.0f}"))
+                for i, unit in enumerate(found)]
+        mean = "Mean temperature where people live (setup period)" if boxes else "Mean temperature (setup period)"
         return ui.div(
-            ui.tags.table(ui.tags.thead(ui.tags.tr(ui.tags.th(""), ui.tags.th("Cell"), ui.tags.th("Mean temperature (setup period)"))),
+            ui.tags.table(ui.tags.thead(ui.tags.tr(ui.tags.th(""), ui.tags.th("Region" if boxes else "Cell"), ui.tags.th(mean),
+                                                   ui.tags.th("People"))),
                           ui.tags.tbody(*rows), class_="table table-sm small mb-1"),
-            ui.p("From the coolest to the warmest. With one cell ticked, only its offset dT₁ is calibrated; with more, the first "
-                 "ticked gets dT₁ and each next one a gap above the one before, so the order is kept in every trial. Cells not "
-                 "ticked keep the temperatures of the file.", class_="small text-muted mb-1"),
+            ui.p("From the coolest to the warmest" + (", by the mean of their cells weighted by people. The cells of a region share "
+                 "its offset, and keep their differences" if boxes else "") + ". With one ticked, only its offset dT₁ is calibrated; "
+                 "with more, the first ticked gets dT₁ and each next one a gap above the one before, so the order is kept in every "
+                 "trial. Those not ticked keep the temperatures of the file.", class_="small text-muted mb-1"),
         )
 
     def chosen_cells():
-        found = cells()
+        found = units()
         if isinstance(found, str):
             return []
-        return [cell for i, cell in enumerate(found) if f"cal_cell_{i}" in input and input[f"cal_cell_{i}"]()]
+        return [unit for i, unit in enumerate(found) if f"cal_cell_{i}" in input and input[f"cal_cell_{i}"]()]
+
+    @render.ui
+    def cal_regions_shapes_switch():
+        """The outlines of the shapefile of the applied setup on the map of the regions, if it has one."""
+        if not setup().shapes:
+            return None
+        with reactive.isolate():
+            on = input.cal_regions_shapes() if "cal_regions_shapes" in input else False
+        return ui.input_switch("cal_regions_shapes", with_tip("Shapefile", "The areas of the shapefile of the applied setup, as named "
+                               "and merged in Setup, over the cells: to see how the regions sit against them."), value=on)
+
+    @reactive.calc
+    def setup_outlines():
+        choice = setup().shapes
+        if not choice:
+            return None
+        try:
+            return outlines(areas(read_shapes(choice["file"]), choice.get("name"), choice.get("merge")))
+        except (ShapeError, OSError):
+            return None
+
+    @reactive.effect
+    async def draw_regions_map():
+        """The simulated cells coloured by the region they are in, ticked or not: to check the regions before running."""
+        found, every = units(), cells()
+        if not input.cal_offsets() or isinstance(found, str) or isinstance(every, str):
+            await send_figure(session, "cal_regions_map", message_figure("The cells and regions to offset are drawn here."))
+            return
+        ticked = {id(unit) for unit in chosen_cells()}
+        shown_shapes = setup_outlines() if "cal_regions_shapes" in input and input.cal_regions_shapes() else None
+        await send_figure(session, "cal_regions_map", regions_figure(every, found, [id(unit) in ticked for unit in found],
+                                                                     input.cal_region_size() if input.cal_regions() == "boxes" else None,
+                                                                     shown_shapes))
+
+    def keep_order():
+        return input.cal_keep_order() if "cal_keep_order" in input else True
 
     def gaps_needed():
-        return input.cal_offsets() and len(chosen_cells()) > 1
+        return input.cal_offsets() and len(chosen_cells()) > 1 and keep_order()
+
+    @render.ui
+    def cal_order_switch():
+        """With two or more cells or regions: whether their order is kept (dT₁ and gaps) or each offset sampled on its own."""
+        if not input.cal_offsets() or len(chosen_cells()) < 2:
+            return None
+        with reactive.isolate():
+            on = keep_order()
+        unit = "regions" if input.cal_regions() == "boxes" else "cells"
+        return ui.input_switch("cal_keep_order", with_tip(f"Keep the order of the {unit}", f"On: the {unit} stay in the order of their "
+                               "mean temperatures in every trial (dT₁ and gaps of at least 0). Off: each offset is sampled on its own, "
+                               "within the range of dT₁, so their order can change: to explore combinations the order rules out."),
+                               value=on)
 
     @render.ui
     def cal_gap_inputs():
@@ -247,26 +420,37 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         T = lambda k: ui.TagList("T̄", ui.tags.sub(str(k)))  # noqa: E731  The mean of cell k
         dT = lambda k: ui.TagList("dT", ui.tags.sub(str(k)))  # noqa: E731
         gap = lambda k: ui.TagList("gap", ui.tags.sub(str(k)))  # noqa: E731
-        daily = ui.p("Each day t, cell k gets the temperature of the file plus its offset: T", ui.tags.sub("k"), "(t) + ", dT("k"), ".",
-                     class_="mb-1")
+        unit = "region" if input.cal_regions() == "boxes" else "cell"
+        if input.cal_regions() == "boxes":
+            daily = ui.p("Each day t, every cell c of region k gets the temperature of the file plus the offset of its region: T",
+                         ui.tags.sub("c"), "(t) + ", dT("k"), ".", class_="mb-1")
+        else:
+            daily = ui.p("Each day t, cell k gets the temperature of the file plus its offset: T", ui.tags.sub("k"), "(t) + ", dT("k"), ".",
+                         class_="mb-1")
         if len(ticked) == 1:
-            return ui.div(daily, ui.p(dT(1), " is sampled within its range: one cell, no order to keep.", class_="mb-0"),
+            return ui.div(daily, ui.p(dT(1), f" is sampled within its range: one {unit}, no order to keep.", class_="mb-0"),
                           class_="small text-muted border rounded p-2 mb-2")
+        if not keep_order():
+            return ui.div(daily, ui.p(f"Each {unit}'s ", dT("k"), " is sampled on its own within the range of ", dT(1),
+                                      f" (the boxes above): the order of the {unit}s can change from one trial to another.",
+                                      class_="mb-0"), class_="small text-muted border rounded p-2 mb-2")
         def difference(k):
             value = ticked[k - 1]["mean"] - ticked[k]["mean"]
             return f" {'−' if value < 0 else '+'} {abs(value):.2f} °C"
 
         here = [ui.tags.li(dT(k + 1), " = ", dT(k), " + ", gap(k + 1), difference(k),
-                           f"   ({ticked[k]['lat']:g}°N, {ticked[k]['lon']:g}°E, mean {ticked[k]['mean']:.2f} °C, after "
-                           f"{ticked[k - 1]['lat']:g}°N, {ticked[k - 1]['lon']:g}°E, mean {ticked[k - 1]['mean']:.2f} °C)")
+                           f"   ({ticked[k]['label']}, mean {ticked[k]['mean']:.2f} °C, after {ticked[k - 1]['label']}, mean "
+                           f"{ticked[k - 1]['mean']:.2f} °C)")
                 for k in range(1, len(ticked))]
         return ui.div(
             daily,
-            ui.p("The cells ticked, from the coolest to the warmest by their means ", T("k"), " over the setup period: ", dT(1),
-                 " is sampled, and for each next cell k ≥ 2 a ", gap("k"), " ≥ 0, with", class_="mb-1"),
+            ui.p(f"The {'regions' if input.cal_regions() == 'boxes' else 'cells'} ticked, from the coolest to the warmest by their "
+                 "means ", T("k"), " over the setup period" + (" (of their cells, weighted by people; every cell of a region gets "
+                 "its offset)" if input.cal_regions() == "boxes" else "") + ": ", dT(1),
+                 f" is sampled, and for each next {unit} k ≥ 2 a ", gap("k"), " ≥ 0, with", class_="mb-1"),
             ui.p(T("k"), " + ", dT("k"), " = ", T("k−1"), " + ", dT("k−1"), " + ", gap("k"), ui.tags.br(), "so  ", dT("k"), " = ",
                  dT("k−1"), " + ", gap("k"), " − (", T("k"), " − ", T("k−1"), ")", class_="mb-1 text-center", style="font-size: 1.05em;"),
-            ui.p("Cell k then stays at least as warm as cell k−1 in every trial. With the cells ticked:", class_="mb-1"),
+            ui.p(f"{unit.capitalize()} k then stays at least as warm as {unit} k−1 in every trial. With the {unit}s ticked:", class_="mb-1"),
             ui.tags.ul(*here, class_="mb-0"),
             class_="small text-muted border rounded p-2 mb-2",
         )
@@ -298,11 +482,19 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         found = []
         if not objectives():
             found.append("Add at least one objective (in Model and data, above).")
+        parameters = chosen_parameters()
+        for parameter in parameters:
+            low, high = parameter.low, parameter.high
+            if not all(isinstance(value, (int, float)) for value in (low, high)) or low >= high:
+                found.append(f"{parameter.name}: its minimum must be below its maximum.")
+            elif parameter.distribution == "loguniform" and low <= 0:
+                found.append(f"{parameter.name}: a log-uniform range needs a minimum above 0.")
         if not input.cal_offsets():
-            found.append("Nothing to calibrate: turn on Temperature offsets per cell (model parameters come next).")
-            return found
+            if not parameters:
+                found.append("Nothing to calibrate: turn on Temperature offsets, or tick model parameters.")
+            return found + counts_problems()
         if not chosen_cells():
-            found.append("Tick at least one cell to calibrate its temperature offset.")
+            found.append("Tick at least one cell or region to calibrate its temperature offset, or turn the offsets off.")
         low, high = input.cal_dt_low(), input.cal_dt_high()
         if not all(isinstance(value, (int, float)) for value in (low, high)) or low >= high:
             found.append("dT₁ needs a low below its high.")
@@ -310,6 +502,10 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
             gap_low, gap_high = gap_range()
             if not all(isinstance(value, (int, float)) for value in (gap_low, gap_high)) or not 0 <= gap_low < gap_high:
                 found.append("The gaps need a low of at least 0, below their high.")
+        return found + counts_problems()
+
+    def counts_problems():
+        found = []
         for key, label in (("cal_trials", "Trials"), ("cal_startup", "Start-up trials"), ("cal_seeds", "Seeds per trial"),
                            ("cal_threads", "Threads per run"), ("cal_parallel", "Runs at the same time")):
             if not isinstance(input[key](), int) or input[key]() < 1:
@@ -322,6 +518,7 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         if found:
             return ui.div(*[ui.p(problem, class_="small text-danger mb-1") for problem in found])
         trials, seeds, parallel = input.cal_trials(), input.cal_seeds(), input.cal_parallel()
+        offsets = len(chosen_cells()) if input.cal_offsets() else 0
         per_run, cores = threads(), os.cpu_count() or 1
         if parallel * per_run > cores:
             use = ui.p(f"{parallel} at a time × {per_run} threads = {parallel * per_run} threads, more than the {cores} cores of this "
@@ -332,7 +529,8 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
                        "of this computer.", class_="small text-muted mb-1")
         return ui.TagList(ui.p(f"{trials} trials × {seeds} seed{'s' if seeds > 1 else ''} = {trials * seeds} runs, "
                                f"{len(objectives())} objective{'s' if len(objectives()) > 1 else ''}, "
-                               f"{len(chosen_cells())} offset{'s' if len(chosen_cells()) > 1 else ''}.", class_="mb-1"), use)
+                               f"{offsets} offset{'s' if offsets != 1 else ''}, {len(chosen_parameters())} model parameter"
+                               f"{'s' if len(chosen_parameters()) != 1 else ''}.", class_="mb-1"), use)
 
     @ui.bind_task_button(button_id="cal_run")
     @reactive.extended_task
@@ -371,13 +569,18 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         wanted = (set(selected_output()) | {flag for objective in objectives() for flag in (objective.get("output") or [])}
                   | set(DRIVER_FLAGS))
         output = tuple(flag for group in OUTPUT_FLAGS.values() for flag, _, _ in group if flag in wanted)
-        temperature = {"cells": [{"lat": c["lat"], "lon": c["lon"]} for c in chosen_cells()],
-                       "first": (input.cal_dt_low(), input.cal_dt_high()), "gap": gap_range()}
+        temperature = {"cells": [{"lat": u["lat"], "lon": u["lon"], **({"members": u["members"]} if "members" in u else {})}
+                                 for u in chosen_cells()],
+                       "first": (input.cal_dt_low(), input.cal_dt_high()), "gap": gap_range(),
+                       "ordered": bool(keep_order())} if input.cal_offsets() else None
+        parameters = chosen_parameters()
+        calibrated = {parameter.name for parameter in parameters}
+        fixed = {key: value for key, value in {**setup().params, **overrides()}.items() if key not in calibrated}
         try:
-            config = replace(setup(), params={**setup().params, **overrides()}, output=output).with_run(nagent=nagent, seed=seed,
+            config = replace(setup(), params=fixed, output=output).with_run(nagent=nagent, seed=seed,
                                                                                                        threads=threads())
             folder = create_calibration(config, [{k: v for k, v in o.items() if k not in ("output", "describe")} for o in objectives()],
-                                        temperature=temperature, seeds=[seed + i for i in range(input.cal_seeds())],
+                                        parameters=parameters, temperature=temperature, seeds=[seed + i for i in range(input.cal_seeds())],
                                         n_trials=input.cal_trials(), sampler=input.cal_sampler(), startup_trials=input.cal_startup(),
                                         sampler_seed=seed, name=name or None)
         except (ConfigError, CalibrationError, DataError, ValueError, OSError) as error:
@@ -478,6 +681,9 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
 
     @render.ui
     def cal_previous_info():
+        changed()  # Drawn again when a calibration starts or ends, and while one runs, as its status changes
+        if running():
+            reactive.invalidate_later(REFRESH_SECONDS)
         folder = input.cal_previous()
         if not folder:
             return ui.p(f"None yet in {calibrations_dir(setup().runs_dir)}", class_="small text-muted")
@@ -488,8 +694,10 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         lines = [f"{o['name']}: {o['metric'].replace('_', ' ')} of {o['variable']}" for o in record["objectives"]]
         temperature = record.get("temperature")
         if temperature:
-            lines.append(f"Temperature offsets of {len(temperature['cells'])} cells: dT₁ in {temperature['first']} °C, gaps in "
+            lines.append(f"Temperature offsets of {len(temperature['cells'])} cells or regions: dT₁ in {temperature['first']} °C, gaps in "
                          f"{temperature['gap']} °C; means {', '.join(f'{m:.2f}' for m in temperature['means'])} °C")
+        for parameter in record.get("parameters", []):
+            lines.append(f"{parameter['name']}: {parameter['distribution']} from {parameter['low']:.4g} to {parameter['high']:.4g}")
         lines.insert(0, f"Status: {status_of(folder, record)}"
                      + (" (no process runs it any more, e.g. the GUI was closed: Resume goes on with it)"
                         if status_of(folder, record) == "interrupted" else ""))
@@ -529,15 +737,43 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         record, _, front = found
         names = [o["name"] for o in record["objectives"]]
         means = (record.get("temperature") or {}).get("means") or []
+        parameters = [parameter["name"] for parameter in record.get("parameters", [])]
         header = ui.tags.tr(ui.tags.th("Trial"), *[ui.tags.th(name) for name in names],
-                            *[ui.tags.th(f"dT{k + 1} → mean") for k in range(len(means))])
+                            *[ui.tags.th(f"dT{k + 1} → mean") for k in range(len(means))], *[ui.tags.th(name) for name in parameters])
         rows = [ui.tags.tr(ui.tags.td(str(row["number"])), *[ui.tags.td(f"{value:.4g}") for value in row["values"]],
                            *[ui.tags.td(f"{row['offsets'][f'dT_{k + 1}']:+.2f} → {means[k] + row['offsets'][f'dT_{k + 1}']:.2f} °C")
-                             for k in range(len(means))])
-                for row in sorted(front, key=lambda row: row["number"])]
+                             for k in range(len(means))],
+                           *[ui.tags.td(f"{row['params'][name]:.4g}") for name in parameters])
+                for row in sort_front(front)]
         return ui.div(ui.tags.strong(with_tip("Pareto front", "The trials no other trial beats on every objective: the best trade-offs "
                                               "between the objectives (for one objective, the best trial)."), class_="small"),
                       ui.tags.table(ui.tags.thead(header), ui.tags.tbody(*rows), class_="table table-sm small mb-1"), class_="mt-2")
+
+    def sort_choices(record):
+        choices = {"number": "Trial number"}
+        for k, objective in enumerate(record["objectives"]):
+            better = "high" if objective["direction"] == "maximize" else "low"
+            for order, text in (("desc", "high to low"), ("asc", "low to high")):
+                choices[f"{k}:{order}"] = f"{objective['name']}, {text}{' (best first)' if text.startswith(better) else ''}"
+        return choices
+
+    @render.ui
+    def cal_front_sort_choice():
+        found = progress()
+        if found is None or not found[2]:
+            return None
+        choices = sort_choices(found[0])
+        with reactive.isolate():
+            selected = input.cal_front_sort() if "cal_front_sort" in input and input.cal_front_sort() in choices else "number"
+        return ui.input_select("cal_front_sort", "Sort the Pareto front by", choices, selected=selected, width="22rem")
+
+    def sort_front(front):
+        """The trials of the front in the order chosen: by number, or by an objective, high to low or low to high."""
+        key = input.cal_front_sort() if "cal_front_sort" in input else "number"
+        if not key or key == "number" or ":" not in key:
+            return sorted(front, key=lambda row: row["number"])
+        index, order = key.split(":")
+        return sorted(front, key=lambda row: row["values"][int(index)], reverse=order == "desc")
 
     @render.ui
     def cal_best_choice():
@@ -554,7 +790,7 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
                                  ui.input_select("cal_best_objective", "Against the data of", objectives_, selected=objective),
                                  col_widths=(6, 6), fill=False)
 
-    comparisons = {}  # (folder, trial, objective) -> figure: a trial does not change once done
+    comparisons = {}  # (folder, trial, objective, drivers) -> (figure, problem with the drivers)
 
     @reactive.effect
     async def draw_best():
@@ -563,17 +799,44 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         if found is None or not found[2] or "cal_best_trial" not in input or not input.cal_best_trial():
             await send_figure(session, "cal_best_plot", message_figure("A trial of the Pareto front, against the data, is drawn here."))
             return
-        key = (folder, int(input.cal_best_trial()), int(input.cal_best_objective() or 0))
+        number, index = int(input.cal_best_trial()), int(input.cal_best_objective() or 0)
+        figure, problem = trial_figure(folder, found[0], number, index, driver_choices(input, "cal_best_driver"))
+        best_problem.set(problem)
+        if isinstance(figure, str):
+            await send_figure(session, "cal_best_plot", message_figure(figure))
+            return
+        figure.update_layout(title=f"Trial {number}, against {found[0]['objectives'][index]['name']} (model scaled to the mean of the data)")
+        await send_figure(session, "cal_best_plot", figure)
+
+    best_problem = reactive.value(None)
+
+    @render.ui
+    def cal_best_problem():
+        return ui.p(best_problem(), class_="small text-danger mb-1") if best_problem() else None
+
+    def trial_figure(folder, record, number, index, chosen):
+        """(a figure of trial `number` against the data of objective `index`, with the drivers chosen of its run below, and
+        what is wrong with any of the drivers), or (a str saying why there is no figure, None). The figures are kept: a
+        trial does not change once done; each is given as a copy, for its own title."""
+        key = (folder, number, index, tuple(sorted(chosen.items())))
         if key not in comparisons:
             try:
-                model, data, m, d, labels = trial_comparison(*key)
+                model, data, m, d, labels = trial_comparison(folder, number, index)
             except (DataError, OSError, KeyError, ValueError) as error:
-                await send_figure(session, "cal_best_plot", message_figure(f"Trial {key[1]} cannot be drawn: {error}."))
-                return
-            comparisons[key] = comparison_figure(model, data, labels, m, d, scale=True)
-        figure = go.Figure(comparisons[key])  # Its own title: the start plot may show the same trial
-        figure.update_layout(title=f"Trial {key[1]}, against {found[0]['objectives'][key[2]]['name']} (model scaled to the mean of the data)")
-        await send_figure(session, "cal_best_plot", figure)
+                return f"Trial {number} cannot be drawn: {error}.", None
+            # The drivers of the run of the trial (its first seed), within the periods the model and the data share
+            run_dir = trial_folder(folder, number) / f"seed_{record['seeds'][0]}"
+            first, last = paired_span(data, labels)
+            drivers, problems = [], []
+            for name, (period, how, by_month) in chosen.items():
+                try:
+                    with NETCDF_LOCK:
+                        drivers.append((name, DRIVERS[name][0], driver_panel(run_dir, name, period, how, by_month, first, last)))
+                except (DataError, OSError, KeyError) as error:
+                    problems.append(f"{DRIVERS[name][0]}: {error}")
+            comparisons[key] = (comparison_figure(model, data, labels, m, d, scale=True, drivers=drivers), "; ".join(problems) or None)
+        figure, problem = comparisons[key]
+        return go.Figure(figure), problem
 
     start_problem = reactive.value(None)
 
@@ -598,29 +861,13 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
             await send_figure(session, "cal_start_plot", message_figure("Where the calibration started is drawn here once its first trial is done."))
             return
         index = int(input.cal_best_objective() or 0)
-        chosen = driver_choices(input, "cal_start_driver")
-        key = (folder, row["number"], index, tuple(sorted(chosen.items())))
-        if key not in comparisons:
-            try:
-                model, data, m, d, labels = trial_comparison(folder, row["number"], index)
-            except (DataError, OSError, KeyError, ValueError) as error:
-                await send_figure(session, "cal_start_plot", message_figure(f"Trial {row['number']} cannot be drawn: {error}."))
-                return
-            # The drivers of the run of the trial (its first seed), within the periods the model and the data share
-            run_dir = trial_folder(folder, row["number"]) / f"seed_{record['seeds'][0]}"
-            first, last = paired_span(data, labels)
-            drivers, problems = [], []
-            for name, (period, how, by_month) in chosen.items():
-                try:
-                    with NETCDF_LOCK:
-                        drivers.append((name, DRIVERS[name][0], driver_panel(run_dir, name, period, how, by_month, first, last)))
-                except (DataError, OSError, KeyError) as error:
-                    problems.append(f"{DRIVERS[name][0]}: {error}")
-            start_problem.set("; ".join(problems) or None)
-            comparisons[key] = comparison_figure(model, data, labels, m, d, scale=True, drivers=drivers)
+        figure, problem = trial_figure(folder, record, row["number"], index, driver_choices(input, "cal_start_driver"))
+        start_problem.set(problem)
+        if isinstance(figure, str):
+            await send_figure(session, "cal_start_plot", message_figure(figure))
+            return
         what = "no temperature offset" if start else "the first trial (none without offsets)"
         values = ", ".join(f"{o['name']} {value:.3g}" for o, value in zip(record["objectives"], row["values"]))
-        figure = go.Figure(comparisons[key])
         figure.update_layout(title=f"Start: trial {row['number']}, {what} ({values}), against {record['objectives'][index]['name']}")
         await send_figure(session, "cal_start_plot", figure)
 

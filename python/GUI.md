@@ -315,12 +315,20 @@ monthly series with the correlation (timing), then, with a climatology step in b
 sliders, each time with other values of what is calibrated, and keeps the trials that do best on all the objectives
 together (the Pareto front):
 
-- **Temperature offsets per cell**: the simulated cells of the setup (for a region of at most 20), with their mean
-  temperature over its period, from the coolest to the warmest. The cells ticked are shifted: with one, by dT₁ only;
+- **Temperature offsets**, **one per cell** or **one per region**, the cells in each box of a size you give (e.g. 0.5°,
+  with edges on multiples of it: the cells of a coarser grid, as when finer driving files were made from coarser ones).
+  The cells of a region share its offset and keep their differences; its mean is that of its cells weighted by their
+  people (where people live). At most 20 cells or regions are calibrated, of a setup of at most 5,000 simulated cells.
+  A map shows the cells in the colour of their region, numbered as in the table, grey if not ticked; with a
+  **Shapefile** switch when the applied setup has one, to draw its areas over them. The table lists
+  the cells or regions with their mean temperature over the setup period and their people, from the coolest to the
+  warmest. The cells ticked are shifted: with one, by dT₁ only;
   with more, the first by dT₁ and each next one by a gap of at least 0 above the one before (the gap range is asked
   for then), so the order of their temperatures is kept in every trial. Cells not ticked keep the temperatures of the
-  file. Each trial writes its own temperature file. Model parameters come next; with the offsets off there is nothing
-  to calibrate yet.
+  file. Each trial writes its own temperature file.
+- **Model parameters**, by group as on the Parameters tab: tick a parameter to calibrate it, sampled uniformly or
+  log-uniformly (for ranges over orders of magnitude) within a range in the units of its slider, at first the range of
+  the slider; those not ticked keep their slider value. They can be calibrated with the offsets, or alone.
 - **Optuna**: the sampler (TPE, random or NSGA-II, with a link to its documentation), the trials and the start-up
   trials drawn at random. **Runs**: seeds per trial (the objectives then compare the median of the seeds, each
   processed), threads per run (at first those of the setup; kept with the calibration, as results depend on them),
@@ -332,15 +340,16 @@ together (the Pareto front):
   script is running. A resumed calibration keeps its threads per run, and runs as many at a time as fit in the cores
   with them.
   The calibration running, or the one chosen, is drawn below: each objective trial by trial with the best so far, the
-  Pareto front with the offsets of each trial and the mean temperatures they give, a trial of the front against the
-  data of an objective (the model scaled to the mean of the data), and below it, in a box of its own, where the
+  Pareto front with the offsets and parameters of each trial and the mean temperatures they give (sorted by trial or by
+  an objective, high to low or low to high), in a box of its own a trial of the front against the data of an
+  objective (the model scaled to the mean of the data) with its **Possible drivers**, and below it, in a box of its own, where the
   calibration started: its first trial, with no temperature offset (when the ranges allow it), processed and scored like
   every other trial, with its **Possible drivers** (rainfall, temperature and vector densities of its run, as in the
   Model and data card) in panels below that zoom together. The runs of a calibration always write the vector densities
   for this.
 - **Results**, for the calibration running or chosen, its figure chosen from a menu, of the objective chosen where the
-  figure is of one, with what it shows and a link to Optuna's documentation: the **distributions of the offsets** of
-  each cell over all the trials, the best tenth by the objective and the Pareto front (a narrow spread of the best means
+  figure is of one, with what it shows and a link to Optuna's documentation: the **distributions of the calibrated
+  values**, each offset and model parameter (log-uniform ones on a log scale), over all the trials, the best tenth by the objective and the Pareto front (a narrow spread of the best means
   the data tell the offset well; a wide one, that they hardly do), and Optuna's figures: the **Pareto front**,
   **parameter importances** (PED-ANOVA, turned for objectives that are maximised), **slice**, **parallel
   coordinates**, **contour**, **rank**, the **empirical distribution** of the objective, and the **timeline** of the
