@@ -333,7 +333,14 @@ together (the Pareto front):
   calibration started: its first trial, with no temperature offset (when the ranges allow it), processed and scored like
   every other trial, with its **Possible drivers** (rainfall, temperature and vector densities of its run, as in the
   Model and data card) in panels below that zoom together. The runs of a calibration always write the vector densities
-  for this. Its folder, `calibration/<name>/` in the
+  for this.
+- **Results**, for the calibration running or chosen, its figure chosen from a menu, of the objective chosen where the
+  figure is of one, with what it shows and a link to Optuna's documentation: the **distributions of the offsets** of
+  each cell over all the trials, the best tenth by the objective and the Pareto front (a narrow spread of the best means
+  the data tell the offset well; a wide one, that they hardly do), and Optuna's figures: the **Pareto front**,
+  **parameter importances** (PED-ANOVA, turned for objectives that are maximised), **slice**, **parallel
+  coordinates**, **contour**, **rank**, the **empirical distribution** of the objective, and the **timeline** of the
+  trials. Optuna's figures show what it samples, dT₁ and the gaps; the offsets of the cells follow from them. Its folder, `calibration/<name>/` in the
   results folder, holds `calibration.json`, the Optuna study (`optuna.db`), the model (`bin/`) and the trials. A
   calibration made by an earlier version of the engine is listed with "earlier version: cannot be resumed": it can be
   looked at, not run further.

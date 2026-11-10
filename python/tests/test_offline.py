@@ -2594,6 +2594,30 @@ sleep ${FAKE_SLEEP:-0}
         self.assertEqual((len(labels), labels[0], labels[-1]), (24, "2001-01", "2002-12"))
         self.assertAlmostEqual(float(np.corrcoef(m, d)[0, 1]), best["values"][0], places=6)  # The plot is what was scored
 
+    def test_results_views(self):
+        from mobile.calibration_engine import create_calibration, run_calibration
+        from mobile.calibration_results import FIGURES, ResultsError, results_figure
+        from mobile.sensitivity_runs import StudyState
+
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=12, name="views")
+        run_calibration(folder, StudyState(), parallel=2)
+        for kind in FIGURES:
+            for index in (0, 1):
+                figure = results_figure(folder, kind, index)
+                self.assertTrue(figure.data, kind)
+                self.assertTrue(figure.layout.title.text.startswith(FIGURES[kind][0]), kind)
+        # The distributions: for each cell, all the trials, the best tenth, and the Pareto front
+        figure = results_figure(folder, "distributions", 1)
+        self.assertEqual([trace.name for trace in figure.data[:3]], ["All trials", "Best 10% by swings", "Pareto front"])
+        self.assertEqual(sum(len(trace.x) for trace in figure.data if trace.name == "All trials"), 24)  # 12 trials × 2 cells
+        # With one objective, no Pareto front to draw; with one cell, no pair of parameters
+        single = create_calibration(self.config, self.objectives()[:1], temperature={**self.temperature(), "cells": self.cells[:1]},
+                                    n_trials=4, name="single")
+        run_calibration(single, StudyState(), parallel=2)
+        for kind, why in (("pareto", "two objectives"), ("contour", "two sampled parameters"), ("rank", "two sampled parameters")):
+            with self.assertRaisesRegex(ResultsError, why):
+                results_figure(single, kind)
+
     def test_earlier_versions_are_not_resumed(self):
         from mobile.calibration_engine import (CalibrationError, calibration_label, create_calibration, read_calibration, run_calibration,
                                                write_calibration)

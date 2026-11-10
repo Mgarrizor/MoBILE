@@ -19,6 +19,7 @@ from .calibration_engine import (
 )
 from .calibration_data import DataError
 from .calibration_model import DRIVER_PERIODS, DRIVERS, driver_panel
+from .calibration_results import FIGURES, ResultsError, figure_help, results_figure
 from .calibration_steps import STATISTICS
 from .config import ConfigError
 from .driving import climatology, open_field
@@ -111,6 +112,17 @@ def calibration_run_card():
             *[driver_controls(name, "cal_start_driver") for name in DRIVERS],
             ui.output_ui("cal_start_problem"),
             ui.div(id="cal_start_plot", style="min-height: 380px;"),
+            class_="border rounded p-2 mt-3",
+        ),
+        ui.div(
+            ui.h6("Results", class_="mb-1"),
+            ui.layout_columns(
+                ui.input_select("cal_figure", "Figure", {kind: spec[0] for kind, spec in FIGURES.items()}, selected="distributions"),
+                ui.output_ui("cal_figure_objective"),
+                col_widths=(6, 6), fill=False,
+            ),
+            ui.output_ui("cal_figure_help"),
+            ui.div(id="cal_results_plot", style="min-height: 480px;"),
             class_="border rounded p-2 mt-3",
         ),
         class_="mt-3",
@@ -597,5 +609,50 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         figure = go.Figure(comparisons[key])
         figure.update_layout(title=f"Start: trial {row['number']}, {what} ({values}), against {record['objectives'][index]['name']}")
         await send_figure(session, "cal_start_plot", figure)
+
+    @render.ui
+    def cal_figure_objective():
+        found = progress()
+        if found is None or not FIGURES[input.cal_figure()][3]:
+            return None
+        choices = {str(k): objective["name"] for k, objective in enumerate(found[0]["objectives"])}
+        with reactive.isolate():
+            selected = input.cal_figure_index() if "cal_figure_index" in input and input.cal_figure_index() in choices else "0"
+        return ui.input_select("cal_figure_index", "Of the objective", choices, selected=selected)
+
+    @render.ui
+    def cal_figure_help():
+        text, link = figure_help(input.cal_figure())
+        names = ""
+        found = progress()
+        if found is not None and found[0].get("temperature") and input.cal_figure() not in ("distributions", "timeline"):
+            names = (" Optuna's figures show what it samples: dT_1 and the gaps (gap_2, …), from which the offsets of the cells "
+                     "follow (the equation above).")
+        return ui.p(text + names, " ", ui.a("Optuna documentation", href=link, target="_blank") if link else None,
+                    class_="small text-muted mb-1")
+
+    results = {}  # (folder, trials done, figure, objective) -> figure
+
+    @reactive.effect
+    async def draw_results():
+        found = progress()
+        folder = shown()
+        kind = input.cal_figure()
+        index = int(input.cal_figure_index()) if FIGURES[kind][3] and "cal_figure_index" in input and input.cal_figure_index() else 0
+        if found is None:
+            await send_figure(session, "cal_results_plot", message_figure("Choose a calibration under Calibrations to see its results."))
+            return
+        done = sum(row["state"] == "COMPLETE" for row in found[1])
+        key = (folder, done, kind, index)
+        if key not in results:
+            try:
+                results[key] = results_figure(folder, kind, index)
+            except ResultsError as error:
+                await send_figure(session, "cal_results_plot", message_figure(f"Not yet: {error}."))
+                return
+            except (ValueError, RuntimeError, KeyError, ZeroDivisionError) as error:  # From Optuna's figures, e.g. too few trials
+                await send_figure(session, "cal_results_plot", message_figure(f"{FIGURES[kind][0]} cannot be drawn: {error}."))
+                return
+        await send_figure(session, "cal_results_plot", results[key])
 
     return SimpleNamespace(running=running, cancel=state.cancel)
