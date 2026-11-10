@@ -326,7 +326,11 @@ together (the Pareto front):
   processed), threads per run (at first those of the setup; kept with the calibration, as results depend on them),
   runs at the same time (at first as many as fit in the cores), and a name. The runs write the outputs of the Outputs card and those the
   objectives were made from. The model is built once, by the first run.
-- **Run calibration** shows the progress; **Cancel** stops it, and **Resume**, under Calibrations, goes on with it.
+- **Run calibration** shows the progress; **Cancel** stops it, and **Resume**, under Calibrations, goes on with it,
+  also in a new GUI and after the GUI was closed or crashed: it is then listed as **interrupted** (recorded as running,
+  but no process runs it any more). A calibration runs in one process at a time: Resume refuses one that another GUI or
+  script is running. A resumed calibration keeps its threads per run, and runs as many at a time as fit in the cores
+  with them.
   The calibration running, or the one chosen, is drawn below: each objective trial by trial with the best so far, the
   Pareto front with the offsets of each trial and the mean temperatures they give, a trial of the front against the
   data of an objective (the model scaled to the mean of the data), and below it, in a box of its own, where the

@@ -16,6 +16,7 @@ the order of their temperatures holds in every trial without any trial being was
 """
 
 import datetime
+import fcntl
 import json
 import shutil
 import threading
@@ -48,6 +49,7 @@ OLD_CALIBRATION = ("This calibration was made by an earlier version of the calib
 FOLDER = "calibration"
 RECORD = "calibration.json"
 DATABASE = "optuna.db"
+LOCK = "running.lock"  # Held by the process running a calibration; the system lets go of it when that process ends
 STUDY_NAME = "calibration"
 INPUTS = "inputs"
 TRIALS = "trials"
@@ -331,6 +333,29 @@ def run_calibration(folder, state, parallel=1, threads=None):
     record = read_calibration(folder)
     if not resumable(record):
         raise CalibrationError(OLD_CALIBRATION)
+    with open(folder / LOCK, "w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise CalibrationError("this calibration is running already, in this or another process") from None
+        return _run_locked(folder, record, state, parallel, threads)
+
+
+def is_running(folder):
+    """Whether a process is running the calibration now (it holds its lock), in this one or another."""
+    path = Path(folder) / LOCK
+    if not path.exists():
+        return False
+    with open(path, "a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        fcntl.flock(lock, fcntl.LOCK_UN)
+        return False
+
+
+def _run_locked(folder, record, state, parallel, threads):
     config = setup_config(folder, record)
     if threads:
         config = replace(config, run={**config.run, "threads": threads})
@@ -482,10 +507,17 @@ def resumable(record):
     return record.get("version") == VERSION
 
 
+def status_of(folder, record):
+    """The status of a calibration as it is now: 'interrupted' for one recorded as running that no process runs any more,
+    e.g. after the GUI was closed or crashed."""
+    status = record.get("status", "?")
+    return "interrupted" if status == "running" and not is_running(folder) else status
+
+
 def calibration_label(folder, record):
     """e.g. 'dz_two_cells (finished, 100 of 100 trials, 2 objectives)'; '..., earlier version' if it cannot be resumed."""
     done = record.get("completed", 0) + record.get("failed", 0)
-    return (f"{Path(folder).name} ({record.get('status', '?')}, {done} of {record['n_trials']} trials, "
+    return (f"{Path(folder).name} ({status_of(folder, record)}, {done} of {record['n_trials']} trials, "
             f"{len(record['objectives'])} objective{'s' if len(record['objectives']) > 1 else ''}"
             f"{'' if resumable(record) else ', earlier version: cannot be resumed'})")
 

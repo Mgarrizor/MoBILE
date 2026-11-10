@@ -15,7 +15,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from .calibration_engine import (
     OLD_CALIBRATION, SAMPLER_LINKS, SAMPLERS, CalibrationError, best_trials, calibration_label, calibrations_dir, create_calibration,
-    list_calibrations, read_calibration, resumable, run_calibration, trial_comparison, trial_folder, trials_table,
+    is_running, list_calibrations, read_calibration, resumable, run_calibration, status_of, trial_comparison, trial_folder, trials_table,
 )
 from .calibration_data import DataError
 from .calibration_model import DRIVER_PERIODS, DRIVERS, driver_panel
@@ -342,12 +342,12 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
     def running():
         return calibration_task.status() == "running"
 
-    def start(folder):
+    def start(folder, parallel=None):
         last.set(None)
         running_folder.set(str(folder))
         to_select.set(str(folder))
         changed.set(changed() + 1)
-        calibration_task.invoke(str(folder), input.cal_parallel())
+        calibration_task.invoke(str(folder), parallel or input.cal_parallel())
 
     @reactive.effect
     @reactive.event(input.cal_run)
@@ -402,7 +402,18 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         if record["status"] == "finished":
             ui.notification_show("This calibration has finished: all its trials are done.", type="message")
             return
-        start(folder)
+        if is_running(folder):
+            ui.notification_show("This calibration is running already, in another GUI or script: wait for it, or stop it there.",
+                                 type="warning")
+            return
+        # Its runs keep the threads it was made with: as many at a time as fit in the cores with them
+        threads_, cores = record["setup"]["run"]["threads"], os.cpu_count() or 1
+        parallel = input.cal_parallel() if isinstance(input.cal_parallel(), int) and input.cal_parallel() >= 1 else 1
+        if parallel * threads_ > cores:
+            parallel = max(1, cores // threads_)
+            ui.notification_show(f"Resumed {parallel} at a time: its runs use {threads_} threads each, and this computer has {cores} cores.",
+                                 type="message", duration=8)
+        start(folder, parallel)
 
     @reactive.effect
     def enable_buttons():
@@ -479,6 +490,9 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         if temperature:
             lines.append(f"Temperature offsets of {len(temperature['cells'])} cells: dT₁ in {temperature['first']} °C, gaps in "
                          f"{temperature['gap']} °C; means {', '.join(f'{m:.2f}' for m in temperature['means'])} °C")
+        lines.insert(0, f"Status: {status_of(folder, record)}"
+                     + (" (no process runs it any more, e.g. the GUI was closed: Resume goes on with it)"
+                        if status_of(folder, record) == "interrupted" else ""))
         lines.append(f"Sampler {record['sampler']['name']}, {record['n_trials']} trials, seeds {record['seeds']}, "
                      f"{record['setup']['run']['threads']} thread{'s' if record['setup']['run']['threads'] > 1 else ''} per run")
         return ui.div(ui.tags.ul(*[ui.tags.li(line) for line in lines], class_="mb-1"), ui.p(f"Folder: {folder}", class_="mb-0"),

@@ -2618,6 +2618,47 @@ sleep ${FAKE_SLEEP:-0}
             with self.assertRaisesRegex(ResultsError, why):
                 results_figure(single, kind)
 
+    def test_running_interrupted_and_one_at_a_time(self):
+        import signal
+        import subprocess
+        import threading
+
+        from mobile.calibration_engine import (CalibrationError, calibration_label, create_calibration, is_running, read_calibration,
+                                               run_calibration, status_of)
+        from mobile.sensitivity_runs import StudyState
+
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=6, name="locked")
+        self.assertFalse(is_running(folder))
+        outcome = {}
+        with mock.patch.dict(os.environ, {"FAKE_SLEEP": "0.5"}):
+            worker = threading.Thread(target=lambda: outcome.update(record=run_calibration(folder, StudyState(), parallel=2)))
+            worker.start()
+            time.sleep(1.0)
+            self.assertTrue(is_running(folder))
+            self.assertEqual(status_of(folder, read_calibration(folder)), "running")
+            with self.assertRaisesRegex(CalibrationError, "running already"):  # Not twice at once
+                run_calibration(folder, StudyState())
+            worker.join(60)
+        self.assertEqual(outcome["record"]["status"], "finished")
+        self.assertFalse(is_running(folder))
+        # Run by another process that is killed (a GUI closed or crashed): recorded as running, but nothing runs it
+        killed = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=20, name="killed")
+        code = ("import sys; sys.path[:0] = [sys.argv[1]]; from mobile.calibration_engine import run_calibration; "
+                "from mobile.sensitivity_runs import StudyState; run_calibration(sys.argv[2], StudyState(), parallel=2)")
+        other = subprocess.Popen([sys.executable, "-c", code, str(Path(MOBILE) / "python"), str(killed)], start_new_session=True,
+                                 env={**os.environ, "FAKE_SLEEP": "0.5"}, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for _ in range(100):  # Until it holds the lock and has recorded that it runs
+            if is_running(killed) and read_calibration(killed)["status"] == "running":
+                break
+            time.sleep(0.1)
+        self.assertTrue(is_running(killed))
+        os.killpg(other.pid, signal.SIGKILL)
+        other.wait()
+        record = read_calibration(killed)
+        self.assertEqual((record["status"], status_of(killed, record)), ("running", "interrupted"))
+        self.assertIn("(interrupted,", calibration_label(killed, record))
+        self.assertEqual(run_calibration(killed, StudyState(), parallel=2)["status"], "finished")  # And it goes on
+
     def test_earlier_versions_are_not_resumed(self):
         from mobile.calibration_engine import (CalibrationError, calibration_label, create_calibration, read_calibration, run_calibration,
                                                write_calibration)
