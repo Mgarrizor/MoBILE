@@ -4,6 +4,7 @@ import fcntl
 import hashlib
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -11,6 +12,7 @@ import tempfile
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 from .results import RunResult, write_manifest
 from .rundir import OUTPUT_NAME, create_run_dir
@@ -99,9 +101,64 @@ def _lines(stream):
         yield buffer
 
 
+class BuildOnce:
+    """Runs that share one model, e.g. those of an analysis or a calibration: the first to start builds it and keeps
+    it at `binary`; the others wait for it, then run it as it is (mobile.sh -E), side by side. If the first could not
+    build it, each builds its own as before. A model kept earlier, as by a resumed analysis, is used at once.
+
+    For each attempt of a run: model = once.acquire(cancelled); a Runner(config, model) that builds (model None) gets
+    on_built=once.keep; the run that built calls once.release() when it ends, built or not."""
+
+    WAIT_SECONDS = 0.2  # How often a run waiting for the model checks whether it was cancelled
+
+    def __init__(self, binary, on_kept=None):
+        self.binary = Path(binary)
+        self.on_kept = on_kept  # Called with the path of the model once kept, e.g. to record its checksum
+        self._lock = threading.Lock()
+        self._ready = threading.Event()
+        self._claimed = False
+        if self.binary.is_file():
+            self._ready.set()
+
+    def acquire(self, cancelled=lambda: False):
+        """The model to run: its path, or None for a run that is to build one, or False if cancelled while waiting."""
+        with self._lock:
+            if not self._ready.is_set() and not self._claimed:
+                self._claimed = True
+                return None
+        while not self._ready.wait(self.WAIT_SECONDS):
+            if cancelled():
+                return False
+        return self.binary if self.binary.is_file() else None
+
+    def keep(self, path):
+        """on_built of the run that builds: keep a copy of its model for the others."""
+        if not Path(path).is_file():
+            return  # Not where mobile.sh leaves it: the others build their own
+        self.binary.parent.mkdir(parents=True, exist_ok=True)
+        temporary = self.binary.with_suffix(".tmp")
+        shutil.copy2(path, temporary)
+        temporary.replace(self.binary)
+        if self.on_kept is not None:
+            self.on_kept(self.binary)
+        self._ready.set()
+
+    def release(self):
+        """The run that was to build has ended, built or not: the others go on."""
+        self._ready.set()
+
+
+# The netCDF library is not safe to call from several threads at once: work on netCDF files done while runs go on
+# side by side, as making their run folders (which read the driving files), is done under this lock, one at a time.
+NETCDF_LOCK = threading.RLock()
+
+
 class Runner:
-    def __init__(self, config):
+    def __init__(self, config, prebuilt=None):
+        """prebuilt: the path of a model already built from this MoBILE with the same setup (e.g. for the runs of
+        an analysis, built once by its first run), run without building and so without the build lock."""
         self.config = config
+        self.prebuilt = None if prebuilt is None else os.path.abspath(prebuilt)
         self._process = None
         self._cancelled = threading.Event()
 
@@ -109,11 +166,16 @@ class Runner:
         key = hashlib.sha256(str(self.config.mobile).encode()).hexdigest()[:16]
         return os.path.join(tempfile.gettempdir(), f"mobile_{key}.lock")
 
-    def run(self, name=None, on_progress=None, wait=False):
+    def run(self, name=None, on_progress=None, wait=False, on_built=None):
         """Run the model to the end and return a RunResult; a failed run is a status, not an exception.
 
         The repository is locked while the model is built. If another run is building, raise RunnerBusy, or
-        with wait wait for it, unless the run is cancelled meanwhile (RunCancelled)."""
+        with wait wait for it, unless the run is cancelled meanwhile (RunCancelled). on_built(path) is called with
+        the model just built, once it is. A prebuilt model is run without building, and without the lock."""
+        if self.prebuilt is not None:
+            if self._cancelled.is_set():
+                raise RunCancelled("Cancelled before it started")
+            return self._run_locked(name, on_progress, lambda: None, None)
         with open(self._lock_path(), "w") as lock:
             while True:
                 try:
@@ -132,12 +194,13 @@ class Runner:
                     locked[0] = False
 
             try:
-                return self._run_locked(name, on_progress, release)
+                return self._run_locked(name, on_progress, release, on_built)
             finally:
                 release()
 
-    def _run_locked(self, name, on_progress, release_lock):
-        run_dir = create_run_dir(self.config, name)
+    def _run_locked(self, name, on_progress, release_lock, on_built):
+        with NETCDF_LOCK:
+            run_dir = create_run_dir(self.config, name, self.prebuilt)
         env = run_environment(self.config.mobile)
         parser = ProgressParser()
         finished = False
@@ -159,6 +222,9 @@ class Runner:
                 line = raw.decode("utf-8", errors="replace")
                 if BUILT_LINE in line:
                     release_lock()  # Built: the next run can build while this one runs
+                    if on_built is not None and self.prebuilt is None:
+                        on_built(run_dir / OUTPUT_NAME / "mobile.out")
+                        on_built = None
                 finished = finished or FINISHED_LINE in line
                 event = parser.parse(line)
                 if event and on_progress:
@@ -183,7 +249,7 @@ class Runner:
             wall_seconds=wall_seconds,
             spinup_years=parser.spinup_year,
         )
-        write_manifest(self.config, result)
+        write_manifest(self.config, result, self.prebuilt)
         return result
 
     def cancel(self):

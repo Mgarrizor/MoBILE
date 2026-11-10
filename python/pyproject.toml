@@ -13,6 +13,7 @@ dependencies = [
     "pyshp",
     "shapely",
     "pyproj",
+    "optuna",
     "SALib",
     "scipy",
 ]

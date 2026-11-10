@@ -56,8 +56,9 @@ def period_steps(config):
     return None if steps == (0, len(days) - 1) else steps
 
 
-def create_run_dir(config, name=None):
-    """Create runs_dir/<name>/ and everything the scripts read from it."""
+def create_run_dir(config, name=None, prebuilt=None):
+    """Create runs_dir/<name>/ and everything the scripts read from it. With prebuilt, the path of a model already
+    built, the scripts run it (mobile.sh -E) instead of building one."""
     run_dir = Path(config.runs_dir) / (name or new_run_id())
     (run_dir / "age_structure").mkdir(parents=True)
 
@@ -101,6 +102,9 @@ def create_run_dir(config, name=None):
         "output_file": output_file,
         "imm_forcing": f"'{inputs.get('imm_forcing', 'NONE')}'",
     }
+    if prebuilt is not None:
+        # Only then: a MoBILE from before -E has no such line, and its runs still build as they always did
+        values["prebuilt"] = f"'{prebuilt}'"
     template = (Path(config.mobile) / "utils" / "run_MOBILE.sh").read_text()
     script = fill_template(template, values, config.run["threads"], config.mobile)
     (run_dir / "run_MOBILE.sh").write_text(script)

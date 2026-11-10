@@ -1,13 +1,16 @@
 """Checks that need no simulation: python -m unittest discover tests"""
 
 import datetime
+import hashlib
 import json
 import math
 import os
 import re
 import shutil
 import socket
+import sys
 import tempfile
+import time
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -15,6 +18,7 @@ from unittest import mock
 
 import netCDF4
 import numpy as np
+import pandas as pd
 
 from mobile.config import (
     Config,
@@ -1200,6 +1204,27 @@ echo 'Program finished successfully'
         self.assertLess(order["a build-end"], order["b build-start"])  # Builds do not overlap
         self.assertLess(order["b build-start"], order["a run-end"])   # The second built while the first ran
 
+    def test_prebuilt_run_needs_no_turn(self):
+        # A model built beforehand runs at once, also while another run builds and holds the lock
+        import time
+
+        _, first, _ = self.start("a", wait=True)
+        time.sleep(0.2)
+        binary = self.config.runs_dir.parent / "mobile.out"
+        binary.write_text("#!/bin/bash\n")
+        result = Runner(self.config, prebuilt=binary).run("p")  # Not RunnerBusy, without waiting
+        first.join(20)
+        order = {event: index for index, event in enumerate(self.events.read_text().split("\n"))}
+        self.assertLess(order["p build-start"], order["a build-end"])  # It started while a held the lock
+        script = (result.run_dir / "run_MOBILE.sh").read_text()
+        self.assertRegex(script, rf"(?m)^\s*prebuilt='{re.escape(str(binary))}'$")
+        manifest = json.loads((result.run_dir / "run.json").read_text())
+        self.assertEqual(manifest["prebuilt"], str(binary))
+        self.assertEqual(manifest["binary_md5"], hashlib.md5(binary.read_bytes()).hexdigest())
+        # Without one, the line keeps its default: the model is built, as by a MoBILE from before -E
+        plain = (self.config.runs_dir / "a" / "run_MOBILE.sh").read_text()
+        self.assertRegex(plain, r"(?m)^\s*prebuilt='NONE'$")
+
     def test_busy_or_cancelled_while_another_builds(self):
         import time
 
@@ -1304,6 +1329,75 @@ echo 'Program finished successfully'
         # Fixed: resuming runs them all
         record = run_study(folder, StudyState(), parallel=4)
         self.assertEqual((record["status"], record["finished"]), ("finished", 32))
+
+    # Builds the model unless given one with -E, and says which, with the name of its run folder
+    BUILDING = """#!/bin/bash
+prebuilt=""
+while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:i:l:M:B:T:C:O:E:" flag; do
+  case $flag in E) [ "$OPTARG" != "NONE" ] && prebuilt=$OPTARG ;; esac
+done
+if [ -n "$prebuilt" ]; then
+  echo "$(basename $PWD) prebuilt $prebuilt" >> $EVENTS
+else
+  echo "$(basename $PWD) build" >> $EVENTS
+  sleep ${FAKE_BUILD:-0.3}
+  mkdir -p output && printf '#!/bin/bash\\n' > output/mobile.out && chmod +x output/mobile.out
+fi
+echo '================= Running MoBILE ================='
+sleep ${FAKE_SLEEP:-0}
+mkdir -p output && touch output/output.nc
+echo 'Program finished successfully'
+"""
+
+    def building(self, **environ):
+        (self.config.mobile / "mobile.sh").write_text(self.BUILDING)
+        events = self.config.runs_dir.parent / "events.txt"
+        events.write_text("")
+        patch = mock.patch.dict(os.environ, {"EVENTS": str(events), **environ})
+        patch.start()
+        self.addCleanup(patch.stop)
+        return events
+
+    def test_model_built_once(self):
+        events = self.building(FAKE_SLEEP="0.3")
+        folder = create_study(self.config, self.parameters, 2, False, [1], name="once", sample_seed=1)  # 8 runs
+        started = time.time()
+        record = run_study(folder, StudyState(), parallel=4)
+        wall = time.time() - started
+        self.assertEqual((record["status"], record["finished"]), ("finished", 8))
+        lines = events.read_text().split()
+        binary = folder / "bin" / "mobile.out"
+        self.assertEqual(events.read_text().count(" build"), 1)
+        self.assertEqual(events.read_text().count(f" prebuilt {binary}"), 7)
+        self.assertEqual(record["binary_md5"], hashlib.md5(binary.read_bytes()).hexdigest())
+        manifest = json.loads((folder / "runs" / run_name(1, 7) / "run.json").read_text())
+        self.assertEqual((manifest["prebuilt"], manifest["binary_md5"]), (str(binary), record["binary_md5"]))
+        # Side by side: 0.3 s to build, then 8 runs of 0.3 s, 4 at a time, take well under 8 × 0.6 s
+        self.assertLess(wall, 3.5, lines)
+        # Resumed, the runs left use the model of the analysis: nothing is built again
+        for index in (2, 5):
+            shutil.rmtree(folder / "runs" / run_name(1, index))
+        events.write_text("")
+        record = run_study(folder, StudyState(), parallel=2)
+        self.assertEqual((record["status"], record["finished"]), ("finished", 8))
+        self.assertEqual(sorted(events.read_text().split("\n"))[1:], [f"{run_name(1, i).split('/')[-1]} prebuilt {binary}" for i in (2, 5)])
+
+    def test_cancelled_while_the_model_is_built(self):
+        import threading
+
+        events = self.building(FAKE_BUILD="2")
+        folder = create_study(self.config, self.parameters, 2, False, [1], name="cancel", sample_seed=1)
+        state = StudyState()
+        outcome = {}
+        worker = threading.Thread(target=lambda: outcome.update(record=run_study(folder, state, parallel=4)))
+        worker.start()
+        time.sleep(0.5)
+        state.cancel()
+        worker.join(10)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(outcome["record"]["status"], "cancelled")
+        # Only the run that built started; those waiting for its model never did
+        self.assertEqual(len(events.read_text().split("\n")) - 1, 1)
 
     def test_cancel_and_resume(self):
         import threading
@@ -2266,6 +2360,341 @@ def fake_run(folder, values, pop, seed=1):
     return folder
 
 
+TOY_MODEL = """
+import sys
+from pathlib import Path
+import netCDF4, numpy as np
+args = dict(zip(sys.argv[1::2], sys.argv[2::2]))
+with netCDF4.Dataset(args["-t"]) as data:
+    t2m = np.ma.filled(data["temperature"][:].astype("f8"), np.nan)
+    time = data["time"]
+    days, units, calendar = time[:], time.units, getattr(time, "calendar", "standard")
+    lat, lon = data["lat"][:], data["lon"][:]
+with netCDF4.Dataset(args["-p"]) as data:
+    pop = np.ma.filled(data["pop"][:].astype("f8"), np.nan)
+inew = np.where(pop > 0, 1e-3 * np.maximum(t2m - 18.0, 0.0), np.nan)
+out = Path(args["-o"])
+out.mkdir(exist_ok=True)
+with netCDF4.Dataset(out / "output.nc", "w") as data:
+    for name, size in (("time", len(days)), ("lat", len(lat)), ("lon", len(lon))):
+        data.createDimension(name, size)
+    variable = data.createVariable("time", "f8", ("time",))
+    variable[:], variable.units, variable.calendar = days, units, calendar
+    data.createVariable("lat", "f8", ("lat",))[:] = lat
+    data.createVariable("lon", "f8", ("lon",))[:] = lon
+    field = data.createGroup("Human").createVariable("Inew", "f4", ("time", "lat", "lon"), fill_value=np.float32(np.nan))
+    field.units, field.long_name = "fraction", "NEW symptomatic population per person"
+    field[:] = inew
+    climate = data.createGroup("Climate").createVariable("t2m", "f4", ("time", "lat", "lon"), fill_value=np.float32(np.nan))
+    climate.units, climate.long_name = "celsius", "temperature"
+    climate[:] = t2m
+print("Program finished successfully")
+"""
+
+
+class TestCalibrationEngine(unittest.TestCase):
+    """A calibration with Optuna, on a toy model: new cases grow with the temperature above 18 °C. Observations made
+    from it at known temperature offsets of two cells must be found again."""
+
+    TRUTH = {"dT_1": 1.0, "dT_2": 0.3}  # West, then east: the east stays warmer (18.8 against 18.0 °C on average)
+    # Builds unless given a model (-E), then runs the toy
+    FAKE = """#!/bin/bash
+prebuilt=""
+while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:i:l:M:B:T:C:O:E:" flag; do
+  case $flag in E) [ "$OPTARG" != "NONE" ] && prebuilt=$OPTARG ;; esac
+done
+if [ -z "$prebuilt" ]; then
+  echo build >> $EVENTS
+  mkdir -p output && printf '#!/bin/bash\\n' > output/mobile.out && chmod +x output/mobile.out
+fi
+echo '================= Running MoBILE ================='
+[ -n "$FAKE_FAIL" ] && { echo ' More agents than people! --> STOP'; exit 0; }
+sleep ${FAKE_SLEEP:-0}
+"$FAKE_PYTHON" "$FAKE_TOY" "$@"
+"""
+
+    def setUp(self):
+        from mobile.config import Config
+
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        root = self.root = Path(folder.name)
+        fake = root / "MoBILE"
+        (fake / "utils").mkdir(parents=True)
+        (fake / "src").mkdir()
+        (fake / "utils" / "run_MOBILE.sh").write_text((Path(MOBILE) / "utils" / "run_MOBILE.sh").read_text())
+        (fake / "src" / "mo_namelist.f90").write_text((Path(MOBILE) / "src" / "mo_namelist.f90").read_text())
+        (fake / "mobile.sh").write_text(self.FAKE)
+        (root / "toy.py").write_text(TOY_MODEL)
+        self.events = root / "events.txt"
+        self.events.write_text("")
+        patch = mock.patch.dict(os.environ, {"EVENTS": str(self.events), "FAKE_PYTHON": sys.executable, "FAKE_TOY": str(root / "toy.py")})
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(root)
+        # Two cells of 0.5°, two years: the west cooler, its seasons half a year from those of the east
+        days = np.arange(np.datetime64("2001-01-01"), np.datetime64("2003-01-01"))
+        doy = np.arange(len(days)) % 365
+        self.t2m = np.stack([17.0 + 3 * np.sin(2 * np.pi * (doy - 100) / 365), 18.5 + 3 * np.sin(2 * np.pi * (doy - 280) / 365)], axis=1)[:, None, :]
+        self.pop = np.array([[2e-4, 3e-4]])
+        self.cells = [{"lat": 8.75, "lon": 38.75}, {"lat": 8.75, "lon": 39.25}]
+        files = {}
+        for key, name, values, units in (("rain_file", "rain", np.full_like(self.t2m, 3.0), "mm/day"), ("temp_file", "temperature", self.t2m, "celsius"),
+                                         ("pop_file", "pop", self.pop, "persons/m2")):
+            path = files[key] = root / f"{name}.nc"
+            with netCDF4.Dataset(path, "w") as data:
+                for axis, centres in (("lat", [8.75]), ("lon", [38.75, 39.25])):
+                    data.createDimension(axis, len(centres))
+                    variable = data.createVariable(axis, "f8", (axis,))
+                    variable[:], variable.bounds = centres, f"{axis}_bnds"
+                    data.createDimension(f"{axis}_nv", 2)
+                    data.createVariable(f"{axis}_bnds", "f8", (axis, f"{axis}_nv"))[:] = [[c - 0.25, c + 0.25] for c in centres]
+                dims = ("lat", "lon")
+                if key != "pop_file":
+                    data.createDimension("time", len(days))
+                    time = data.createVariable("time", "f8", ("time",))
+                    time[:], time.units, time.calendar = np.arange(len(days)), "days since 2001-01-01", "proleptic_gregorian"
+                    dims = ("time", *dims)
+                field = data.createVariable(name, "f4", dims, fill_value=np.float32(1e20))
+                field[:], field.units = values, units
+        example = Config.load(CONFIG)
+        self.config = replace(example, mobile=fake, runs_dir=root / "runs", inputs={**example.inputs, **{k: str(v) for k, v in files.items()}},
+                              run={**example.run, "nstep": 0, "spin_up": 0, "nagent": 100, "threads": 1}, region=None, period=None,
+                              age_structure={"product": "Global2000_2020", "country": "SEN", "year": 2012}, output=("out_I_new",))
+        self.data = root / "cases.nc"
+        self.write_observations(self.TRUTH, self.data)
+
+    def write_observations(self, offsets, path):
+        """Monthly cases per person of the two cells together, people-weighted, computed here from the toy's rule."""
+        from mobile.calibration_data import Observations, write_observations
+        from mobile.calibration_steps import apply_steps
+        from mobile.cells import cell_areas
+
+        shifted = self.t2m + np.array([[offsets["dT_1"], offsets["dT_2"]]])
+        inew = 1e-3 * np.maximum(shifted - 18.0, 0.0)
+        people = self.pop * cell_areas(self.root / "pop.nc")
+        daily = (inew * people).sum(axis=(1, 2)) / people.sum()
+        day = np.arange(np.datetime64("2001-01-01"), np.datetime64("2003-01-01"))
+        observations = Observations(shape="dated", values=daily, index=pd.DataFrame({"start": day, "end": day}), aggregation="sum",
+                                    units="fraction", name="cases")
+        write_observations(apply_steps(observations, self.MONTHLY), path)
+
+    MONTHLY = [{"kind": "aggregate", "period": "month", "how": "sum", "complete": True, "days": 1}]
+
+    def objectives(self):
+        return [{"name": "timing", "data": str(self.data), "variable": "Inew", "steps": self.MONTHLY, "metric": "correlation"},
+                {"name": "swings", "data": str(self.data), "variable": "Inew", "steps": self.MONTHLY, "metric": "rmse_relative"}]
+
+    def temperature(self):
+        return {"cells": self.cells, "first": (-2.0, 2.0), "gap": (0.0, 3.0)}
+
+    def test_offsets_keep_the_order_of_the_cells(self):
+        from mobile.calibration_engine import cell_means, offset_temperature, offsets_from
+
+        means = cell_means(self.root / "temperature.nc", self.cells)
+        np.testing.assert_allclose(means, self.t2m.mean(axis=0).ravel())
+        temperature = {"cells": self.cells, "means": means}
+        for dT_1, gap in ((-2.0, 0.0), (1.5, 0.0), (0.0, 2.5)):
+            offsets = offsets_from(temperature, {"dT_1": dT_1, "gap_2": gap})
+            self.assertAlmostEqual(means[1] + offsets["dT_2"] - (means[0] + offsets["dT_1"]), gap)  # East above west by the gap
+        offsets = {"dT_1": 1.0, "dT_2": -0.5}
+        offset_temperature(self.root / "temperature.nc", self.root / "shifted.nc", self.cells, offsets)
+        with netCDF4.Dataset(self.root / "shifted.nc") as data:
+            np.testing.assert_allclose(data["temperature"][:] - self.t2m, np.broadcast_to([[[1.0, -0.5]]], self.t2m.shape), atol=1e-5)
+
+    def test_truth_gives_a_perfect_match(self):
+        # The plumbing: the toy run at the true offsets, processed as the objectives say, matches the observations
+        from mobile.calibration_engine import evaluate, offset_temperature
+        from mobile.calibration_metrics import DIRECTIONS
+        from mobile.runner import Runner
+
+        offset_temperature(self.root / "temperature.nc", self.root / "true.nc", self.cells, self.TRUTH)
+        result = Runner(replace(self.config, inputs={**self.config.inputs, "temp_file": str(self.root / "true.nc")})).run("truth")
+        self.assertTrue(result.ok, result.log_tail())
+        correlation, relative = evaluate([{**objective, "space": "people", "aggregation": None, "direction": DIRECTIONS[objective["metric"]]}
+                                          for objective in self.objectives()], [result.run_dir])
+        self.assertAlmostEqual(correlation, 1.0, places=5)
+        self.assertLess(relative, 1e-4)
+
+    def test_finds_the_offsets_again(self):
+        from mobile.calibration_engine import best_trials, create_calibration, read_calibration, run_calibration, trials_table
+        from mobile.sensitivity_runs import StudyState
+
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=40, startup_trials=10,
+                                    sampler_seed=1, name="toy")
+        record = run_calibration(folder, StudyState(), parallel=4)
+        self.assertEqual((record["status"], record["completed"], record["failed"]), ("finished", 40, 0))
+        self.assertEqual(self.events.read_text().split(), ["build"])  # Built once, for all the trials
+        self.assertEqual(record["binary_md5"], hashlib.md5((folder / "bin" / "mobile.out").read_bytes()).hexdigest())
+        means = read_calibration(folder)["temperature"]["means"]
+        rows = trials_table(folder)
+        self.assertEqual(len(rows), 40)
+        for row in rows:  # The east stays warmer in every trial
+            self.assertGreaterEqual(means[1] + row["offsets"]["dT_2"], means[0] + row["offsets"]["dT_1"] - 1e-9)
+        best = min(best_trials(folder), key=lambda row: row["values"][1])
+        self.assertLess(best["values"][1], 0.15)
+        for key, value in self.TRUTH.items():
+            self.assertAlmostEqual(best["offsets"][key], value, delta=0.5, msg=(best, rows))
+
+    def test_cancel_resume_and_failures(self):
+        import threading
+
+        from mobile.calibration_engine import counts, create_calibration, open_study, read_calibration, run_calibration
+        from mobile.sensitivity_runs import StudyState
+
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=12, name="resume")
+        state = StudyState()
+        outcome = {}
+        with mock.patch.dict(os.environ, {"FAKE_SLEEP": "0.5"}):
+            worker = threading.Thread(target=lambda: outcome.update(record=run_calibration(folder, state, parallel=2)))
+            worker.start()
+            time.sleep(2.0)
+            state.cancel()
+            worker.join(30)
+        self.assertEqual(outcome["record"]["status"], "cancelled")
+        done = outcome["record"]["completed"]
+        self.assertLess(done, 12)
+        record = run_calibration(folder, StudyState(), parallel=2)  # Resumed: only the trials left
+        self.assertEqual((record["status"], record["completed"]), ("finished", 12))
+        self.assertEqual(counts(open_study(folder, read_calibration(folder))), (12, 0))
+        # Runs that all fail stop the calibration, with the end of a log
+        failing = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=10, name="failing")
+        with mock.patch.dict(os.environ, {"FAKE_FAIL": "1"}):
+            record = run_calibration(failing, StudyState(), parallel=1)
+        self.assertEqual((record["status"], record["completed"], record["failed"]), ("stopped", 0, 3))
+        self.assertIn("More agents than people", record["failure"])
+
+    def test_what_the_tab_shows(self):
+        from mobile.calibration_engine import (best_trials, calibration_label, create_calibration, read_calibration, run_calibration,
+                                               trial_comparison, trials_table)
+        from mobile.calibration_run_ui import offset_cells
+        from mobile.plots import calibration_history_figure
+        from mobile.sensitivity_runs import StudyState
+
+        # The cells to offset, coolest first, with their means; too many for a big grid
+        cells = offset_cells(self.config)
+        self.assertEqual([(c["lat"], c["lon"]) for c in cells], [(8.75, 38.75), (8.75, 39.25)])
+        np.testing.assert_allclose([c["mean"] for c in cells], self.t2m.mean(axis=0).ravel(), rtol=1e-6)
+        with mock.patch("mobile.calibration_run_ui.MAX_CELLS", 1):
+            self.assertIn("at most 1", offset_cells(self.config))
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=6, name="shown")
+        record = run_calibration(folder, StudyState(), parallel=2)
+        self.assertEqual(calibration_label(folder, record), "shown (finished, 6 of 6 trials, 2 objectives)")
+        figure = calibration_history_figure(trials_table(folder), read_calibration(folder)["objectives"])
+        self.assertEqual([len(trace.x) for trace in figure.data], [6, 6, 6, 6])  # Trials and best so far, for each objective
+        # The first trial is the model as it is: no offset, both cells at the temperatures of the file
+        first = trials_table(folder)[0]
+        self.assertTrue(first["baseline"])
+        self.assertAlmostEqual(first["offsets"]["dT_1"], 0.0)
+        self.assertAlmostEqual(first["offsets"]["dT_2"], 0.0, places=6)
+        self.assertEqual(sum(row["baseline"] for row in trials_table(folder)), 1)
+        best = best_trials(folder)[0]
+        model, data, m, d, labels = trial_comparison(folder, best["number"], 0)
+        self.assertEqual((len(labels), labels[0], labels[-1]), (24, "2001-01", "2002-12"))
+        self.assertAlmostEqual(float(np.corrcoef(m, d)[0, 1]), best["values"][0], places=6)  # The plot is what was scored
+
+    def test_results_views(self):
+        from mobile.calibration_engine import create_calibration, run_calibration
+        from mobile.calibration_results import FIGURES, ResultsError, results_figure
+        from mobile.sensitivity_runs import StudyState
+
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=12, name="views")
+        run_calibration(folder, StudyState(), parallel=2)
+        for kind in FIGURES:
+            for index in (0, 1):
+                figure = results_figure(folder, kind, index)
+                self.assertTrue(figure.data, kind)
+                self.assertTrue(figure.layout.title.text.startswith(FIGURES[kind][0]), kind)
+        # The distributions: for each cell, all the trials, the best tenth, and the Pareto front
+        figure = results_figure(folder, "distributions", 1)
+        self.assertEqual([trace.name for trace in figure.data[:3]], ["All trials", "Best 10% by swings", "Pareto front"])
+        self.assertEqual(sum(len(trace.x) for trace in figure.data if trace.name == "All trials"), 24)  # 12 trials × 2 cells
+        # With one objective, no Pareto front to draw; with one cell, no pair of parameters
+        single = create_calibration(self.config, self.objectives()[:1], temperature={**self.temperature(), "cells": self.cells[:1]},
+                                    n_trials=4, name="single")
+        run_calibration(single, StudyState(), parallel=2)
+        for kind, why in (("pareto", "two objectives"), ("contour", "two sampled parameters"), ("rank", "two sampled parameters")):
+            with self.assertRaisesRegex(ResultsError, why):
+                results_figure(single, kind)
+
+    def test_running_interrupted_and_one_at_a_time(self):
+        import signal
+        import subprocess
+        import threading
+
+        from mobile.calibration_engine import (CalibrationError, calibration_label, create_calibration, is_running, read_calibration,
+                                               run_calibration, status_of)
+        from mobile.sensitivity_runs import StudyState
+
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=6, name="locked")
+        self.assertFalse(is_running(folder))
+        outcome = {}
+        with mock.patch.dict(os.environ, {"FAKE_SLEEP": "0.5"}):
+            worker = threading.Thread(target=lambda: outcome.update(record=run_calibration(folder, StudyState(), parallel=2)))
+            worker.start()
+            time.sleep(1.0)
+            self.assertTrue(is_running(folder))
+            self.assertEqual(status_of(folder, read_calibration(folder)), "running")
+            with self.assertRaisesRegex(CalibrationError, "running already"):  # Not twice at once
+                run_calibration(folder, StudyState())
+            worker.join(60)
+        self.assertEqual(outcome["record"]["status"], "finished")
+        self.assertFalse(is_running(folder))
+        # Run by another process that is killed (a GUI closed or crashed): recorded as running, but nothing runs it
+        killed = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=20, name="killed")
+        code = ("import sys; sys.path[:0] = [sys.argv[1]]; from mobile.calibration_engine import run_calibration; "
+                "from mobile.sensitivity_runs import StudyState; run_calibration(sys.argv[2], StudyState(), parallel=2)")
+        other = subprocess.Popen([sys.executable, "-c", code, str(Path(MOBILE) / "python"), str(killed)], start_new_session=True,
+                                 env={**os.environ, "FAKE_SLEEP": "0.5"}, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for _ in range(100):  # Until it holds the lock and has recorded that it runs
+            if is_running(killed) and read_calibration(killed)["status"] == "running":
+                break
+            time.sleep(0.1)
+        self.assertTrue(is_running(killed))
+        os.killpg(other.pid, signal.SIGKILL)
+        other.wait()
+        record = read_calibration(killed)
+        self.assertEqual((record["status"], status_of(killed, record)), ("running", "interrupted"))
+        self.assertIn("(interrupted,", calibration_label(killed, record))
+        self.assertEqual(run_calibration(killed, StudyState(), parallel=2)["status"], "finished")  # And it goes on
+
+    def test_earlier_versions_are_not_resumed(self):
+        from mobile.calibration_engine import (CalibrationError, calibration_label, create_calibration, read_calibration, run_calibration,
+                                               write_calibration)
+        from mobile.sensitivity_runs import StudyState
+
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=2, name="old")
+        record = read_calibration(folder)
+        self.assertNotIn("earlier version", calibration_label(folder, record))
+        del record["version"]  # As made before versions
+        write_calibration(folder, record)
+        self.assertIn("earlier version: cannot be resumed", calibration_label(folder, record))
+        with self.assertRaisesRegex(CalibrationError, "earlier version"):
+            run_calibration(folder, StudyState())
+        self.assertFalse((folder / "trials").exists())  # Nothing was run
+
+    def test_no_start_trial_outside_the_ranges(self):
+        from mobile.calibration_engine import baseline
+
+        temperature = {"cells": self.cells, "means": [17.0, 19.0], "first": (-3.0, 3.0), "gap": (0.0, 5.0)}
+        self.assertEqual(baseline(temperature), {"dT_1": 0.0, "gap_2": 2.0})
+        self.assertIsNone(baseline({**temperature, "first": (0.5, 3.0)}))  # dT_1 = 0 is not allowed
+        self.assertIsNone(baseline({**temperature, "gap": (0.0, 1.0)}))   # Their own difference is not allowed
+
+    def test_refused(self):
+        from mobile.calibration_engine import CalibrationError, create_calibration
+
+        with self.assertRaisesRegex(CalibrationError, "at least one parameter"):
+            create_calibration(self.config, self.objectives())
+        with self.assertRaisesRegex(CalibrationError, "unknown metric"):
+            create_calibration(self.config, [{**self.objectives()[0], "metric": "nse"}], temperature=self.temperature())
+        with self.assertRaisesRegex(CalibrationError, "no cell"):
+            create_calibration(self.config, self.objectives(), temperature={**self.temperature(), "cells": [{"lat": 0.0, "lon": 0.0}]},
+                               name="nowhere")
+        self.assertFalse((self.root / "runs" / "calibration" / "nowhere").exists())
+
+
 class TestCalibrationModel(unittest.TestCase):
     """The model side of a calibration, and the metrics that compare it with the observations."""
 
@@ -2360,6 +2789,35 @@ class TestCalibrationModel(unittest.TestCase):
             self.assertEqual(list(run_elsewhere(run)), [str(run.resolve())])
         finally:
             locked.chmod(0o755)
+
+    def test_vector_densities_on_a_twin_axis(self):
+        from mobile.calibration_data import DataError
+        from mobile.calibration_model import driver_panel, model_series
+        from mobile.calibration_steps import apply_steps
+        from mobile.plots import comparison_figure
+        days = 59
+        run = fake_run(self.folder / "runs" / "one", np.full((days, 2, 2), 0.01), np.array([[1.0, 2.0], [3.0, 4.0]]))
+        with self.assertRaisesRegex(DataError, "no daily output 'V'.*tick Vector density and Infective vector density"):
+            driver_panel(run, "vectors")
+        with netCDF4.Dataset(run / "output" / "output.nc", "a") as data:
+            vector = data.createGroup("Vector")
+            for name, value in (("V", 2.0), ("Vinf", 0.004)):  # Infective vectors, far fewer
+                field = vector.createVariable(name, "f4", ("time", "lat", "lon"), fill_value=np.float32(np.nan))
+                field.units, field.long_name = "m^-2", name
+                field[:] = np.full((days, 2, 2), value)
+        panel = driver_panel(run, "vectors", "month", "mean")
+        self.assertEqual([label for label, _ in panel], ["Vector density", "Infective vector density"])
+        np.testing.assert_allclose([series.values[0] for _, series in panel], [2.0, 0.004], rtol=1e-6)
+        monthly = [{"kind": "aggregate", "period": "month", "how": "sum", "complete": True, "days": 1}]
+        model = apply_steps(model_series(run, "Inew"), monthly)
+        figure = comparison_figure(model, model, [model.label(i) for i in range(len(model))], model.values, model.values,
+                                   drivers=[("t2m", "Temperature", driver_panel(run, "t2m", "month", "mean")), ("vectors", "Vector densities", panel)])
+        axes = {trace.name: trace.yaxis for trace in figure.data}
+        self.assertEqual(len({axes["Vector density"], axes["Infective vector density"], axes["Temperature"]}), 3)  # Its own scale
+        right = figure.layout[axes["Infective vector density"].replace("y", "yaxis")]
+        self.assertEqual(right.side, "right")
+        # The panels zoom together: the time axes of the upper ones follow that of the bottom one
+        self.assertEqual((figure.layout.xaxis.matches, figure.layout.xaxis2.matches, figure.layout.xaxis3.matches), ("x3", "x3", None))
 
     def test_metrics(self):
         import pandas as pd

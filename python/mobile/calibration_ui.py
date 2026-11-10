@@ -2,7 +2,7 @@
 observations (the standard netCDF file, or a table to import); the Model box takes an output of a finished run, reduced
 over the cells of its region. Each is processed by a pipeline of steps the user builds (calibration_steps.py), and the
 comparison pairs the two on the periods they share and gives the metrics (calibration_metrics.py). The objectives and
-the calibration with Optuna come next (see calibration-plan)."""
+the calibration with Optuna are in the card below them (calibration_run_ui.py)."""
 
 import datetime
 import itertools
@@ -15,17 +15,19 @@ import pandas as pd
 from shiny import reactive, render, ui
 
 from .calibration_data import AGGREGATIONS, PERIODS, SEASONS, SHAPES, DataError, import_table, read_observations, read_table, write_observations
-from .calibration_metrics import METRICS, metrics, pair
+from .calibration_metrics import DIRECTIONS, METRICS, metrics, pair
 from .calibration_model import (
-    DRIVER_PERIODS, DRIVERS, SEED_MEAN, SPACES, chosen_seeds, default_aggregation, driver_series, members_mean, model_members, run_choices,
+    DRIVERS, SEED_MEAN, SPACES, chosen_seeds, default_aggregation, driver_panel, members_mean, model_members, run_choices,
     run_elsewhere, run_seeds, run_variables, seed_spread,
 )
+from .calibration_run_ui import calibration_run_card, driver_controls, paired_span
 from .calibration_steps import (
     AGGREGATE_PERIODS, COMBINATIONS, FILTER_MISSING, FILTERS, OPERATIONS, SELECTIONS, STATISTICS, STEP_KINDS, TIME_UNITS, TRANSFORMS, apply_steps,
-    default_step,
+    default_step, describe,
 )
 from .layout import OPTUNA_URL, with_tip
 from .plots import comparison_figure, message_figure, observations_figure, send_figure
+from .results import read_run
 from .setup import typed_path
 
 NONE = "__none__"  # Menu entry for "no column"
@@ -36,6 +38,7 @@ MONTH_NAMES = {str(m): datetime.date(2000, m, 1).strftime("%b") for m in range(1
 # The selections that apply to each shape of observations
 SELECTIONS_OF_SHAPE = {"dated": ("window", "months", "years"), "yearly": ("window", "years"), "climatology": ("months",),
                        "season": ("seasons",), "age": ("bands",), "single": ()}
+OBJECTIVE_REMOVE = "Shiny.setInputValue('cal_objective_remove', {{index: {index}, at: Date.now()}}, {{priority: 'event'}})"
 STEP_ACTION = ("Shiny.setInputValue('{prefix}_step_action', {{uid: '{uid}', action: '{action}', at: Date.now()}}, "
                "{{priority: 'event'}})")
 DATA, MODEL = "cal_data", "cal_model"  # The prefixes of the ids of the two boxes
@@ -47,12 +50,41 @@ def calibration_tab():
         ui.p("Calibration compares the model with observations: the Model box takes an output of a finished run and the "
              "Data box loads observations, each processed by steps you choose, and the comparison below pairs them on the "
              "periods they share and gives the metrics. Several such objectives are then optimised together with ",
-             ui.a("Optuna", href=OPTUNA_URL, target="_blank"), ". This tab is in development: the objectives and Optuna come next.",
-             class_="text-muted"),
+             ui.a("Optuna", href=OPTUNA_URL, target="_blank"), ". Add each comparison you want to fit as an objective, then run the "
+             "calibration in the last card. This tab is in development: the results views (Optuna's figures, the distributions of "
+             "the parameters) come next.", class_="text-muted"),
+        _how_to_calibrate(),
         ui.layout_columns(_model_box(), _data_box(), col_widths=(6, 6)),
         _comparison_card(),
+        calibration_run_card(),
         class_="mt-3",
     )
+
+
+def _how_to_calibrate():
+    """The steps of a calibration, in the order of the tab."""
+    steps = [
+        ui.TagList(ui.tags.strong("Apply the setup"), " in tab 1: the driving files, region and period. The calibration runs "
+                   "the model with it, the HA and seed of the sidebar, and the parameters of the sliders."),
+        ui.TagList(ui.tags.strong("Run the model once"), " from the sidebar, with the output you want to compare ticked in the "
+                   "Outputs card (e.g. New symptomatic cases). Any finished run with that output will do, also an earlier one or one "
+                   "from another folder: it is only used to build the objectives and check them, and its outputs say which "
+                   "outputs the runs of the calibration must write."),
+        ui.TagList(ui.tags.strong("Model box"), ": choose that run and the output, and add the steps that make it comparable "
+                   "(e.g. select 1990 to 2004, then sum by month)."),
+        ui.TagList(ui.tags.strong("Data box"), ": load the observations, and process them likewise."),
+        ui.TagList(ui.tags.strong("Model and data"), ": check the comparison and its metrics, then name it, choose a metric and "
+                   "press ", ui.tags.em("Add as objective"), ". Repeat for each objective, e.g. with a climatology step in both "
+                   "boxes for the season."),
+        ui.TagList(ui.tags.strong("Calibration with Optuna"), ": tick the cells whose temperature to offset and set the ranges, "
+                   "choose the sampler, the trials, the seeds per trial and the runs at the same time, then press ",
+                   ui.tags.em("Run calibration"), "."),
+        ui.TagList(ui.tags.strong("Follow it"), " below the card: the objectives trial by trial, the Pareto front and a trial "
+                   "against the data. Cancel stops it; Resume, under Calibrations, goes on later. Everything is kept in "
+                   "calibration/<name>/ in the results folder."),
+    ]
+    return ui.div(ui.h6("How to calibrate"), ui.tags.ol(*[ui.tags.li(step) for step in steps], class_="mb-0"),
+                  class_="small border rounded p-2 mb-3")
 
 
 def _model_box():
@@ -105,28 +137,31 @@ def _comparison_card():
                         "their timing by eye when their levels differ, e.g. because only part of the cases are reported. The "
                         "metrics are not changed."), value=False),
         ui.div(
-            ui.tags.strong(with_tip("Possible drivers", "Rainfall and temperature as the model read them (the mean over the "
-                                    "simulated cells of the run in the Model box), each processed on its own and drawn below, "
-                                    "within the periods the model and the data share."), class_="small"),
-            *[_driver_controls(name) for name in DRIVERS],
+            ui.tags.strong(with_tip("Possible drivers", "Rainfall and temperature as the model read them, and the vector densities "
+                                    "it gave (each the mean over the simulated cells of the run in the Model box), each processed on its "
+                                    "own and drawn below, within the periods the model and the data share. The infective vector density, "
+                                    "much lower, has its own scale at the right. All the panels zoom together."), class_="small"),
+            *[driver_controls(name) for name in DRIVERS],
             class_="border rounded p-2 mb-2",
         ),
         ui.output_ui("cal_drivers_problem"),
         ui.div(id="cal_comparison_plot", style="min-height: 380px;"),
         ui.output_ui("cal_comparison"),
+        ui.div(
+            ui.tags.strong(with_tip("Add as objective", "This comparison, as it is, becomes an objective of the calibration below: "
+                                    "the observations as processed in the Data box, and the output, cells and steps of the Model box, "
+                                    "applied to every run of the calibration, compared with the metric chosen here."), class_="small"),
+            ui.layout_columns(
+                ui.input_text("cal_objective_name", "Name", placeholder="e.g. timing", width="100%"),
+                ui.input_select("cal_objective_metric", "Metric", {key: text.split(":")[0] for key, text in METRICS.items()},
+                                selected="correlation", width="100%"),
+                ui.div(ui.input_action_button("cal_add_objective", "Add as objective", class_="btn-sm btn-primary"), class_="pt-4"),
+                col_widths=(5, 4, 3), fill=False,
+            ),
+            ui.output_ui("cal_objective_problem"),
+            class_="border-top pt-2 mt-2",
+        ),
         class_="mt-3",
-    )
-
-
-def _driver_controls(name):
-    """A row of choices for one driver: show it, into which periods, by which statistic, and as a climatology."""
-    label, how = DRIVERS[name]
-    return ui.layout_columns(
-        ui.input_switch(f"cal_driver_{name}", label, value=False),
-        ui.input_select(f"cal_driver_{name}_period", None, DRIVER_PERIODS, selected="month"),
-        ui.input_select(f"cal_driver_{name}_how", None, {key: STATISTICS[key] for key in ("sum", "mean", "min", "max")}, selected=how),
-        ui.input_switch(f"cal_driver_{name}_climatology", "Climatology by month", value=False),
-        col_widths=(3, 3, 3, 3), fill=False, class_="align-items-center",
     )
 
 
@@ -774,24 +809,12 @@ def calibration_server(input, output, session, setup):
         seeds = run_seeds(folder)
         return ui.div(
             ui.input_select(f"{MODEL}_variable", "Output", grouped, selected=name, width="100%"),
-            ui.layout_columns(
-                ui.input_select(f"{MODEL}_space", with_tip("Over the cells", "How the cells of the run are put together: for "
-                                "per-person outputs, the mean weighted by the people of each cell gives the value per person of "
-                                "the whole region. A run on a single point has one cell."), SPACES, width="100%"),
-                ui.input_radio_buttons(f"{MODEL}_aggregation", with_tip("How it aggregates", "Sum for amounts per day (new cases, "
-                                       "bites): summed by month they give the amount per month. Mean for states (prevalence)."),
-                                       AGGREGATIONS, selected=default_aggregation(name, outputs[name])),
-                col_widths=(7, 5), fill=False),
+            ui.input_select(f"{MODEL}_space", with_tip("Over the cells (each day)", "How the cells of the run are put together, "
+                            "day by day, before the steps: for per-person outputs, the mean weighted by the people of each cell gives "
+                            "the value per person of the whole region. A run on a single point has one cell. Over time, the steps "
+                            "below decide, e.g. a sum by month."), SPACES, width="100%"),
             ui.input_select(f"{MODEL}_seed", "Seed", {SEED_MEAN: "All seeds: median and range", **{str(s): f"Seed {s}" for s in seeds}}) if seeds else None,
         )
-
-    @reactive.effect
-    @reactive.event(input[f"{MODEL}_variable"])
-    def model_variable_changed():
-        _, outputs = model_outputs()
-        name = input[f"{MODEL}_variable"]()
-        if name in outputs:
-            ui.update_radio_buttons(f"{MODEL}_aggregation", selected=default_aggregation(name, outputs[name]))
 
     @reactive.calc
     def model_members_or_error():
@@ -802,7 +825,7 @@ def calibration_server(input, output, session, setup):
             return [], None
         seed = input[f"{MODEL}_seed"]() if f"{MODEL}_seed" in input else None
         try:
-            return model_members(folder, input[id](), input[f"{MODEL}_space"](), seed, input[f"{MODEL}_aggregation"]()), None
+            return model_members(folder, input[id](), input[f"{MODEL}_space"](), seed), None
         except (DataError, OSError, KeyError, ValueError) as error:
             return [], str(error)
 
@@ -822,7 +845,17 @@ def calibration_server(input, output, session, setup):
     model = pipeline(MODEL, lambda: model_raw_or_error()[0], dict, model_name, lambda: model_members_or_error()[0])
 
     def draw_model_status():
-        return status(*model.processed(), model_name()[0])
+        shown = status(*model.processed(), model_name()[0])
+        _, outputs = model_outputs()
+        name = input[f"{MODEL}_variable"]() if f"{MODEL}_variable" in input else None
+        averaged = [step for step in model.live() if step["kind"] == "aggregate" and step["how"] != "sum"]
+        if name in outputs and default_aggregation(name, outputs[name]) == "sum" and averaged:
+            # An amount per day averaged over periods is the average per day, not the amount per period
+            note = ui.p(f"{name} is an amount per day (e.g. new cases per person per day): the {averaged[0]['how']} by "
+                        f"{averaged[0]['period']} gives an average per day. Sum it to get the amount per {averaged[0]['period']}, "
+                        "as in cases per month.", class_="small mb-1", style="color: #d97706;")
+            return ui.TagList(shown, note)
+        return shown
 
     draw_model_status.__name__ = f"{MODEL}_status"
     render.ui(draw_model_status)
@@ -844,25 +877,22 @@ def calibration_server(input, output, session, setup):
 
     @reactive.calc
     def drivers():
-        """([(name, label, observations)] of the drivers shown, and what is wrong with any of them)."""
+        """([(name, label, [(label, observations)])] of the drivers shown (two series for the vector densities), and what is
+        wrong with any of them)."""
         result = paired()
         folder = model_outputs()[0]
         if isinstance(result, str) or folder is None:
             return [], None
         _, data_values, _, _, labels, _ = result
-        first = last = None
-        if data_values.shape == "dated":
-            rows = [i for i in range(len(data_values)) if data_values.label(i) in set(labels)]
-            first = str(pd.Timestamp(data_values.index["start"].iloc[rows[0]]).date())
-            last = str(pd.Timestamp(data_values.index["end"].iloc[rows[-1]]).date())
+        first, last = paired_span(data_values, labels)
         seed = input[f"{MODEL}_seed"]() if f"{MODEL}_seed" in input else None
         shown, problems = [], []
         for name, (label, _) in DRIVERS.items():
             if not input[f"cal_driver_{name}"]():
                 continue
             try:
-                shown.append((name, label, driver_series(folder, name, input[f"cal_driver_{name}_period"](), input[f"cal_driver_{name}_how"](),
-                                                         input[f"cal_driver_{name}_climatology"](), first, last, seed)))
+                shown.append((name, label, driver_panel(folder, name, input[f"cal_driver_{name}_period"](), input[f"cal_driver_{name}_how"](),
+                                                        input[f"cal_driver_{name}_climatology"](), first, last, seed)))
             except (DataError, OSError, KeyError) as error:
                 problems.append(f"{label}: {error}")
         return shown, "; ".join(problems) or None
@@ -882,6 +912,74 @@ def calibration_server(input, output, session, setup):
         await send_figure(session, "cal_comparison_plot", comparison_figure(model_values, data_values, labels, m, d, input.cal_scale_model(),
                                                                             drivers()[0]))
 
+    # ---------------------------------------------------------------- objectives
+
+    objectives = reactive.value([])  # [{name, data, variable, space, aggregation, steps, metric, direction, output}]
+    objective_problem = reactive.value(None)
+
+    @reactive.effect
+    @reactive.event(input.cal_add_objective)
+    def add_objective():
+        result = paired()
+        if isinstance(result, str):
+            objective_problem.set(result)
+            return
+        name = input.cal_objective_name().strip() or f"objective_{len(objectives()) + 1}"
+        if not NAME.match(name):
+            objective_problem.set("Names use letters, digits, '.', '_' and '-' only (no spaces).")
+            return
+        if name in {objective["name"] for objective in objectives()}:
+            objective_problem.set(f"There is an objective named {name} already.")
+            return
+        _, data_values, _, _, _, _ = result
+        folder = model_outputs()[0]
+        manifest = read_run(folder) or {}
+        # The observations as processed now, kept with the calibrations of the results folder
+        target = Path(setup().runs_dir).joinpath(*DATA_FOLDER) / f"objective_{name}_{datetime.datetime.now():%Y%m%d-%H%M%S}.nc"
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            write_observations(data_values, target)
+        except OSError as error:
+            objective_problem.set(f"Not added: the observations cannot be saved ({error}).")
+            return
+        metric = input.cal_objective_metric()
+        # The steps as the cards show them now, as for the comparison: not as they were when added
+        steps = [without_uid(step) for step in model.live()]
+        objectives.set([*objectives(), {
+            "name": name, "data": str(target), "variable": input[f"{MODEL}_variable"](), "space": input[f"{MODEL}_space"](),
+            "aggregation": None, "steps": steps, "metric": metric, "direction": DIRECTIONS[metric], "output": manifest.get("output"),
+            "describe": f"{data_values.name} ({len(data_values)} values, {SHAPES[data_values.shape].split(':')[0].lower()}) against "
+                        f"{input[f'{MODEL}_variable']()}, {SPACES[input[f'{MODEL}_space']()].lower()}, then "
+                        f"{'; '.join(describe(step) for step in steps) or 'no step'}",
+        }])
+        objective_problem.set(None)
+        ui.update_text("cal_objective_name", value="")
+
+    @reactive.effect
+    @reactive.event(input.cal_objective_remove)
+    def remove_objective():
+        index = int(input.cal_objective_remove()["index"])
+        objectives.set([objective for i, objective in enumerate(objectives()) if i != index])
+
+    @render.ui
+    def cal_objective_problem():
+        return ui.p(objective_problem(), class_="small text-danger mb-0") if objective_problem() else None
+
+    @render.ui
+    def cal_objectives():
+        found = objectives()
+        if not found:
+            return ui.p("No objective yet: compare the model and the data above, then press Add as objective. Add several, e.g. the "
+                        "monthly series with the correlation (timing) and their climatology with the relative RMSE (season).",
+                        class_="small text-muted")
+        rows = [ui.tags.tr(
+            ui.tags.td(objective["name"]),
+            ui.tags.td(METRICS[objective["metric"]].split(":")[0], f" ({'higher' if objective['direction'] == 'maximize' else 'lower'} is better)"),
+            ui.tags.td(objective["describe"], class_="text-muted"),
+            ui.tags.td(ui.tags.button("Remove", class_="btn btn-sm btn-outline-secondary py-0", onclick=OBJECTIVE_REMOVE.format(index=i))),
+        ) for i, objective in enumerate(found)]
+        return ui.tags.table(ui.tags.tbody(*rows), class_="table table-sm small mb-1")
+
     @render.ui
     def cal_comparison():
         result = paired()
@@ -899,3 +997,5 @@ def calibration_server(input, output, session, setup):
             units,
             metrics_table(values, model_values, data_values),
         )
+
+    return SimpleNamespace(objectives=objectives)
