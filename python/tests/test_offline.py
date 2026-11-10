@@ -2565,6 +2565,58 @@ sleep ${FAKE_SLEEP:-0}
         self.assertEqual((record["status"], record["completed"], record["failed"]), ("stopped", 0, 3))
         self.assertIn("More agents than people", record["failure"])
 
+    def test_what_the_tab_shows(self):
+        from mobile.calibration_engine import (best_trials, calibration_label, create_calibration, read_calibration, run_calibration,
+                                               trial_comparison, trials_table)
+        from mobile.calibration_run_ui import offset_cells
+        from mobile.plots import calibration_history_figure
+        from mobile.sensitivity_runs import StudyState
+
+        # The cells to offset, coolest first, with their means; too many for a big grid
+        cells = offset_cells(self.config)
+        self.assertEqual([(c["lat"], c["lon"]) for c in cells], [(8.75, 38.75), (8.75, 39.25)])
+        np.testing.assert_allclose([c["mean"] for c in cells], self.t2m.mean(axis=0).ravel(), rtol=1e-6)
+        with mock.patch("mobile.calibration_run_ui.MAX_CELLS", 1):
+            self.assertIn("at most 1", offset_cells(self.config))
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=6, name="shown")
+        record = run_calibration(folder, StudyState(), parallel=2)
+        self.assertEqual(calibration_label(folder, record), "shown (finished, 6 of 6 trials, 2 objectives)")
+        figure = calibration_history_figure(trials_table(folder), read_calibration(folder)["objectives"])
+        self.assertEqual([len(trace.x) for trace in figure.data], [6, 6, 6, 6])  # Trials and best so far, for each objective
+        # The first trial is the model as it is: no offset, both cells at the temperatures of the file
+        first = trials_table(folder)[0]
+        self.assertTrue(first["baseline"])
+        self.assertAlmostEqual(first["offsets"]["dT_1"], 0.0)
+        self.assertAlmostEqual(first["offsets"]["dT_2"], 0.0, places=6)
+        self.assertEqual(sum(row["baseline"] for row in trials_table(folder)), 1)
+        best = best_trials(folder)[0]
+        model, data, m, d, labels = trial_comparison(folder, best["number"], 0)
+        self.assertEqual((len(labels), labels[0], labels[-1]), (24, "2001-01", "2002-12"))
+        self.assertAlmostEqual(float(np.corrcoef(m, d)[0, 1]), best["values"][0], places=6)  # The plot is what was scored
+
+    def test_earlier_versions_are_not_resumed(self):
+        from mobile.calibration_engine import (CalibrationError, calibration_label, create_calibration, read_calibration, run_calibration,
+                                               write_calibration)
+        from mobile.sensitivity_runs import StudyState
+
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=2, name="old")
+        record = read_calibration(folder)
+        self.assertNotIn("earlier version", calibration_label(folder, record))
+        del record["version"]  # As made before versions
+        write_calibration(folder, record)
+        self.assertIn("earlier version: cannot be resumed", calibration_label(folder, record))
+        with self.assertRaisesRegex(CalibrationError, "earlier version"):
+            run_calibration(folder, StudyState())
+        self.assertFalse((folder / "trials").exists())  # Nothing was run
+
+    def test_no_start_trial_outside_the_ranges(self):
+        from mobile.calibration_engine import baseline
+
+        temperature = {"cells": self.cells, "means": [17.0, 19.0], "first": (-3.0, 3.0), "gap": (0.0, 5.0)}
+        self.assertEqual(baseline(temperature), {"dT_1": 0.0, "gap_2": 2.0})
+        self.assertIsNone(baseline({**temperature, "first": (0.5, 3.0)}))  # dT_1 = 0 is not allowed
+        self.assertIsNone(baseline({**temperature, "gap": (0.0, 1.0)}))   # Their own difference is not allowed
+
     def test_refused(self):
         from mobile.calibration_engine import CalibrationError, create_calibration
 
@@ -2672,6 +2724,35 @@ class TestCalibrationModel(unittest.TestCase):
             self.assertEqual(list(run_elsewhere(run)), [str(run.resolve())])
         finally:
             locked.chmod(0o755)
+
+    def test_vector_densities_on_a_twin_axis(self):
+        from mobile.calibration_data import DataError
+        from mobile.calibration_model import driver_panel, model_series
+        from mobile.calibration_steps import apply_steps
+        from mobile.plots import comparison_figure
+        days = 59
+        run = fake_run(self.folder / "runs" / "one", np.full((days, 2, 2), 0.01), np.array([[1.0, 2.0], [3.0, 4.0]]))
+        with self.assertRaisesRegex(DataError, "no daily output 'V'.*tick Vector density and Infective vector density"):
+            driver_panel(run, "vectors")
+        with netCDF4.Dataset(run / "output" / "output.nc", "a") as data:
+            vector = data.createGroup("Vector")
+            for name, value in (("V", 2.0), ("Vinf", 0.004)):  # Infective vectors, far fewer
+                field = vector.createVariable(name, "f4", ("time", "lat", "lon"), fill_value=np.float32(np.nan))
+                field.units, field.long_name = "m^-2", name
+                field[:] = np.full((days, 2, 2), value)
+        panel = driver_panel(run, "vectors", "month", "mean")
+        self.assertEqual([label for label, _ in panel], ["Vector density", "Infective vector density"])
+        np.testing.assert_allclose([series.values[0] for _, series in panel], [2.0, 0.004], rtol=1e-6)
+        monthly = [{"kind": "aggregate", "period": "month", "how": "sum", "complete": True, "days": 1}]
+        model = apply_steps(model_series(run, "Inew"), monthly)
+        figure = comparison_figure(model, model, [model.label(i) for i in range(len(model))], model.values, model.values,
+                                   drivers=[("t2m", "Temperature", driver_panel(run, "t2m", "month", "mean")), ("vectors", "Vector densities", panel)])
+        axes = {trace.name: trace.yaxis for trace in figure.data}
+        self.assertEqual(len({axes["Vector density"], axes["Infective vector density"], axes["Temperature"]}), 3)  # Its own scale
+        right = figure.layout[axes["Infective vector density"].replace("y", "yaxis")]
+        self.assertEqual(right.side, "right")
+        # The panels zoom together: the time axes of the upper ones follow that of the bottom one
+        self.assertEqual((figure.layout.xaxis.matches, figure.layout.xaxis2.matches, figure.layout.xaxis3.matches), ("x3", "x3", None))
 
     def test_metrics(self):
         import pandas as pd

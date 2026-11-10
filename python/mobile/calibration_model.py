@@ -175,7 +175,11 @@ def seed_spread(members, steps, others=None, first_note=None):
 
 
 # Possible drivers of incidence, read from the same run: {name: (label, default statistic)}
-DRIVERS = {"rain": ("Rainfall", "sum"), "t2m": ("Temperature", "mean")}
+DRIVERS = {"rain": ("Rainfall", "sum"), "t2m": ("Temperature", "mean"), "vectors": ("Vector densities", "mean")}
+# The outputs each driver draws, with their labels: vector density on the left axis, infective vectors on a twin right one
+DRIVER_VARIABLES = {"rain": {"rain": "Rainfall"}, "t2m": {"t2m": "Temperature"},
+                    "vectors": {"V": "Vector density", "Vinf": "Infective vector density"}}
+DRIVER_OUTPUTS = {"vectors": "tick Vector density and Infective vector density in the Outputs card, and run again"}
 DRIVER_PERIODS = {"as_is": "As they are (days)", "week": "Week", "month": "Month", "season": "Season", "year": "Year"}
 
 
@@ -184,7 +188,7 @@ def driver_series(folder, name, period="month", how=None, by_month=False, first=
     its own: within first and last (dates), into periods by a statistic, and optionally a climatology by month."""
     from .calibration_steps import apply_steps  # Not at the top: calibration_steps imports calibration_data only
 
-    how = how or DRIVERS[name][1]
+    how = how or DRIVERS.get(name, (None, "mean"))[1]
     raw = model_series(folder, name, "mean", seed, aggregation="sum" if how == "sum" else "mean")
     steps = []
     if first is not None or last is not None:
@@ -199,3 +203,15 @@ def driver_series(folder, name, period="month", how=None, by_month=False, first=
         result = replace(result, units=f"{result.units.replace(' ', '')[:-len('/day')]} per {period}")
     return result
 
+
+def driver_panel(folder, name, period="month", how=None, by_month=False, first=None, last=None, seed=None):
+    """[(label, observations)] of the outputs a driver draws in its panel (two for the vector densities), each processed as
+    driver_series does. Raises DataError saying which output to write if the run lacks one."""
+    panel = []
+    for variable, label in DRIVER_VARIABLES[name].items():
+        try:
+            panel.append((label, driver_series(folder, variable, period, how or DRIVERS[name][1], by_month, first, last, seed)))
+        except DataError as error:
+            hint = DRIVER_OUTPUTS.get(name)
+            raise DataError(f"{error}{f': {hint}' if hint else ''}") from None
+    return panel

@@ -29,6 +29,7 @@ from .checks import driving_days, driving_problems
 from .period import length_text, parse_day, period_days, spin_up_problem
 from .region import region_problems
 from .results import list_runs
+from .calibration_run_ui import calibration_run_server
 from .calibration_ui import calibration_server, calibration_tab
 from .sensitivity_ui import sensitivity_card, sensitivity_server
 from .scripts import (
@@ -250,7 +251,8 @@ def create_app(config):
             return extent_key(grid()["lon"], grid()["lat"])
 
         analysis = sensitivity_server(
-            input, output, session, setup, slider_setup, overrides, selected_output, lambda: run_task.status() == "running",
+            input, output, session, setup, slider_setup, overrides, selected_output,
+            lambda: run_task.status() == "running" or calibrating.running(),  # calibrating is defined further down
             lambda: agents(), lambda: input.ha(),  # agents is defined further down
         )
 
@@ -340,8 +342,8 @@ def create_app(config):
             if input.ha() < 1:
                 ui.notification_show(HA_BELOW_ONE, type="error")
                 return
-            if analysis.running():
-                ui.notification_show("A sensitivity analysis is running: wait for it, or cancel it, before a single run.", type="warning")
+            if analysis.running() or calibrating.running():
+                ui.notification_show("An analysis or calibration is running: wait for it, or cancel it, before a single run.", type="warning")
                 return
             try:
                 run_config = replace(setup(), params={**setup().params, **overrides()}, output=selected_output()).with_run(nagent=nagent, seed=seed)
@@ -372,8 +374,9 @@ def create_app(config):
                 state.runner.cancel()
 
         async def close_app():
-            """Stop any run or analysis, tell the browser, then stop the server as Ctrl+C does."""
+            """Stop any run, analysis or calibration, tell the browser, then stop the server as Ctrl+C does."""
             analysis.cancel()
+            calibrating.cancel()
             state.update(cancelled=True)
             if state.runner is not None:
                 state.runner.cancel()
@@ -383,12 +386,13 @@ def create_app(config):
         @reactive.effect
         @reactive.event(input.close)
         async def ask_to_close():
-            if run_task.status() != "running" and not analysis.running():
+            if run_task.status() != "running" and not analysis.running() and not calibrating.running():
                 await close_app()
                 return
             ui.modal_show(
                 ui.modal(
-                    "A run or sensitivity analysis is in progress. Closing the GUI will cancel it; an analysis can be resumed later.",
+                    "A run, sensitivity analysis or calibration is in progress. Closing the GUI will cancel it; an analysis or a "
+                    "calibration can be resumed later.",
                     title="Close the GUI?",
                     footer=ui.TagList(ui.modal_button("Keep running"), ui.input_action_button("close_confirmed", "Cancel run and close")),
                 )
@@ -537,8 +541,9 @@ def create_app(config):
         @reactive.effect
         @reactive.event(input.apply_setup)
         def apply_setup():
-            if run_task.status() == "running" or analysis.running():
-                ui.notification_show("Wait for the run or analysis to finish, or cancel it, before changing the setup.", type="warning")
+            if run_task.status() == "running" or analysis.running() or calibrating.running():
+                ui.notification_show("Wait for the run, analysis or calibration to finish, or cancel it, before changing the setup.",
+                                     type="warning")
                 return
             typed = typed_days()
             if typed is not None and typed[2]:
@@ -1144,7 +1149,11 @@ def create_app(config):
         browse_button("cal_data_file", "data")
         browse_button("cal_model_folder", "folder")
         browse_button("setup_shapes_file", "shape")
-        calibration_server(input, output, session, setup)
+        calibration = calibration_server(input, output, session, setup)
+        calibrating = calibration_run_server(
+            input, output, session, setup, calibration.objectives, overrides, selected_output,
+            lambda: run_task.status() == "running" or analysis.running(), lambda: agents(), lambda: input.ha(),
+        )
         for key, _, kind in (*REQUIRED_FILES, *OPTIONAL_FILES):
             browse_button(f"setup_{key}", kind)
 

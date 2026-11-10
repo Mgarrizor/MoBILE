@@ -228,11 +228,14 @@ which compares them (the objectives and Optuna come next).
 The **Model** box takes an output of a finished run from the results folder (**Refresh** lists runs made since), or of a
 run in any other folder: type it under **Or a run in another folder**, or **Browse**, and press **Use this run** (the
 comparison only reads its outputs, and the setup does not change; **Earlier runs** in the sidebar stays on the results
-folder). Then choose the **Output** (as in the Results tab), how to put the cells together (**Over the cells**: the mean weighted by
-the people of each cell, which gives the value per person of the whole region for per-person outputs such as new cases;
-a plain mean; or a sum; a run on a point has one cell), whether it **aggregates** by sum (amounts per day, such as new
-cases or bites: summed by month they give the amount per month) or by mean (states, such as prevalence), and, for a seed
-band, one seed or all of them. It becomes a daily series in the same form as the data, processed by its own steps, as
+folder). Then choose the **Output** (as in the Results tab), how to put the cells together each day (**Over the cells
+(each day)**: the mean weighted by the people of each cell, which gives the value per person of the whole region for
+per-person outputs such as new cases; a plain mean; or a sum; a run on a point has one cell), and, for a seed band, one
+seed or all of them. Over time, only the steps decide: an **Aggregate** step is pre-filled with the sum for amounts per
+day (new cases, bites: summed by month they give the amount per month) and with the mean for states (prevalence,
+densities), and its menu can change it. An amber note says when an amount per day is averaged, which gives an average
+per day instead of the amount per period. An objective takes the steps exactly as they are then, and its description
+lists them (e.g. "then sum by month"). It becomes a daily series in the same form as the data, processed by its own steps, as
 below, with its own plot and **Compare with**. With all the seeds of a band, each seed is processed by the steps, and
 the plot and the comparison show their **median** with their **range** (lowest to highest seed) as a shaded band, as the
 seed bands of the Results tab (of the processed values, e.g. of monthly sums); the metrics use the median. Dated values with an uncertainty, in either box, show it as a shaded band too.
@@ -295,11 +298,45 @@ The RMSE of standardised series is not given: it carries the same information as
 to the mean of the data** multiplies the model on the plot only, to compare timing by eye; the legend gives the factor.
 If the units of the two differ by name, an amber note asks to check that they are the same quantity.
 
-**Possible drivers** draws rainfall and temperature in panels below, as the model read them (the mean over the
-simulated cells of the run chosen in the Model box), within the periods the model and the data share and on the same
-time axis. Each is processed on its own, on the spot: into periods (as they are, week, month, season or year), by a
+**Possible drivers** draws rainfall and temperature in panels below, as the model read them, and the vector densities
+the run gave (each the mean over the simulated cells of the run chosen in the Model box), within the periods the model
+and the data share and on the same time axis: zooming in one panel zooms them all. The vector density is at the left
+of its panel and the infective vector density, much lower, on its own scale at the right; they need Vector density and
+Infective vector density ticked in the Outputs card when the run is made. Each is processed on its own, on the spot: into periods (as they are, week, month, season or year), by a
 statistic (sum, mean, minimum, maximum; monthly sums of rain are in mm per month), and optionally as a climatology by
 month. They are for looking only: they do not enter the metrics.
+
+**Add as objective**, under the comparison, makes it an objective of the calibration: the observations as processed
+now (saved in `calibration/data/` of the results folder), the output, cells, aggregation and steps of the Model box,
+and a metric (correlation is maximised, the RMSEs minimised, the size of the bias minimised). Add several, e.g. the
+monthly series with the correlation (timing), then, with a climatology step in both boxes, the relative RMSE (season).
+
+**Calibration with Optuna** runs the model many times with the setup applied, the HA and seed of the sidebar and the
+sliders, each time with other values of what is calibrated, and keeps the trials that do best on all the objectives
+together (the Pareto front):
+
+- **Temperature offsets per cell**: the simulated cells of the setup (for a region of at most 20), with their mean
+  temperature over its period, from the coolest to the warmest. The cells ticked are shifted: with one, by dT₁ only;
+  with more, the first by dT₁ and each next one by a gap of at least 0 above the one before (the gap range is asked
+  for then), so the order of their temperatures is kept in every trial. Cells not ticked keep the temperatures of the
+  file. Each trial writes its own temperature file. Model parameters come next; with the offsets off there is nothing
+  to calibrate yet.
+- **Optuna**: the sampler (TPE, random or NSGA-II, with a link to its documentation), the trials and the start-up
+  trials drawn at random. **Runs**: seeds per trial (the objectives then compare the median of the seeds, each
+  processed), threads per run (at first those of the setup; kept with the calibration, as results depend on them),
+  runs at the same time (at first as many as fit in the cores), and a name. The runs write the outputs of the Outputs card and those the
+  objectives were made from. The model is built once, by the first run.
+- **Run calibration** shows the progress; **Cancel** stops it, and **Resume**, under Calibrations, goes on with it.
+  The calibration running, or the one chosen, is drawn below: each objective trial by trial with the best so far, the
+  Pareto front with the offsets of each trial and the mean temperatures they give, a trial of the front against the
+  data of an objective (the model scaled to the mean of the data), and below it, in a box of its own, where the
+  calibration started: its first trial, with no temperature offset (when the ranges allow it), processed and scored like
+  every other trial, with its **Possible drivers** (rainfall, temperature and vector densities of its run, as in the
+  Model and data card) in panels below that zoom together. The runs of a calibration always write the vector densities
+  for this. Its folder, `calibration/<name>/` in the
+  results folder, holds `calibration.json`, the Optuna study (`optuna.db`), the model (`bin/`) and the trials. A
+  calibration made by an earlier version of the engine is listed with "earlier version: cannot be resumed": it can be
+  looked at, not run further.
 
 ## What a run leaves behind
 

@@ -605,7 +605,13 @@ def observations_figure(observations, name, compare=None, compare_label=""):
 MODELLED = "#e34948"  # The second categorical colour: the model, beside the observations in the first
 
 
-DRIVER_COLOURS = {"rain": "#0f9aa8", "t2m": "#d99a0b"}  # Teal for rainfall, ochre for temperature
+# Teal for rainfall, ochre for temperature, violet for the vector density and magenta for the infective ones (twin axis)
+DRIVER_COLOURS = {"rain": "#0f9aa8", "t2m": "#d99a0b", "vectors": ("#6d5bd0", "#be185d")}
+
+
+def _panel(observations):
+    """[(label, observations)] of a driver: a list of them as given, or a single one."""
+    return observations if isinstance(observations, list) else [(None, observations)]
 
 
 def _driver_trace(observations, colour, label):
@@ -656,20 +662,45 @@ def comparison_figure(model, data, labels, model_values, data_values, scale=Fals
             figure.update_xaxes(type="category")
         return figure
     rows = 1 + len(drivers)
-    shared = all(observations.shape == data.shape for _, _, observations in drivers)
+    panels = [(name, label, _panel(observations)) for name, label, observations in drivers]
+    shared = all(series.shape == data.shape for _, _, panel in panels for _, series in panel)
+
+    def panel_title(label, panel):
+        if len(panel) == 1:
+            return f"{label} ({panel[0][1].units})"
+        return (f"{label}: {panel[0][0]} {units_label(panel[0][1].units)} at the left, {panel[1][0]} "
+                f"{units_label(panel[1][1].units)} at the right")
+
     figure = make_subplots(rows=rows, cols=1, shared_xaxes=shared, vertical_spacing=0.06 if shared else 0.1,
                            row_heights=[0.5] + [0.5 / len(drivers)] * len(drivers),
-                           subplot_titles=[title, *[f"{label} ({observations.units})" for _, label, observations in drivers]])
+                           specs=[[{}]] + [[{"secondary_y": len(panel) > 1}] for _, _, panel in panels],
+                           subplot_titles=[title, *[panel_title(label, panel) for _, label, panel in panels]])
     for trace in traces:
         figure.add_trace(trace, row=1, col=1)
-    for row, (name, label, observations) in enumerate(drivers, start=2):
-        figure.add_trace(_driver_trace(observations, DRIVER_COLOURS.get(name, INTERVAL), label), row=row, col=1)
+    def colours_of(name):
+        colours = DRIVER_COLOURS.get(name, INTERVAL)
+        return colours if isinstance(colours, tuple) else (colours,)
+
+    for row, (name, label, panel) in enumerate(panels, start=2):
+        colours = colours_of(name)
+        for k, (series_label, series) in enumerate(panel):
+            # A second series, e.g. the infective vectors, much smaller than the first: on its own scale, at the right
+            figure.add_trace(_driver_trace(series, colours[k % len(colours)], series_label or label), row=row, col=1,
+                             secondary_y=True if k else (False if len(panel) > 1 else None))
     figure.update_layout(_base_layout(), plot_bgcolor="white", barmode="group", height=ONE_PANEL + 40 + 200 * len(drivers),
                          margin={"l": 70, "r": 30, "t": 50, "b": 90}, showlegend=True,
                          legend={"orientation": "h", "x": 0.5, "xanchor": "center", "y": -0.08, "yanchor": "top"})
     figure.update_yaxes(title_text=data.units, row=1, col=1)
-    for row, (_, _, observations) in enumerate(drivers, start=2):
-        figure.update_yaxes(title_text=observations.units, row=row, col=1)
+    for row, (name, _, panel) in enumerate(panels, start=2):
+        if len(panel) == 1:
+            figure.update_yaxes(title_text=panel[0][1].units, row=row, col=1)
+            continue
+        colours = colours_of(name)
+        for k, (series_label, series) in enumerate(panel):
+            # Each axis in the colour of its series, so that which is which reads at a glance
+            # From zero, and the grid of the left axis only, so the two scales do not cross each other's lines
+            figure.update_yaxes(title_text=f"{series_label} {units_label(series.units)}", title_font={"color": colours[k % len(colours)]},
+                                rangemode="tozero", showgrid=not k, row=row, col=1, secondary_y=bool(k))
     figure.update_xaxes(gridcolor=GRID, tickfont={"size": AXIS_FONT})
     figure.update_yaxes(gridcolor=GRID, tickfont={"size": AXIS_FONT})
     figure.update_xaxes(title_text=X_TITLES[data.shape], row=rows, col=1)
@@ -879,4 +910,31 @@ def monthly_figure(result, name, key):
         yaxis={"title_text": f"{key}: share of the variance", "gridcolor": GRID, "zeroline": True, "zerolinecolor": INTERVAL,
                "range": [low - 0.02, high + 0.02]},
     )
+    return figure
+
+
+def calibration_history_figure(rows, objectives):
+    """The value of each objective in every completed trial of a calibration (dots), and the best so far (a line), one
+    panel per objective. rows are those of calibration_engine.trials_table, objectives those of its record."""
+    done = [row for row in rows if row["state"] == "COMPLETE"]
+    figure = make_subplots(rows=len(objectives), cols=1, shared_xaxes=True, vertical_spacing=0.08,
+                           subplot_titles=[f"{o['name']}: {o['metric'].replace('_', ' ')} ({'higher' if o['direction'] == 'maximize' else 'lower'} is better)"
+                                           for o in objectives])
+    numbers = [row["number"] for row in done]
+    for k, objective in enumerate(objectives):
+        values = np.array([row["values"][k] for row in done], dtype="f8")
+        better = np.fmax if objective["direction"] == "maximize" else np.fmin
+        best = better.accumulate(values) if len(values) else values
+        figure.add_trace(go.Scatter(x=numbers, y=values, mode="markers", marker={"color": COMPARED, "size": 6}, name="Trial",
+                                    showlegend=k == 0, legendgroup="trial",
+                                    hovertemplate=f"Trial %{{x}}: {objective['name']} %{{y:.4g}}<extra></extra>"), row=k + 1, col=1)
+        figure.add_trace(go.Scatter(x=numbers, y=best, mode="lines", line={"color": OBSERVED, "width": 2, "shape": "hv"},
+                                    name="Best so far", showlegend=k == 0, legendgroup="best", hoverinfo="skip"), row=k + 1, col=1)
+        figure.update_yaxes(title_text=objective["metric"].replace("_", " "), gridcolor=GRID, row=k + 1, col=1)
+    figure.update_xaxes(gridcolor=GRID)
+    figure.update_xaxes(title_text="Trial", row=len(objectives), col=1)
+    figure.update_layout(_base_layout(title="Calibration: the objectives, trial by trial"), plot_bgcolor="white",
+                         height=ONE_PANEL + 220 * (len(objectives) - 1),
+                         legend={"orientation": "h", "x": 0.5, "xanchor": "center", "y": -0.12, "yanchor": "top"})
+    figure.update_annotations(font={"size": 12})
     return figure

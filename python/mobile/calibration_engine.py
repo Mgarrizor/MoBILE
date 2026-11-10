@@ -18,6 +18,7 @@ the order of their temperatures holds in every trial without any trial being was
 import datetime
 import json
 import shutil
+import threading
 from dataclasses import replace
 from pathlib import Path
 
@@ -39,6 +40,11 @@ from .rundir import new_run_id, period_steps
 from .runner import NETCDF_LOCK, BuildOnce, RunCancelled, Runner
 from .setup import from_fields, to_dict
 
+# Raised when a change means calibrations made before cannot be resumed (e.g. 2: the first trial has no offset). They
+# can still be looked at.
+VERSION = 2
+OLD_CALIBRATION = ("This calibration was made by an earlier version of the calibration engine: it can be looked at, but not "
+                   "resumed. Start a new calibration.")
 FOLDER = "calibration"
 RECORD = "calibration.json"
 DATABASE = "optuna.db"
@@ -125,6 +131,16 @@ def offsets_from(temperature, values):
     return {f"dT_{k + 1}": offset for k, offset in enumerate(offsets)}
 
 
+def baseline(temperature):
+    """The sampled values of no offset at all (dT_1 = 0 and each gap the difference of the cell means), or None if they are
+    outside the ranges of the calibration."""
+    means = temperature["means"]
+    values = {"dT_1": 0.0, **{f"gap_{k + 1}": means[k] - means[k - 1] for k in range(1, len(means))}}
+    low, high = temperature["first"]
+    inside = low <= 0.0 <= high and all(temperature["gap"][0] <= values[f"gap_{k + 1}"] <= temperature["gap"][1] for k in range(1, len(means)))
+    return values if inside else None
+
+
 def offset_temperature(source, target, cells, offsets):
     """Write a copy of the temperature file with each cell shifted by its offset (°C), the others as they are."""
     shutil.copyfile(source, target)
@@ -185,6 +201,7 @@ def create_calibration(config, objectives, parameters=(), temperature=None, seed
         shutil.rmtree(folder)
         raise
     record = {
+        "version": VERSION,
         "status": "created",
         "date": datetime.datetime.now().isoformat(timespec="seconds"),
         "setup": to_dict(config),
@@ -202,6 +219,7 @@ def create_calibration(config, objectives, parameters=(), temperature=None, seed
         "failed": 0,
     }
     write_calibration(folder, record)
+    open_study(folder, record)  # The database exists from the start: the GUI may read it while the first trials run
     return folder
 
 
@@ -277,8 +295,20 @@ def sampler_for(record):
     return optuna.samplers.RandomSampler(seed=sampler["seed"])
 
 
+_STORAGES = {}  # One connection to the database of each calibration in this process, shared by its readers and its run
+_STORAGES_LOCK = threading.Lock()
+
+
+def _storage(folder):
+    path = str((Path(folder) / DATABASE).resolve())
+    with _STORAGES_LOCK:
+        if path not in _STORAGES:
+            _STORAGES[path] = optuna.storages.RDBStorage(f"sqlite:///{path}", engine_kwargs={"connect_args": {"timeout": 60}})
+        return _STORAGES[path]
+
+
 def open_study(folder, record):
-    storage = optuna.storages.RDBStorage(f"sqlite:///{Path(folder) / DATABASE}", engine_kwargs={"connect_args": {"timeout": 60}})
+    storage = _storage(folder)
     directions = ["maximize" if objective["direction"] == "maximize" else "minimize" for objective in record["objectives"]]
     return optuna.create_study(study_name=STUDY_NAME, storage=storage, directions=directions, sampler=sampler_for(record),
                                load_if_exists=True)
@@ -299,6 +329,8 @@ def run_calibration(folder, state, parallel=1, threads=None):
     all failed (the record then holds the end of the log of a run, as failure)."""
     folder = Path(folder)
     record = read_calibration(folder)
+    if not resumable(record):
+        raise CalibrationError(OLD_CALIBRATION)
     config = setup_config(folder, record)
     if threads:
         config = replace(config, run={**config.run, "threads": threads})
@@ -308,6 +340,12 @@ def run_calibration(folder, state, parallel=1, threads=None):
         # Left running by a calibration that stopped without finishing it, e.g. the GUI closed: done again
         study._storage.set_trial_user_attr(trial._trial_id, "cancelled", True)
         study._storage.set_trial_state_values(trial._trial_id, optuna.trial.TrialState.FAIL)
+    if record.get("temperature") and not study.get_trials(deepcopy=False):
+        # The first trial has no offset (the temperatures of the file), if the ranges allow it: where the calibration starts
+        # from. Its output is processed and scored as every trial's.
+        start = baseline(record["temperature"])
+        if start is not None:
+            study.enqueue_trial(start, user_attrs={"baseline": True})
     completed, failed = counts(study)
     todo = max(record["n_trials"] - completed - failed, 0)
     state.begin(record["n_trials"], completed + failed)
@@ -418,8 +456,38 @@ def trials_table(folder):
         offsets = {key: value for key, value in trial.user_attrs.items() if key.startswith("dT_")}
         seconds = (trial.datetime_complete - trial.datetime_start).total_seconds() if trial.datetime_complete and trial.datetime_start else None
         rows.append({"number": trial.number, "state": trial.state.name, "values": trial.values, "params": dict(trial.params),
-                     "offsets": offsets, "seconds": seconds, "failure": trial.user_attrs.get("failure")})
+                     "offsets": offsets, "seconds": seconds, "failure": trial.user_attrs.get("failure"),
+                     "baseline": bool(trial.user_attrs.get("baseline"))})
     return rows
+
+
+def trial_comparison(folder, number, index=0):
+    """(model, data, model values, data values, labels) of objective `index` for a completed trial: its runs processed
+    as the objective says, and the observations, paired as for the metrics."""
+    record = read_calibration(folder)
+    objective = record["objectives"][index]
+    here = trial_folder(folder, number)
+    run_dirs = [here / f"seed_{seed}" for seed in record["seeds"]]
+    with NETCDF_LOCK:
+        members = [member for run_dir in run_dirs
+                   for member in model_members(run_dir, objective["variable"], objective["space"], None, objective["aggregation"])]
+        model = apply_steps(members[0], objective["steps"]) if len(members) == 1 else seed_spread(members, objective["steps"])
+        data = read_observations(objective["data"])
+    model_values, data_values, labels = pair(model, data)
+    return model, data, model_values, data_values, labels
+
+
+def resumable(record):
+    """Whether a calibration was made by this version of the engine, and so can be run further."""
+    return record.get("version") == VERSION
+
+
+def calibration_label(folder, record):
+    """e.g. 'dz_two_cells (finished, 100 of 100 trials, 2 objectives)'; '..., earlier version' if it cannot be resumed."""
+    done = record.get("completed", 0) + record.get("failed", 0)
+    return (f"{Path(folder).name} ({record.get('status', '?')}, {done} of {record['n_trials']} trials, "
+            f"{len(record['objectives'])} objective{'s' if len(record['objectives']) > 1 else ''}"
+            f"{'' if resumable(record) else ', earlier version: cannot be resumed'})")
 
 
 def best_trials(folder):
