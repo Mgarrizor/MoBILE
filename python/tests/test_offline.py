@@ -2912,11 +2912,14 @@ sleep ${FAKE_SLEEP:-0}
 
         folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=8, name="batch")
         command = [sys.executable, "-m", "mobile", "calibrate", str(folder)]
-        # No compiler (as on CI): refused while the model is still to be built
+        # No compiler: refused while the model is still to be built (a PATH with nothing on it, as the tools found in
+        # /usr/bin differ between computers: GitHub's Ubuntu has gfortran there, not nf-config)
         bare = {**os.environ, "PYTHONPATH": str(Path(MOBILE) / "python"), "PATH": "/usr/bin:/bin"}
-        refused = subprocess.run(command, env=bare, capture_output=True, text=True, timeout=60)
+        nothing = self.root / "empty_path"
+        nothing.mkdir()
+        refused = subprocess.run(command, env={**bare, "PATH": str(nothing)}, capture_output=True, text=True, timeout=60)
         self.assertEqual(refused.returncode, 1)
-        self.assertIn("needed to compile MoBILE: gfortran", refused.stderr)
+        self.assertIn("needed to compile MoBILE: make, gfortran, nf-config, nc-config", refused.stderr)
         environment = {**bare, "PATH": f"{self.stand_in_compilers()}{os.pathsep}/usr/bin:/bin"}
         too_many = subprocess.run([*command, "--parallel", "100000"], env=environment, capture_output=True, text=True, timeout=60)
         self.assertEqual(too_many.returncode, 1)
@@ -2941,7 +2944,7 @@ sleep ${FAKE_SLEEP:-0}
         self.assertEqual(read_calibration(folder)["completed"], 8)
         # Its model built and kept, a later run of it (e.g. another job) needs no compiler
         self.assertTrue((Path(folder) / "bin" / "mobile.out").is_file())
-        again = subprocess.run(command, env=bare, capture_output=True, text=True, timeout=60)
+        again = subprocess.run(command, env={**bare, "PATH": str(nothing)}, capture_output=True, text=True, timeout=60)
         self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
         self.assertIn("8 of 8 trials completed so far", again.stdout)
 
