@@ -283,6 +283,11 @@ The **Data** box:
    calendar months, seasons, years or age bands, any uncertainty and other columns, the notes of what was done and the
    steps themselves, so they can be seen and applied again (e.g. to the model output, next).
 
+Once a run and dated observations are both loaded, the Model and Data boxes cut them, as loaded, to the years both
+cover (e.g. data for 1975–2025 and a run for 1985–2004 are both cut to 1985–2004) before their steps, so that
+statistics such as a climatology cover the same years on both sides; each box and the text under the comparison say
+the period. (Observations loaded as a climatology or yearly are not cut, nor the data sets a Combine step takes.)
+
 **Model and data** pairs the two on the periods (or months, seasons, years, age bands) they share, leaving out pairs
 with a missing value on either side, and says what to change when they cannot be paired (e.g. monthly data and a daily
 model output: aggregate the model by month). It plots both and gives the metrics, with the number of pairs:
@@ -306,21 +311,43 @@ Infective vector density ticked in the Outputs card when the run is made. Each i
 statistic (sum, mean, minimum, maximum; monthly sums of rain are in mm per month), and optionally as a climatology by
 month. They are for looking only: they do not enter the metrics.
 
-**Add as objective**, under the comparison, makes it an objective of the calibration: the observations as processed
-now (saved in `calibration/data/` of the results folder), the output, cells, aggregation and steps of the Model box,
-and a metric (correlation is maximised, the RMSEs minimised, the size of the bias minimised). Add several, e.g. the
-monthly series with the correlation (timing), then, with a climatology step in both boxes, the relative RMSE (season).
+**Add as objective**, under the comparison, makes it an objective of the calibration: the observations as loaded and the
+steps of the Data box (saved in `calibration/data/` of the results folder, with the observations as processed now), the
+output, cells and steps of the Model box, and a metric. Each trial cuts its output and the observations to the period
+they share before the steps, as the comparison does. If a step of the Data box combines other data sets, only the
+observations as processed now are kept, not cut again by each trial, and the objective's description says so.
+The correlation is maximised, the RMSEs minimised, the size of the bias minimised. Add several, e.g. the monthly series with the correlation (timing), then, with a climatology step in both boxes, the relative RMSE (season).
 
 **Calibration with Optuna** runs the model many times with the setup applied, the HA and seed of the sidebar and the
 sliders, each time with other values of what is calibrated, and keeps the trials that do best on all the objectives
 together (the Pareto front):
 
-- **Temperature offsets per cell**: the simulated cells of the setup (for a region of at most 20), with their mean
-  temperature over its period, from the coolest to the warmest. The cells ticked are shifted: with one, by dT₁ only;
+- **Validation window** (a switch under the objectives) splits the period the model and the data share in two, to
+  test the calibrated model on years it did not see:
+  - the **validation window**, a block of years given by its first and last day (at first the last five years). Its
+    data are never used to calibrate: each trial is scored on it too, with the same metrics, only to show how well it
+    does on years left out;
+  - the **calibration window**, the rest of the period. The calibration uses only the data of these years: each trial
+    is scored on them, and Optuna chooses the next trials from those scores.
+
+  Both are cut before the steps of the Model and Data boxes, so e.g. a climatology objective is that of the
+  calibration window only. With the switch on, the Model and data card gives the metrics of all the years and of each
+  window, and marks both windows on its plot with the bars described below. It needs objectives that keep the observations as loaded (those added since the cut to the common period:
+  add older ones again).
+- **Temperature offsets**, **one per cell** or **one per region**, the cells in each box of a size you give (e.g. 0.5°,
+  with edges on multiples of it: the cells of a coarser grid, as when finer driving files were made from coarser ones).
+  The cells of a region share its offset and keep their differences; its mean is that of its cells weighted by their
+  people (where people live). At most 20 cells or regions are calibrated, of a setup of at most 5,000 simulated cells.
+  A map shows the cells in the colour of their region, numbered as in the table, grey if not ticked; with a
+  **Shapefile** switch when the applied setup has one, to draw its areas over them. The table lists
+  the cells or regions with their mean temperature over the setup period and their people, from the coolest to the
+  warmest. The cells ticked are shifted: with one, by dT₁ only;
   with more, the first by dT₁ and each next one by a gap of at least 0 above the one before (the gap range is asked
   for then), so the order of their temperatures is kept in every trial. Cells not ticked keep the temperatures of the
-  file. Each trial writes its own temperature file. Model parameters come next; with the offsets off there is nothing
-  to calibrate yet.
+  file. Each trial writes its own temperature file.
+- **Model parameters**, by group as on the Parameters tab: tick a parameter to calibrate it, sampled uniformly or
+  log-uniformly (for ranges over orders of magnitude) within a range in the units of its slider, at first the range of
+  the slider; those not ticked keep their slider value. They can be calibrated with the offsets, or alone.
 - **Optuna**: the sampler (TPE, random or NSGA-II, with a link to its documentation), the trials and the start-up
   trials drawn at random. **Runs**: seeds per trial (the objectives then compare the median of the seeds, each
   processed), threads per run (at first those of the setup; kept with the calibration, as results depend on them),
@@ -332,15 +359,19 @@ together (the Pareto front):
   script is running. A resumed calibration keeps its threads per run, and runs as many at a time as fit in the cores
   with them.
   The calibration running, or the one chosen, is drawn below: each objective trial by trial with the best so far, the
-  Pareto front with the offsets of each trial and the mean temperatures they give, a trial of the front against the
-  data of an objective (the model scaled to the mean of the data), and below it, in a box of its own, where the
+  Pareto front with the offsets and parameters of each trial and the mean temperatures they give, and with a validation
+  window its scores on it, in grey (sorted by trial, by an objective or by a validation score, high to low or low to
+  high), in a box of its own a trial of the front against the data of an
+  objective (the model scaled to the mean of the data) with its **Possible drivers**, and below it, in a box of its own, where the
   calibration started: its first trial, with no temperature offset (when the ranges allow it), processed and scored like
   every other trial, with its **Possible drivers** (rainfall, temperature and vector densities of its run, as in the
   Model and data card) in panels below that zoom together. The runs of a calibration always write the vector densities
-  for this.
+  for this. With a validation window, semi-transparent bars along the top of these plots mark the calibration window
+  (green) and the validation window (purple), and their titles give the trial's validation scores; an objective that
+  is not a dated series, e.g. a climatology, is drawn for the calibration window only, as scored.
 - **Results**, for the calibration running or chosen, its figure chosen from a menu, of the objective chosen where the
-  figure is of one, with what it shows and a link to Optuna's documentation: the **distributions of the offsets** of
-  each cell over all the trials, the best tenth by the objective and the Pareto front (a narrow spread of the best means
+  figure is of one, with what it shows and a link to Optuna's documentation: the **distributions of the calibrated
+  values**, each offset and model parameter (log-uniform ones on a log scale), over all the trials, the best tenth by the objective and the Pareto front (a narrow spread of the best means
   the data tell the offset well; a wide one, that they hardly do), and Optuna's figures: the **Pareto front**,
   **parameter importances** (PED-ANOVA, turned for objectives that are maximised), **slice**, **parallel
   coordinates**, **contour**, **rank**, the **empirical distribution** of the objective, and the **timeline** of the

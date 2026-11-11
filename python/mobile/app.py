@@ -1152,7 +1152,7 @@ def create_app(config):
         calibration = calibration_server(input, output, session, setup)
         calibrating = calibration_run_server(
             input, output, session, setup, calibration.objectives, overrides, selected_output,
-            lambda: run_task.status() == "running" or analysis.running(), lambda: agents(), lambda: input.ha(),
+            lambda: run_task.status() == "running" or analysis.running(), lambda: agents(), lambda: input.ha(), slider_setup,
         )
         for key, _, kind in (*REQUIRED_FILES, *OPTIONAL_FILES):
             browse_button(f"setup_{key}", kind)

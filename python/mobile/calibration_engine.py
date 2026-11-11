@@ -26,13 +26,15 @@ from pathlib import Path
 import netCDF4
 import numpy as np
 import optuna
+import pandas as pd
 
-from .calibration_data import DataError, read_observations
+from .calibration_data import DataError, drop_window, read_observations, select_window
 from .calibration_metrics import DIRECTIONS, pair, metrics
-from .calibration_model import SPACES, model_members, seed_spread
+from .calibration_model import SPACES, model_members, process_both, seed_spread
 from .calibration_steps import apply_steps
+from .cells import cell_areas
 from .config import MAX_PATH_LENGTH, ConfigError
-from .driving import LAT_NAMES, LON_NAMES, TEMP_NAMES, first_name
+from .driving import LAT_NAMES, LON_NAMES, POP_NAMES, TEMP_NAMES, first_name
 from .grid import pop_coordinates
 from .parameters import to_model
 from .region import cut_inputs
@@ -124,9 +126,12 @@ def cell_means(temp_file, cells):
 
 
 def offsets_from(temperature, values):
-    """{dT name: offset} of each cell from the sampled values: dT_1 for the first (coolest) cell, and for each next one
-    the gap above the one before, in their means: mean_k + dT_k = mean_(k-1) + dT_(k-1) + gap_k."""
+    """{dT name: offset} of each cell from the sampled values: with the order kept, dT_1 for the first (coolest) cell, and
+    for each next one the gap above the one before, in their means: mean_k + dT_k = mean_(k-1) + dT_(k-1) + gap_k; without,
+    each dT_k as sampled."""
     cells, means = temperature["cells"], temperature["means"]
+    if not temperature.get("ordered", True):
+        return {f"dT_{k + 1}": values[f"dT_{k + 1}"] for k in range(len(cells))}
     offsets = [values["dT_1"]]
     for k in range(1, len(cells)):
         offsets.append(means[k - 1] + offsets[k - 1] + values[f"gap_{k + 1}"] - means[k])
@@ -137,21 +142,45 @@ def baseline(temperature):
     """The sampled values of no offset at all (dT_1 = 0 and each gap the difference of the cell means), or None if they are
     outside the ranges of the calibration."""
     means = temperature["means"]
-    values = {"dT_1": 0.0, **{f"gap_{k + 1}": means[k] - means[k - 1] for k in range(1, len(means))}}
     low, high = temperature["first"]
+    if not temperature.get("ordered", True):
+        return {f"dT_{k + 1}": 0.0 for k in range(len(means))} if low <= 0.0 <= high else None
+    values = {"dT_1": 0.0, **{f"gap_{k + 1}": means[k] - means[k - 1] for k in range(1, len(means))}}
     inside = low <= 0.0 <= high and all(temperature["gap"][0] <= values[f"gap_{k + 1}"] <= temperature["gap"][1] for k in range(1, len(means)))
     return values if inside else None
 
 
+def members(cell):
+    """The cells a calibrated cell stands for: those of a region ({lat, lon, members}), or the cell itself."""
+    return cell.get("members") or [{"lat": cell["lat"], "lon": cell["lon"]}]
+
+
+def region_mean(temp_file, pop_file, cell):
+    """The mean temperature of a cell, or of a region weighted by the people of its cells (by the cell areas of the model):
+    where people live. A region without people takes the plain mean of its cells."""
+    cells = members(cell)
+    means = np.array(cell_means(temp_file, cells))
+    if len(cells) == 1:
+        return float(means[0])
+    with netCDF4.Dataset(pop_file) as data:
+        lat, lon = _coordinates(data)
+        pop = np.ma.filled(data[first_name(POP_NAMES, data.variables)][:].astype("f8"), np.nan)
+    areas = cell_areas(pop_file)
+    people = np.array([np.nan_to_num(pop[_cell(lat, lon, member)]) * areas[_cell(lat, lon, member)] for member in cells])
+    return float(np.average(means, weights=people)) if people.sum() > 0 else float(means.mean())
+
+
 def offset_temperature(source, target, cells, offsets):
-    """Write a copy of the temperature file with each cell shifted by its offset (°C), the others as they are."""
+    """Write a copy of the temperature file with each cell, or every cell of each region, shifted by its offset (°C), the
+    others as they are."""
     shutil.copyfile(source, target)
     with netCDF4.Dataset(target, "a") as data:
         lat, lon = _coordinates(data)
         field = data[first_name(TEMP_NAMES, data.variables)]
         for k, cell in enumerate(cells):
-            i, j = _cell(lat, lon, cell)
-            field[:, i, j] = field[:, i, j] + offsets[f"dT_{k + 1}"]
+            for member in members(cell):
+                i, j = _cell(lat, lon, member)
+                field[:, i, j] = field[:, i, j] + offsets[f"dT_{k + 1}"]
         data.mobile_offsets = json.dumps({f"{cell['lat']},{cell['lon']}": round(offsets[f"dT_{k + 1}"], 6)
                                           for k, cell in enumerate(cells)})
 
@@ -159,15 +188,19 @@ def offset_temperature(source, target, cells, offsets):
 # ---------------------------------------------------------------- creating
 
 def create_calibration(config, objectives, parameters=(), temperature=None, seeds=(12345,), n_trials=100,
-                       sampler="tpe", startup_trials=10, sampler_seed=1, name=None):
+                       sampler="tpe", startup_trials=10, sampler_seed=1, name=None, validation=None):
     """Write the folder of a new calibration and return it.
 
     config: the setup, with the parameters not calibrated and the outputs the objectives need.
     objectives: [{name, data (observations file), variable, space, aggregation, steps (applied to the model output),
     metric}]; each is minimised or maximised as its metric says (calibration_metrics.DIRECTIONS).
     parameters: SampledParameter of the model to calibrate (uniform or log-uniform), in the units of the sliders.
-    temperature: {cells: [{lat, lon}] from the coolest to the warmest, first: (low, high) of dT_1 in °C, gap: (low,
-    high) of each next gap, low at least 0}, or None."""
+    temperature: {cells: [{lat, lon}, or {lat, lon, members: [{lat, lon}]} for a region whose cells share one offset] from
+    the coolest to the warmest (regions by their mean weighted by people), first: (low, high) of dT_1 in °C, gap: (low,
+    high) of each next gap, low at least 0, ordered: True (default) to keep their order, or False for each dT_k sampled on
+    its own within the range of dT_1}, or None.
+    validation: (first, last) dates of a validation window, or None: the objectives are calibrated on the period the model
+    and the data share without it, and each trial is scored on it too, with the same metrics, kept with the trial."""
     if not objectives:
         raise CalibrationError("give at least one objective")
     if not parameters and not temperature:
@@ -178,6 +211,10 @@ def create_calibration(config, objectives, parameters=(), temperature=None, seed
         if objective.get("space", "people") not in SPACES:
             raise CalibrationError(f"unknown space {objective['space']!r}: one of {', '.join(SPACES)}")
         read_observations(objective["data"])  # Raises DataError if it cannot be read
+        if objective.get("data_raw"):
+            read_observations(objective["data_raw"])
+    if validation is not None:
+        validation = _validation(validation, objectives)
     for parameter in parameters:
         if parameter.distribution not in ("uniform", "loguniform"):
             raise CalibrationError(f"{parameter.name}: only uniform and log-uniform ranges can be calibrated")
@@ -198,7 +235,7 @@ def create_calibration(config, objectives, parameters=(), temperature=None, seed
         if too_long:
             raise ConfigError(f"paths in the calibration folder longer than {MAX_PATH_LENGTH - 40} characters: {too_long}")
         if temperature:
-            temperature = _temperature(temperature, run_inputs["temp_file"])
+            temperature = _temperature(temperature, run_inputs["temp_file"], run_inputs["pop_file"])
     except (ConfigError, CalibrationError, DataError):
         shutil.rmtree(folder)
         raise
@@ -212,7 +249,9 @@ def create_calibration(config, objectives, parameters=(), temperature=None, seed
         "run_inputs": run_inputs,
         "parameters": [{"name": p.name, "distribution": p.distribution, "low": p.low, "high": p.high} for p in parameters],
         "temperature": temperature,
+        "validation": validation,
         "objectives": [{"space": "people", "aggregation": None, "steps": [], **objective, "data": str(Path(objective["data"]).resolve()),
+                        **({"data_raw": str(Path(objective["data_raw"]).resolve())} if objective.get("data_raw") else {}),
                         "direction": DIRECTIONS[objective["metric"]]} for objective in objectives],
         "seeds": [int(seed) for seed in seeds],
         "n_trials": int(n_trials),
@@ -225,15 +264,41 @@ def create_calibration(config, objectives, parameters=(), temperature=None, seed
     return folder
 
 
-def _temperature(temperature, temp_file):
-    cells = [{"lat": float(cell["lat"]), "lon": float(cell["lon"])} for cell in temperature["cells"]]
+def _validation(validation, objectives):
+    """[first, last] of a validation window, checked: within the observations of every objective, with some left out of it."""
+    try:
+        first, last = (pd.Timestamp(value) for value in validation)
+    except (TypeError, ValueError):
+        raise CalibrationError(f"the validation window needs a first and a last date: {validation!r}") from None
+    if first > last:
+        raise CalibrationError("the validation window must start before it ends")
+    window = (str(first.date()), str(last.date()))
+    for objective in objectives:
+        if not objective.get("data_raw"):
+            raise CalibrationError(f"{objective['name']}: a validation window needs the observations as loaded: add the objective again")
+        data = read_observations(objective["data_raw"])
+        if data.shape != "dated":
+            raise CalibrationError(f"{objective['name']}: a validation window needs dated observations")
+        try:
+            select_window(data, *window)
+            drop_window(data, *window)
+        except DataError as error:
+            raise CalibrationError(f"{objective['name']}: {error}") from None
+    return list(window)
+
+
+def _temperature(temperature, temp_file, pop_file):
+    cells = [{"lat": float(cell["lat"]), "lon": float(cell["lon"]),
+              **({"members": [{"lat": float(m["lat"]), "lon": float(m["lon"])} for m in cell["members"]]} if cell.get("members") else {})}
+             for cell in temperature["cells"]]
     first, gap = [float(value) for value in temperature["first"]], [float(value) for value in temperature.get("gap", (0, 0))]
+    ordered = bool(temperature.get("ordered", True))
     if first[0] >= first[1]:
         raise CalibrationError("the range of dT_1 needs its low below its high")
-    if len(cells) > 1 and not 0 <= gap[0] < gap[1]:
+    if ordered and len(cells) > 1 and not 0 <= gap[0] < gap[1]:
         raise CalibrationError("the range of the gaps needs a low of at least 0, below its high")
-    means = cell_means(temp_file, cells)
-    return {"cells": cells, "first": first, "gap": gap, "means": means}
+    means = [region_mean(temp_file, pop_file, cell) for cell in cells]
+    return {"cells": cells, "first": first, "gap": gap, "means": means, "ordered": ordered}
 
 
 def setup_config(folder, record):
@@ -255,7 +320,11 @@ def suggest(trial, record):
                                                         log=parameter["distribution"] == "loguniform")
     offsets = {}
     temperature = record["temperature"]
-    if temperature:
+    if temperature and not temperature.get("ordered", True):
+        # Each cell or region on its own, within the same range: no order kept
+        offsets = offsets_from(temperature, {f"dT_{k}": trial.suggest_float(f"dT_{k}", *temperature["first"])
+                                             for k in range(1, len(temperature["cells"]) + 1)})
+    elif temperature:
         sampled = {"dT_1": trial.suggest_float("dT_1", *temperature["first"])}
         for k in range(2, len(temperature["cells"]) + 1):
             sampled[f"gap_{k}"] = trial.suggest_float(f"gap_{k}", *temperature["gap"])
@@ -263,20 +332,40 @@ def suggest(trial, record):
     return values, offsets
 
 
-def evaluate(objectives, run_dirs):
-    """[value of each objective] of the runs of a trial (one per seed): the output processed by the steps of the
-    objective (for several seeds, the median of the seeds each processed), compared with its observations."""
+def objective_series(objective, run_dirs, validation=None, part=None):
+    """(model, data) of an objective for the runs of a trial (one per seed). With the raw observations and their steps
+    (objectives made since: data_raw, data_steps), both are first cut to the period they share, then each processed by
+    its own steps (calibration_model.process_both), so that e.g. a climatology covers the same years on both sides. With
+    only the observations as processed (earlier objectives), those, and the model output processed by its steps (for
+    several seeds, the median of the seeds each processed). validation and part as for process_both: with a validation
+    window, part "calibration" leaves it out, "validation" keeps it only."""
+    members = [member for run_dir in run_dirs
+               for member in model_members(run_dir, objective["variable"], objective["space"], None, objective["aggregation"])]
+    if objective.get("data_raw"):
+        model, data, _ = process_both(members, objective["steps"], read_observations(objective["data_raw"]),
+                                      objective.get("data_steps", []), validation=validation, part=part)
+        return model, data
+    model = apply_steps(members[0], objective["steps"]) if len(members) == 1 else seed_spread(members, objective["steps"])
+    return model, read_observations(objective["data"])
+
+
+def evaluate(objectives, run_dirs, validation=None, part=None, strict=True):
+    """[value of each objective] of the runs of a trial (one per seed): the output and the observations as
+    objective_series gives them (with a validation window: the part of the period, "calibration" or "validation"), paired
+    and compared by the metric of the objective. Not strict, None for a value that cannot be had instead of an error."""
     results = []
     for objective in objectives:
-        members = [member for run_dir in run_dirs
-                   for member in model_members(run_dir, objective["variable"], objective["space"], None, objective["aggregation"])]
-        model = (apply_steps(members[0], objective["steps"]) if len(members) == 1
-                 else seed_spread(members, objective["steps"]))
-        data = read_observations(objective["data"])
-        model_values, data_values, _ = pair(model, data)
-        value = metrics(model_values, data_values)[objective["metric"]]
-        if value is None:
-            raise DataError(f"{objective['name']}: {objective['metric']} is not defined for these values (e.g. a flat series)")
+        try:
+            model, data = objective_series(objective, run_dirs, validation, part)
+            model_values, data_values, _ = pair(model, data)
+            value = metrics(model_values, data_values)[objective["metric"]]
+            if value is None:
+                raise DataError(f"{objective['name']}: {objective['metric']} is not defined for these values (e.g. a flat series)")
+        except DataError:
+            if strict:
+                raise
+            results.append(None)
+            continue
         results.append(abs(value) if objective["direction"] == "zero" else value)
     return results
 
@@ -434,7 +523,10 @@ def _run_locked(folder, record, state, parallel, threads):
         try:
             run_dirs = [run_seed(trial, run_config, seed) for seed in record["seeds"]]
             with NETCDF_LOCK:
-                results = evaluate(record["objectives"], run_dirs)
+                window = record.get("validation")
+                results = evaluate(record["objectives"], run_dirs, window, "calibration" if window else None)
+                if window:  # Scored on the validation window too, kept with the trial; not optimised
+                    trial.set_user_attr("validation", evaluate(record["objectives"], run_dirs, window, "validation", strict=False))
         except RunCancelled:
             trial.set_user_attr("cancelled", True)
             raise
@@ -490,22 +582,20 @@ def trials_table(folder):
         seconds = (trial.datetime_complete - trial.datetime_start).total_seconds() if trial.datetime_complete and trial.datetime_start else None
         rows.append({"number": trial.number, "state": trial.state.name, "values": trial.values, "params": dict(trial.params),
                      "offsets": offsets, "seconds": seconds, "failure": trial.user_attrs.get("failure"),
-                     "baseline": bool(trial.user_attrs.get("baseline"))})
+                     "baseline": bool(trial.user_attrs.get("baseline")), "validation": trial.user_attrs.get("validation")})
     return rows
 
 
-def trial_comparison(folder, number, index=0):
+def trial_comparison(folder, number, index=0, part=None):
     """(model, data, model values, data values, labels) of objective `index` for a completed trial: its runs processed
-    as the objective says, and the observations, paired as for the metrics."""
+    as the objective says, and the observations, paired as for the metrics. With a validation window, part "calibration"
+    or "validation" for one part of the period, None for the whole period the model and the data share."""
     record = read_calibration(folder)
     objective = record["objectives"][index]
     here = trial_folder(folder, number)
     run_dirs = [here / f"seed_{seed}" for seed in record["seeds"]]
     with NETCDF_LOCK:
-        members = [member for run_dir in run_dirs
-                   for member in model_members(run_dir, objective["variable"], objective["space"], None, objective["aggregation"])]
-        model = apply_steps(members[0], objective["steps"]) if len(members) == 1 else seed_spread(members, objective["steps"])
-        data = read_observations(objective["data"])
+        model, data = objective_series(objective, run_dirs, record.get("validation"), part)
     model_values, data_values, labels = pair(model, data)
     return model, data, model_values, data_values, labels
 

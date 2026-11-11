@@ -14,11 +14,14 @@ import numpy as np
 import pandas as pd
 from shiny import reactive, render, ui
 
-from .calibration_data import AGGREGATIONS, PERIODS, SEASONS, SHAPES, DataError, import_table, read_observations, read_table, write_observations
+from .calibration_data import (
+    AGGREGATIONS, PERIODS, SEASONS, SHAPES, DataError, import_table, read_observations, read_table, select_window,
+    write_observations,
+)
 from .calibration_metrics import DIRECTIONS, METRICS, metrics, pair
 from .calibration_model import (
-    DRIVERS, SEED_MEAN, SPACES, chosen_seeds, default_aggregation, driver_panel, members_mean, model_members, run_choices,
-    run_elsewhere, run_seeds, run_variables, seed_spread,
+    DRIVERS, SEED_MEAN, SPACES, chosen_seeds, default_aggregation, driver_panel, members_mean, model_members, process_both, run_choices,
+    run_elsewhere, run_seeds, run_variables, seed_spread, shared_span,
 )
 from .calibration_run_ui import calibration_run_card, driver_controls, paired_span
 from .calibration_steps import (
@@ -26,7 +29,7 @@ from .calibration_steps import (
     default_step, describe,
 )
 from .layout import OPTUNA_URL, with_tip
-from .plots import comparison_figure, message_figure, observations_figure, send_figure
+from .plots import comparison_figure, mark_windows, message_figure, observations_figure, send_figure
 from .results import read_run
 from .setup import typed_path
 
@@ -114,6 +117,11 @@ def _data_box():
         ui.p("Observations to calibrate against: a file in the standard netCDF form of the GUI, or a table (CSV or text) to "
              "import. Values can be dated (e.g. monthly cases), a climatology of calendar months or of seasons, yearly, by age "
              "band, or a single value. Several files can be loaded, to combine them.", class_="small text-muted mb-2"),
+        ui.p("When compared with the model, dated observations and the model output are first cut to the years both cover "
+             "(e.g. data for 1975–2025 and a run for 1985–2004 are both cut to 1985–2004), and only then processed by the steps of their boxes, so that statistics "
+             "such as a climatology use the same years on both sides; the steps below and the plot already show them cut, and say "
+             "the period. Observations of a climatology or yearly ones are not cut, nor the data sets a Combine step takes; an "
+             "objective with a Combine step keeps the observations as processed here.", class_="small text-muted mb-2"),
         ui.div(
             ui.input_text("cal_data_file", "File of observations", width="100%"),
             ui.div(ui.input_action_button("browse_cal_data_file", "Browse", class_="btn-sm"),
@@ -403,17 +411,25 @@ def steps_before(raw, steps, others):
     return result
 
 
-def metrics_table(values, model, data):
-    """The metrics as an HTML table: name, value and what it means."""
+def metrics_table(values, model, data, parts=()):
+    """The metrics as an HTML table: name, value and what it means; with parts [(title, values or None)], e.g. the
+    calibration and validation years, a column for each after the whole period."""
+    def shown(found, key):
+        value = None if found is None else found[key]
+        return "not defined" if value is None else f"{value:.4g}"
+
     rows = []
     for key, text in METRICS.items():
-        value = values[key]
-        shown = "not defined" if value is None else f"{value:.4g}"
         name, meaning = text.split(": ", 1)
         if key in ("rmse", "bias"):
             meaning = meaning.replace("in the units of the data", f"in {data.units}")
-        rows.append(ui.tags.tr(ui.tags.td(name), ui.tags.td(shown, class_="text-end"), ui.tags.td(meaning, class_="text-muted")))
-    return ui.tags.table(ui.tags.tbody(*rows), class_="table table-sm small mb-1")
+        rows.append(ui.tags.tr(ui.tags.td(name), ui.tags.td(shown(values, key), class_="text-end"),
+                               *[ui.tags.td(shown(found, key), class_="text-end") for _, found in parts],
+                               ui.tags.td(meaning, class_="text-muted")))
+    header = (ui.tags.thead(ui.tags.tr(ui.tags.th(""), ui.tags.th("All years", class_="text-end"),
+                                       *[ui.tags.th(title, class_="text-end") for title, _ in parts], ui.tags.th("")))
+              if parts else None)
+    return ui.tags.table(header, ui.tags.tbody(*rows), class_="table table-sm small mb-1")
 
 
 # ---------------------------------------------------------------- server
@@ -427,11 +443,11 @@ def calibration_server(input, output, session, setup):
     saved = reactive.value(None)
     uids = itertools.count()
 
-    def pipeline(prefix, raw, others, name, members=lambda: []):
+    def pipeline(prefix, raw, others, name, members=lambda: [], span=lambda: None):
         """The steps of one box, with their cards, the comparison with an earlier stage and the plot. raw() is the
-        observations before the steps (or None), others() the observations to combine with, name() the title. With
-        several members() (the seeds of a seed band), each is processed by the steps, and the result is their mean with
-        their standard deviation as the uncertainty."""
+        observations before the steps (or None), already cut to span() (the years the model and the data both cover, or
+        None), others() the observations to combine with, name() the title. With several members() (the seeds of a seed
+        band), each is processed by the steps, and the result is their mean with their standard deviation as the uncertainty."""
         steps = reactive.value([])
 
         def control(uid):
@@ -458,6 +474,8 @@ def calibration_server(input, output, session, setup):
             return ui.div(
                 ui.tags.strong("Processing", class_="small"),
                 ui.p("Steps applied in order. Add, change, move or remove them; the plot follows.", class_="small text-muted mb-1"),
+                ui.p(f"Cut to {span()[0]} to {span()[1]}, the years the model and the data both cover, before the steps.",
+                     class_="small mb-1", style="color: #2563eb;") if span() else None,
                 *[step_controls(step, i + 1, len(current), befores[i], other, prefix) for i, step in enumerate(current)],
                 ui.div(ui.input_select(f"{prefix}_add_kind", None, STEP_KINDS, width="24rem"),
                        ui.input_action_button(f"{prefix}_add_step", "Add step", class_="btn-sm ms-2 mb-3"),
@@ -585,7 +603,44 @@ def calibration_server(input, output, session, setup):
             return "", "Load a file of observations to see them."
         return entry["path"].name, "Import the table to see it."
 
-    data = pipeline(DATA, data_raw, lambda: others_for(chosen()), data_name)
+    @reactive.calc
+    def common_span():
+        """(first, last) dates the model output and the observations both cover, as loaded, or None: until both are
+        loaded, if either is not dated (e.g. observations of a climatology), or if they share no period."""
+        members, observations = model_members_or_error()[0], data_raw()
+        if not members or observations is None:
+            return None
+        try:
+            return shared_span(members[0], observations)
+        except DataError:
+            return None
+
+    def cut(observations):
+        """The observations within the years the model and the data both cover, so that the steps of the boxes, as the
+        calibration, see only those."""
+        span = common_span()
+        return observations if observations is None or span is None else select_window(observations, *span)
+
+    data = pipeline(DATA, lambda: cut(data_raw()), lambda: others_for(chosen()), data_name, span=common_span)
+
+    def validation_window():
+        """(first, last) dates of the validation window of the Calibration card, if it is on and both are given, else None."""
+        if "cal_validation" not in input or not input.cal_validation() or "cal_validation_dates" not in input:
+            return None
+        dates = input.cal_validation_dates()
+        if not dates or dates[0] is None or dates[1] is None:
+            return None
+        return str(dates[0]), str(dates[1])
+
+    @reactive.effect
+    def default_validation_window():
+        """The last five years of the period the model and the data share, as a first validation window."""
+        span = common_span()
+        if span is None:
+            return
+        first, last = pd.Timestamp(span[0]), pd.Timestamp(span[1])
+        start = max(first, last - pd.DateOffset(years=5) + pd.Timedelta(days=1))
+        ui.update_date_range("cal_validation_dates", start=start.date(), end=last.date(), min=first.date(), max=last.date())
 
     def keep_steps():
         """Keep the steps of the data set shown with it, before another is shown."""
@@ -842,7 +897,8 @@ def calibration_server(input, output, session, setup):
         return (Path(folder).name if folder not in (None, "", NONE) else "",
                 model_raw_or_error()[1] or "Choose a run and an output.")
 
-    model = pipeline(MODEL, lambda: model_raw_or_error()[0], dict, model_name, lambda: model_members_or_error()[0])
+    model = pipeline(MODEL, lambda: cut(model_raw_or_error()[0]), dict, model_name,
+                     lambda: [cut(member) for member in model_members_or_error()[0]], span=common_span)
 
     def draw_model_status():
         shown = status(*model.processed(), model_name()[0])
@@ -864,16 +920,39 @@ def calibration_server(input, output, session, setup):
 
     @reactive.calc
     def paired():
-        """(model, data, model values, data values, labels, metrics), or a message saying what is missing or wrong."""
+        """(model values, data values, model, data, labels, metrics, span), or a message saying what is missing or wrong.
+        Both boxes are cut to the years both cover (common_span) before their steps, as in the calibration
+        (calibration_model.process_both), so that their statistics, e.g. a climatology, cover the same years."""
         model_values, _ = model.processed()
         data_values, _ = data.processed()
         if model_values is None or data_values is None:
             return "Choose a run and an output in the Model box, and load observations in the Data box: they are compared here."
         try:
+            members, observations = model_members_or_error()[0], data_raw()
+            if members and observations is not None:
+                shared_span(members[0], observations)  # Raises DataError if they share no period
             m, d, labels = pair(model_values, data_values)
         except DataError as error:
             return f"Not comparable yet: {error}."
-        return model_values, data_values, m, d, labels, metrics(m, d)
+        return model_values, data_values, m, d, labels, metrics(m, d), common_span()
+
+    @reactive.calc
+    def split_metrics():
+        """[(title, metrics or None)] of the calibration years and of the validation window, each cut before the steps as
+        the calibration does, if the window of the Calibration card is on; else []. A part that cannot be had is None."""
+        window, span = validation_window(), common_span()
+        if window is None or span is None or isinstance(paired(), str):
+            return []
+        members, model_raw = model_members_or_error()[0], model_raw_or_error()[0]
+        parts = []
+        for part, title in (("calibration", "Calibration window"), ("validation", f"Validation window, {window[0]} to {window[1]}")):
+            try:
+                m, d, _ = process_both(members, [without_uid(s) for s in model.live()], data_raw(), [without_uid(s) for s in data.live()],
+                                       others_for(chosen()), model_raw.notes[0], window, part)
+                parts.append((title, metrics(*pair(m, d)[:2])))
+            except DataError:
+                parts.append((title, None))
+        return parts
 
     @reactive.calc
     def drivers():
@@ -883,7 +962,7 @@ def calibration_server(input, output, session, setup):
         folder = model_outputs()[0]
         if isinstance(result, str) or folder is None:
             return [], None
-        _, data_values, _, _, labels, _ = result
+        _, data_values, _, _, labels, _, _ = result
         first, last = paired_span(data_values, labels)
         seed = input[f"{MODEL}_seed"]() if f"{MODEL}_seed" in input else None
         shown, problems = [], []
@@ -908,9 +987,13 @@ def calibration_server(input, output, session, setup):
         if isinstance(result, str):
             await send_figure(session, "cal_comparison_plot", message_figure(result))
             return
-        model_values, data_values, m, d, labels, _ = result
-        await send_figure(session, "cal_comparison_plot", comparison_figure(model_values, data_values, labels, m, d, input.cal_scale_model(),
-                                                                            drivers()[0]))
+        model_values, data_values, m, d, labels, _, _ = result
+        figure = comparison_figure(model_values, data_values, labels, m, d, input.cal_scale_model(), drivers()[0])
+        window = validation_window()
+        if window is not None and data_values.shape == "dated":
+            # The calibration and validation windows of the Calibration card, as bars along the top
+            mark_windows(figure, (str(data_values.index["start"].min().date()), str(data_values.index["end"].max().date())), window)
+        await send_figure(session, "cal_comparison_plot", figure)
 
     # ---------------------------------------------------------------- objectives
 
@@ -931,14 +1014,22 @@ def calibration_server(input, output, session, setup):
         if name in {objective["name"] for objective in objectives()}:
             objective_problem.set(f"There is an objective named {name} already.")
             return
-        _, data_values, _, _, _, _ = result
+        _, data_values, _, _, _, _, span = result
         folder = model_outputs()[0]
         manifest = read_run(folder) or {}
-        # The observations as processed now, kept with the calibrations of the results folder
-        target = Path(setup().runs_dir).joinpath(*DATA_FOLDER) / f"objective_{name}_{datetime.datetime.now():%Y%m%d-%H%M%S}.nc"
+        # The observations as processed now, kept with the calibrations of the results folder, and as loaded with the steps of
+        # the Data box, so that each trial cuts both to the period they share before the steps; not if a step combines other
+        # data sets, which the calibration does not keep: then the observations as processed here, kept as they are
+        stamp = f"{name}_{datetime.datetime.now():%Y%m%d-%H%M%S}"
+        target = Path(setup().runs_dir).joinpath(*DATA_FOLDER) / f"objective_{stamp}.nc"
+        data_steps = [without_uid(step) for step in data.live()]
+        keep_raw = not any(step["kind"] == "combine" for step in data_steps)
+        raw_target = target.with_name(f"objective_{stamp}_raw.nc")
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
             write_observations(data_values, target)
+            if keep_raw:
+                write_observations(data_raw(), raw_target)
         except OSError as error:
             objective_problem.set(f"Not added: the observations cannot be saved ({error}).")
             return
@@ -948,9 +1039,12 @@ def calibration_server(input, output, session, setup):
         objectives.set([*objectives(), {
             "name": name, "data": str(target), "variable": input[f"{MODEL}_variable"](), "space": input[f"{MODEL}_space"](),
             "aggregation": None, "steps": steps, "metric": metric, "direction": DIRECTIONS[metric], "output": manifest.get("output"),
+            **({"data_raw": str(raw_target), "data_steps": data_steps} if keep_raw else {}),
             "describe": f"{data_values.name} ({len(data_values)} values, {SHAPES[data_values.shape].split(':')[0].lower()}) against "
                         f"{input[f'{MODEL}_variable']()}, {SPACES[input[f'{MODEL}_space']()].lower()}, then "
-                        f"{'; '.join(describe(step) for step in steps) or 'no step'}",
+                        f"{'; '.join(describe(step) for step in steps) or 'no step'}"
+                        + (f"; both cut to the period they share ({span[0]} to {span[1]}) before the steps" if keep_raw and span else
+                           "" if keep_raw else "; the data as processed here, not cut again by each trial (a step combines other data sets)"),
         }])
         objective_problem.set(None)
         ui.update_text("cal_objective_name", value="")
@@ -985,17 +1079,21 @@ def calibration_server(input, output, session, setup):
         result = paired()
         if isinstance(result, str):
             return None
-        model_values, data_values, m, d, labels, values = result
+        model_values, data_values, m, d, labels, values, span = result
         units = None
         if model_values.units.strip() != data_values.units.strip():
             units = ui.p(f"The units differ by name: model in {model_values.units or 'no units'}, data in {data_values.units or 'no units'}. "
                          "Check that they are the same quantity: the RMSE and the bias only mean something if they are.",
                          class_="small mb-1", style="color: #d97706;")
         return ui.div(
-            ui.p(f"{values['n']} pairs, from {labels[0]} to {labels[-1]}: the periods the model and the data share, without a "
+            ui.p((f"Both cut to the period they share, {span[0]} to {span[1]}, before the steps of their boxes. " if span else "")
+                 + f"{values['n']} pairs, from {labels[0]} to {labels[-1]}: the periods the model and the data share, without a "
                  "missing value on either side.", class_="small mb-1"),
             units,
-            metrics_table(values, model_values, data_values),
+            ui.p("With the validation window of the Calibration card on: the metrics of all the years, then those of the "
+                 "calibration window (the years the calibration uses) and of the validation window (left out of it), each cut "
+                 "before the steps, as the calibration does.", class_="small mb-1") if split_metrics() else None,
+            metrics_table(values, model_values, data_values, split_metrics()),
         )
 
     return SimpleNamespace(objectives=objectives)
