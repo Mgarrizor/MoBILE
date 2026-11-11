@@ -236,6 +236,11 @@ class TestConfig(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "not available for this model"):
             self.config.with_params(mu_B=0.3)
 
+    def test_threads_at_most_32(self):
+        Config.load(CONFIG).with_run(threads=32).validate()
+        with self.assertRaisesRegex(ConfigError, "threads must be at most 32"):
+            Config.load(CONFIG).with_run(threads=33).validate()
+
     def test_spin_up_needs_a_year(self):
         # mo_spinup.f90 stops with less than 365 simulated days (ndays_year): 364 must be refused, 365 accepted
         self.assertEqual(SPIN_UP_DAYS, 365)
@@ -2486,6 +2491,11 @@ if [ -z "$prebuilt" ]; then
 fi
 echo '================= Running MoBILE ================='
 [ -n "$FAKE_FAIL" ] && { echo ' More agents than people! --> STOP'; exit 0; }
+if [ -n "$FAKE_COUNTER" ]; then  # Runs counted from 1: those in FAKE_FAIL_RUNS fail, and all from FAKE_FAIL_FROM on
+  count=$(( $(cat "$FAKE_COUNTER" 2>/dev/null || echo 0) + 1 )); echo $count > "$FAKE_COUNTER"
+  case " $FAKE_FAIL_RUNS " in *" $count "*) echo ' More agents than people! --> STOP'; exit 0 ;; esac
+  [ -n "$FAKE_FAIL_FROM" ] && [ $count -ge $FAKE_FAIL_FROM ] && { echo ' More agents than people! --> STOP'; exit 0; }
+fi
 sleep ${FAKE_SLEEP:-0}
 "$FAKE_PYTHON" "$FAKE_TOY" "$@"
 """
@@ -2681,7 +2691,7 @@ sleep ${FAKE_SLEEP:-0}
             self.assertIn("at most 1 cells", offset_cells(self.config))
         folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=6, name="shown")
         record = run_calibration(folder, StudyState(), parallel=2)
-        self.assertEqual(calibration_label(folder, record), "shown (finished, 6 of 6 trials, 2 objectives)")
+        self.assertEqual(calibration_label(folder, record), "shown (finished, 6 of 6 trials completed, 2 objectives)")
         figure = calibration_history_figure(trials_table(folder), read_calibration(folder)["objectives"])
         self.assertEqual([len(trace.x) for trace in figure.data], [6, 6, 6, 6])  # Trials and best so far, for each objective
         # The first trial is the model as it is: no offset, both cells at the temperatures of the file
@@ -2785,6 +2795,335 @@ sleep ${FAKE_SLEEP:-0}
         self.assertEqual((record["status"], status_of(killed, record)), ("running", "interrupted"))
         self.assertIn("(interrupted,", calibration_label(killed, record))
         self.assertEqual(run_calibration(killed, StudyState(), parallel=2)["status"], "finished")  # And it goes on
+
+    def test_status_file_snapshot_and_kept_series(self):
+        import optuna
+
+        from mobile.calibration_engine import (SERIES, SNAPSHOT, STATUS, create_calibration, objective_series, read_status, resolved,
+                                               run_calibration, trial_comparison, trial_folder)
+        from mobile.sensitivity_runs import StudyState
+
+        window = ("2002-07-01", "2002-12-31")
+        objectives = [{**objective, "data_raw": str(self.data), "data_steps": []} for objective in self.objectives()]
+        folder = create_calibration(self.config, objectives, temperature=self.temperature(), n_trials=4, name="status",
+                                    validation=window)
+        self.assertIsNone(read_status(folder))  # Never run
+        record = run_calibration(folder, StudyState(), parallel=2)
+        status = read_status(folder)
+        self.assertEqual((status["state"], status["completed"], status["failed"], status["target"]), ("finished", 4, 0, 4))
+        self.assertEqual((status["host"], status["pid"]), (socket.gethostname(), os.getpid()))
+        self.assertFalse(list(Path(folder).glob(f".{STATUS}*")))  # Written whole: no temporary file left
+        # The snapshot is a study of its own, with every trial
+        snapshot = optuna.load_study(study_name="calibration", storage=f"sqlite:///{Path(folder) / SNAPSHOT}")
+        self.assertEqual(sum(t.state == optuna.trial.TrialState.COMPLETE for t in snapshot.trials), 4)
+        # The series compared are kept with each trial, for the whole period and each part: the same as from the output
+        objectives = resolved(folder, record)["objectives"]
+        here = trial_folder(folder, 1)
+        run_dirs = [here / f"seed_{seed}" for seed in record["seeds"]]
+        self.assertEqual(len(list((here / SERIES).glob("*.nc"))), 2 * 2 * 3)  # 2 objectives x (model, data) x 3 parts
+        for part in (None, "calibration", "validation"):
+            model, data = objective_series(objectives[0], run_dirs, window, part)
+            shutil.rmtree(run_dirs[0]) if part == "validation" else None  # The last without the output: from what was kept
+            kept = trial_comparison(folder, 1, 0, part)
+            np.testing.assert_allclose(kept[0].values, model.values)
+            np.testing.assert_allclose(kept[1].values, data.values)
+            self.assertTrue(kept[0].index.equals(model.index))
+
+    def test_running_elsewhere_and_taking_over(self):
+        from mobile.calibration_engine import (STATUS, CalibrationError, _SQUEUE_CACHE, counts, create_calibration, in_squeue,
+                                               is_running, open_study, read_calibration, run_calibration, status_of)
+        from mobile.sensitivity_runs import StudyState
+
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=3, name="elsewhere")
+        study = open_study(folder, read_calibration(folder))
+        left = study.ask()  # A trial the other process was running when it ended
+        write_calibration_status = lambda **fields: (Path(folder) / STATUS).write_text(json.dumps(
+            {"host": "lrdn0042", "pid": 1, "state": "running", "target": 3, "completed": 0, **fields}))
+        now = datetime.datetime.now(datetime.timezone.utc)
+        # On another computer, without Slurm to ask: by the heartbeat
+        write_calibration_status(heartbeat=now.isoformat())
+        self.assertTrue(is_running(folder))
+        with self.assertRaisesRegex(CalibrationError, "running already: process 1 on lrdn0042, last heard of"):
+            run_calibration(folder, StudyState())
+        write_calibration_status(heartbeat=(now - datetime.timedelta(minutes=10)).isoformat())
+        self.assertFalse(is_running(folder))
+        self.assertEqual(status_of(folder, {"status": "running"}), "interrupted")
+        # With Slurm: by whether it still lists the job, whatever the heartbeat
+        bin_dir = self.root / "slurm"
+        bin_dir.mkdir()
+        (bin_dir / "squeue").write_text('#!/bin/bash\nfor a in "$@"; do [ "$a" = 77 ] && { echo 77; exit 0; }; done\n'
+                                        'echo "slurm_load_jobs error: Invalid job id specified" >&2; exit 1\n')
+        (bin_dir / "squeue").chmod(0o755)
+        with mock.patch.dict(os.environ, {"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}):
+            _SQUEUE_CACHE.clear()
+            self.assertEqual((in_squeue("77"), in_squeue("78")), (True, False))
+            write_calibration_status(job="77", heartbeat=(now - datetime.timedelta(hours=2)).isoformat())
+            self.assertTrue(is_running(folder))  # Listed: running, though silent for long (e.g. a slow file system)
+            write_calibration_status(job="78", heartbeat=now.isoformat())
+            self.assertFalse(is_running(folder))  # Not listed: ended, though heard of just now
+            record = run_calibration(folder, StudyState(), parallel=1)  # So this one takes over
+        self.assertEqual((record["status"], record["completed"], record["failed"]), ("finished", 3, 0))
+        ended = open_study(folder, record).trials[left.number]
+        self.assertEqual((ended.state.name, ended.user_attrs.get("ended")), ("FAIL", "the process running it ended"))
+        self.assertEqual(counts(open_study(folder, record)), (3, 0))  # Not a failure
+
+    def test_failed_trials_are_made_up_for(self):
+        from mobile.calibration_engine import create_calibration, run_calibration
+        from mobile.sensitivity_runs import StudyState
+
+        # One run at a time, so the runs come in order: the second trial fails twice (its two attempts), the others not
+        counter = self.root / "count.txt"
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=5, name="made_up")
+        with mock.patch.dict(os.environ, {"FAKE_COUNTER": str(counter), "FAKE_FAIL_RUNS": "2 3"}):
+            record = run_calibration(folder, StudyState(), parallel=1)
+        self.assertEqual((record["status"], record["completed"], record["failed"]), ("finished", 5, 1))
+        # Too many failures after a success (more than CRASH_RATE of the trials, at least FAIL_FAST): stopped
+        counter.unlink()
+        crashing = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=10, name="crashing")
+        with mock.patch.dict(os.environ, {"FAKE_COUNTER": str(counter), "FAKE_FAIL_FROM": "2"}):
+            record = run_calibration(crashing, StudyState(), parallel=1)
+        self.assertEqual((record["status"], record["completed"], record["failed"]), ("stopped", 1, 4))
+
+    def test_deadline(self):
+        from mobile.calibration_engine import create_calibration, read_status, run_calibration
+        from mobile.sensitivity_runs import StudyState
+
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=50, name="deadline")
+        # A guess of how long a trial takes that does not fit: none starts
+        record = run_calibration(folder, StudyState(), parallel=2, deadline=time.time() + 60, trial_seconds=120)
+        self.assertEqual((record["status"], record["completed"], record["failed"]), ("stopped at deadline", 0, 0))
+        self.assertEqual(read_status(folder)["state"], "stopped at deadline")
+        # Then from the time the trials take: as many as fit, all ended by the deadline
+        with mock.patch.dict(os.environ, {"FAKE_SLEEP": "0.3"}):
+            deadline = time.time() + 4
+            record = run_calibration(folder, StudyState(), parallel=2, deadline=deadline)
+            ended = time.time()
+        self.assertEqual(record["status"], "stopped at deadline")
+        self.assertTrue(2 <= record["completed"] < 50, record["completed"])
+        self.assertLess(ended, deadline + 0.5)
+        record = run_calibration(folder, StudyState(), parallel=4)  # Without one: to the end
+        self.assertEqual((record["status"], record["completed"]), ("finished", 50))
+
+    def test_command_line(self):
+        import signal
+        import subprocess
+
+        from mobile.calibration_engine import create_calibration, read_calibration, read_status
+
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=8, name="batch")
+        command = [sys.executable, "-m", "mobile", "calibrate", str(folder)]
+        # No compiler: refused while the model is still to be built (a PATH with nothing on it, as the tools found in
+        # /usr/bin differ between computers: GitHub's Ubuntu has gfortran there, not nf-config)
+        bare = {**os.environ, "PYTHONPATH": str(Path(MOBILE) / "python"), "PATH": "/usr/bin:/bin"}
+        nothing = self.root / "empty_path"
+        nothing.mkdir()
+        refused = subprocess.run(command, env={**bare, "PATH": str(nothing)}, capture_output=True, text=True, timeout=60)
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn("needed to compile MoBILE: make, gfortran, nf-config, nc-config", refused.stderr)
+        environment = {**bare, "PATH": f"{self.stand_in_compilers()}{os.pathsep}/usr/bin:/bin"}
+        too_many = subprocess.run([*command, "--parallel", "100000"], env=environment, capture_output=True, text=True, timeout=60)
+        self.assertEqual(too_many.returncode, 1)
+        self.assertIn("Use --parallel", too_many.stdout)
+        # Stopped by SIGTERM, as by Slurm before the end of a job: the runs cancelled, resumable, exit 3
+        job = subprocess.Popen([*command, "--parallel", "1"], env={**environment, "FAKE_SLEEP": "0.5"}, stdout=subprocess.PIPE,
+                               stderr=subprocess.STDOUT, text=True)
+        for _ in range(300):
+            if (read_status(folder) or {}).get("completed", 0) >= 1:
+                break
+            time.sleep(0.1)
+        job.send_signal(signal.SIGTERM)
+        output = job.communicate(timeout=60)[0]
+        self.assertEqual(job.returncode, 3, output)
+        self.assertRegex(output, r"trial 0 completed in \dm\d\ds: timing [-0-9.]+, swings [-0-9.e]+ \| Pareto front 1 trials \| 1 of 8 completed")
+        self.assertIn("cancelled (SIGTERM)", output)
+        self.assertEqual((read_calibration(folder)["status"], read_status(folder)["state"]), ("cancelled", "cancelled"))
+        # The same command again goes on to the end: exit 0
+        done = subprocess.run([*command, "--parallel", "2"], env=environment, capture_output=True, text=True, timeout=300)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("finished", done.stdout)
+        self.assertEqual(read_calibration(folder)["completed"], 8)
+        # Its model built and kept, a later run of it (e.g. another job) needs no compiler
+        self.assertTrue((Path(folder) / "bin" / "mobile.out").is_file())
+        again = subprocess.run(command, env={**bare, "PATH": str(nothing)}, capture_output=True, text=True, timeout=60)
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertIn("8 of 8 trials completed so far", again.stdout)
+
+    def stand_in_compilers(self):
+        """A folder of stand-ins for the tools `mobile` looks for before it builds: the stand-in mobile.sh builds nothing."""
+        folder = self.root / "compilers"
+        folder.mkdir(exist_ok=True)
+        for name in ("make", "gfortran", "nf-config", "nc-config"):
+            (folder / name).write_text("#!/bin/bash\n")
+            (folder / name).chmod(0o755)
+        return folder
+
+    def test_moved_folder(self):
+        # As sent to a cluster: the folder elsewhere, its paths relative to it, the observations in it, MoBILE from $MOBILE
+        from mobile.calibration_engine import create_calibration, read_calibration, run_calibration, write_calibration
+        from mobile.sensitivity_runs import StudyState
+
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=2, name="moved")
+        moved = self.root / "elsewhere" / "moved"
+        shutil.copytree(folder, moved)
+        (moved / "inputs").mkdir(exist_ok=True)
+        (moved / "data").mkdir()
+        record = read_calibration(moved)
+        for key in ("rain_file", "temp_file", "pop_file"):
+            shutil.copy(record["run_inputs"][key], moved / "inputs" / Path(record["run_inputs"][key]).name)
+            record["run_inputs"][key] = record["setup"]["inputs"][key] = f"inputs/{Path(record['run_inputs'][key]).name}"
+        shutil.copy(self.data, moved / "data" / "cases.nc")
+        record["objectives"] = [{**objective, "data": "data/cases.nc"} for objective in record["objectives"]]
+        record["setup"]["mobile"] = "/nowhere/MoBILE"
+        write_calibration(moved, record)
+        shutil.rmtree(folder)
+        os.rename(self.root / "temperature.nc", self.root / "temperature_gone.nc")  # Not read from where it was
+        with mock.patch.dict(os.environ, {"MOBILE": str(self.config.mobile)}):
+            result = run_calibration(moved, StudyState(), parallel=1)
+        self.assertEqual((result["status"], result["completed"]), ("finished", 2))
+
+    # A stand-in ssh: runs the command here, in a shell whose HOME is that of the cluster and whose PATH has its Slurm
+    FAKE_SSH = """#!/bin/bash
+while [ "$1" = "-o" ]; do shift 2; done
+host=$1; shift
+[ -n "$FAKE_SSH_DENY" ] && { echo "** WARNING: connection is not using a post-quantum key exchange algorithm." >&2;
+                              echo "$host: Permission denied (publickey)." >&2; exit 255; }
+echo "$*" >> "$FAKE_REMOTE_HOME/commands.txt"
+HOME="$FAKE_REMOTE_HOME" PATH="$FAKE_REMOTE_BIN:$PATH" exec bash -c "$*"
+"""
+    # sbatch runs the job at once, to its end, then says its id; squeue lists what FAKE_SQUEUE says; sacct, that it completed
+    FAKE_SLURM = {
+        "sbatch": """#!/bin/bash
+echo "$@" >> "$HOME/sbatch.txt"
+script=${@: -2:1}; folder=${@: -1}
+id=$(( $(cat "$HOME/next_id" 2>/dev/null || echo 1000) + 1 )); echo $id > "$HOME/next_id"
+[ -z "$FAKE_SQUEUE" ] && SLURM_JOB_ID=$id bash "$script" "$folder" > "$folder/logs/$id.out" 2>&1
+echo "$id;leonardo"
+""",
+        "squeue": """#!/bin/bash
+[ -n "$FAKE_SQUEUE" ] && echo "$FAKE_SQUEUE"
+true
+""",
+        "sacct": """#!/bin/bash
+for job in $(echo "$5" | tr , ' '); do echo "$job|COMPLETED"; done
+""",
+        "scancel": """#!/bin/bash
+echo "$@" >> "$HOME/scancel.txt"
+""",
+    }
+
+    def cluster(self):
+        """Settings of a stand-in cluster here: ssh, Slurm and `mobile` in folders of their own."""
+        from mobile.cluster import ClusterSettings
+
+        home = self.root / "cluster_home"
+        local_bin, remote_bin = self.root / "local_bin", self.root / "remote_bin"
+        for folder in (home, local_bin, remote_bin):
+            folder.mkdir(exist_ok=True)
+        for tool in self.stand_in_compilers().iterdir():  # Those of the cluster, for `mobile calibrate` there
+            shutil.copy(tool, remote_bin / tool.name)
+        scripts = {local_bin / "ssh": self.FAKE_SSH, **{remote_bin / name: text for name, text in self.FAKE_SLURM.items()},
+                   remote_bin / "mobile": f'#!/bin/bash\nPYTHONPATH={Path(MOBILE) / "python"} exec {sys.executable} -m mobile "$@"\n'}
+        for path, text in scripts.items():
+            path.write_text(text)
+            path.chmod(0o755)
+        config_dir = self.root / "config_here"
+        cached = config_dir / "worldpop" / "Global2000_2020" / "SEN_2012.json"
+        cached.parent.mkdir(parents=True)
+        cached.write_text((Path(MOBILE) / "python" / "mobile" / "age_structures" / "Global2000_2020" / "SEN_2012.json").read_text())
+        patch = mock.patch.dict(os.environ, {"PATH": f"{local_bin}{os.pathsep}{os.environ['PATH']}", "FAKE_REMOTE_HOME": str(home),
+                                             "FAKE_REMOTE_BIN": str(remote_bin), "MOBILE_CONFIG_DIR": str(config_dir)})
+        patch.start()
+        self.addCleanup(patch.stop)
+        return ClusterSettings(host="leonardo", folder="~/work/calibration", mobile=str(self.config.mobile), account="", partition="",
+                               qos="", time="00:10:00", cpus=2, exclusive=False, setup="# the modules and the venv here"), home
+
+    def test_cluster_send_submit_refresh(self):
+        import optuna
+
+        from mobile.calibration_engine import (CalibrationError, SERIES, create_calibration, is_running, open_study, read_calibration,
+                                               read_cluster, run_calibration, status_of, trial_comparison, trial_folder)
+        from mobile.cluster import ClusterError, last_log, observation_files, refresh, send, submit
+        from mobile.sensitivity_runs import StudyState
+
+        settings, home = self.cluster()
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=3, name="sent")
+        self.assertEqual(observation_files(folder), [(str(self.data.resolve()), self.data.stat().st_size)])
+        with self.assertRaisesRegex(ClusterError, "tick that its observations may be copied"):
+            send(folder, settings)
+        there = Path(send(folder, settings, cleared=True))
+        self.assertEqual(there, home / "work" / "calibration" / "sent")  # ~ as the shell there sees it
+        record = json.loads((there / "calibration.json").read_text())
+        self.assertEqual({objective["data"] for objective in record["objectives"]}, {"data/objective_0_data_cases.nc", "data/objective_1_data_cases.nc"})
+        self.assertEqual(record["run_inputs"]["temp_file"], "inputs/external/temp_file_temperature.nc")
+        self.assertTrue((there / "inputs" / "external" / "temp_file_temperature.nc").is_file())
+        self.assertTrue((home / ".config" / "mobile" / "worldpop" / "Global2000_2020" / "SEN_2012.json").is_file())
+        with self.assertRaisesRegex(ClusterError, "sent already"):
+            send(folder, settings, cleared=True)
+        with self.assertRaisesRegex(CalibrationError, "sent to leonardo"):  # The folder here only mirrors it
+            run_calibration(folder, StudyState())
+        # The job: runs it there, from that folder alone (the data here moved away), to the end
+        os.rename(self.data, self.root / "cases_away.nc")
+        job = submit(folder, settings)
+        self.assertEqual(job, "1001")
+        script = (there / "job.sh").read_text()
+        self.assertIn('exec mobile calibrate "$1" --parallel 2', script)
+        self.assertIn(f"#SBATCH --output={there}/logs/%j.out", script)
+        self.assertNotIn("--account", script)  # Empty: not given
+        self.assertEqual(json.loads((there / "calibration.json").read_text())["completed"], 3)
+        self.assertFalse((Path(folder) / "optuna.db").stat().st_size and open_study(folder, read_calibration(folder)).trials)
+        # Refreshed: the study, the progress, the series of each trial and the log; never the output
+        refresh(folder)
+        record = read_calibration(folder)
+        self.assertEqual((record["status"], record["completed"], status_of(folder, record), is_running(folder)), ("finished", 3, "finished", False))
+        self.assertEqual(read_cluster(folder)["jobs"][0]["state"], "COMPLETED")  # As sacct says
+        trials = open_study(folder, record).trials
+        self.assertEqual(sum(trial.state == optuna.trial.TrialState.COMPLETE for trial in trials), 3)
+        self.assertTrue((trial_folder(folder, 2) / SERIES).is_dir())
+        self.assertFalse(list(Path(folder).glob("trials/*/seed_*")))
+        model, data, *_ = trial_comparison(folder, 2, 0)  # Drawn here from the series kept there
+        self.assertEqual(len(model), len(data))
+        job_id, tail = last_log(folder)
+        self.assertEqual(job_id, "1001")
+        self.assertIn("exit 0: done", tail)
+
+    def test_cluster_jobs_and_login(self):
+        from mobile.calibration_engine import create_calibration, is_running, read_calibration, running_where, status_of
+        from mobile.cluster import ClusterError, ClusterSettings, job_script, refresh, send, stop, submit
+
+        settings, home = self.cluster()
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=3, name="queued")
+        with mock.patch.dict(os.environ, {"FAKE_SSH_DENY": "1"}):
+            with self.assertRaisesRegex(ClusterError, r"cannot connect to leonardo: log in to the cluster first.*\(leonardo: Permission denied \(publickey\)\.\)"):
+                send(folder, settings, cleared=True)
+        send(folder, settings, cleared=True)
+        with mock.patch.dict(os.environ, {"FAKE_SQUEUE": "1001 PENDING"}):
+            first = submit(folder, settings)
+            refresh(folder)
+            self.assertEqual((status_of(folder, read_calibration(folder)), is_running(folder)), ("queued", True))
+            second = submit(folder, settings)  # After the first
+        self.assertIn(f"--dependency=afterany:{first}", (home / "sbatch.txt").read_text().splitlines()[-1])
+        with mock.patch.dict(os.environ, {"FAKE_SQUEUE": f"{second} RUNNING"}):
+            refresh(folder)
+            self.assertEqual(status_of(folder, read_calibration(folder)), "running")
+            self.assertRegex(running_where(folder), rf"on leonardo, job {second} running, .*as of the refresh 0 s ago")
+            self.assertEqual(stop(folder), second)
+        self.assertEqual((home / "scancel.txt").read_text().strip(), f"--batch --signal=TERM {second}")
+        refresh(folder)  # Ended: sacct says completed, and its status is as written there (not run here)
+        self.assertEqual(is_running(folder), False)
+        # The script for LEONARDO's DCGP nodes, as the settings default to
+        record = read_calibration(folder)
+        record["setup"]["run"]["threads"] = 7
+        script = job_script(ClusterSettings(), record, "/leonardo_work/try26_garrido/calibration/x")
+        for line in ("#SBATCH --account=try26_garrido", "#SBATCH --partition=dcgp_usr_prod", "#SBATCH --cpus-per-task=112",
+                     "#SBATCH --exclusive", "#SBATCH --signal=B:TERM@300", "unset PYTHONPATH",
+                     'exec mobile calibrate "$1" --parallel 16'):
+            self.assertIn(line, script)
+        with self.assertRaisesRegex(ClusterError, "need 32 CPUs"):
+            job_script(replace(ClusterSettings(), parallel=4, cpus=16), {**record, "setup": {**record["setup"], "run": {"threads": 8}}}, "/x")
+        # A folder there with too long a path
+        long = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=3, name="long")
+        with self.assertRaisesRegex(ClusterError, "choose a shorter folder there"):
+            send(long, replace(settings, folder="~/" + "x" * 150), cleared=True)
 
     def test_regions_share_an_offset(self):
         from mobile.calibration_engine import create_calibration, read_calibration, region_mean, run_calibration, trials_table

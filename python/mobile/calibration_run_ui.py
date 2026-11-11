@@ -5,6 +5,7 @@ progress: the objectives trial by trial and the best trial against the data (cal
 import asyncio
 import os
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import netCDF4
@@ -17,12 +18,13 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from .calibration_engine import (
     OLD_CALIBRATION, SAMPLER_LINKS, SAMPLERS, CalibrationError, best_trials, calibration_label, calibrations_dir, create_calibration,
-    is_running, list_calibrations, read_calibration, resumable, run_calibration, status_of, trial_comparison, trial_folder, trials_table,
+    is_running, list_calibrations, read_calibration, resumable, run_calibration, running_where, status_of, trial_comparison, trial_folder, trials_table,
 )
 from .calibration_data import DataError
 from .calibration_model import DRIVER_PERIODS, DRIVERS, driver_panel
 from .calibration_results import FIGURES, ResultsError, figure_help, results_figure
 from .calibration_steps import STATISTICS
+from .cluster_ui import cluster_section, cluster_server
 from .config import ConfigError
 from .cells import cell_areas
 from .driving import LAT_NAMES, LON_NAMES, climatology, first_name, open_field
@@ -39,6 +41,7 @@ DRIVER_FLAGS = ("out_vect", "out_vecinfc")  # Written by every run of a calibrat
 MAX_CELLS = 20  # Temperature offsets are calibrated for at most this many cells or regions
 MAX_SIMULATED = 5000  # And the cells of the setup, grouped in regions or not, at most this many
 REFRESH_SECONDS = 3  # How often the progress of a calibration is drawn again while it runs
+ELSEWHERE_SECONDS = 30  # How often the list of calibrations is read again while one runs in another process
 
 
 def calibration_run_card():
@@ -100,7 +103,9 @@ def calibration_run_card():
                 ui.input_numeric("cal_seeds", with_tip("Seeds per trial", "Each trial runs every seed, from the sidebar seed up; "
                                  "the objectives compare the median of the seeds, each processed."), value=1, min=1, step=1),
                 ui.input_numeric("cal_threads", with_tip("Threads per run", "CPU threads of each run, at first those of the setup. "
-                                 "Results depend on the number: it is kept with the calibration, and a resumed one uses it too."),
+                                 "Results depend on the number: it is kept with the calibration, and a resumed one uses it too. On a LEONARDO "
+                                 "DCGP node, 16 runs × 7 threads did best for Senegal 1998–2003 (9.85 M agents); other "
+                                 "setups may differ."),
                                  value=1, min=1, step=1),
                 ui.input_numeric("cal_parallel", with_tip("Runs at the same time", "Each with the threads per run above. The model "
                                  "is built once, by the first run."), value=1, min=1, step=1),
@@ -112,6 +117,9 @@ def calibration_run_card():
                 ui.div(
                     ui.input_task_button("cal_run", "Run calibration", label_busy="Running…", class_="btn-primary flex-fill"),
                     ui.input_action_button("cal_cancel", "Cancel", class_="flex-fill", disabled=True),
+                    ui.input_action_button("cal_create", with_tip("Create only", "Make the calibration without running it: "
+                                           "to run it on a cluster (below), or later with Resume or `mobile calibrate`."),
+                                           class_="flex-fill"),
                     class_="d-flex gap-2 mt-2",
                 ),
             ),
@@ -127,6 +135,7 @@ def calibration_run_card():
             col_widths=(10, 2),
         ),
         ui.output_ui("cal_previous_info"),
+        cluster_section(),
         ui.div(id="cal_history_plot", style="min-height: 380px;"),
         ui.output_ui("cal_front_sort_choice"),
         ui.output_ui("cal_front"),
@@ -315,6 +324,7 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
     last = reactive.value(None)  # The record of the last calibration run in this session, or "error"
     running_folder = reactive.value(None)
     to_select = reactive.value(None)
+    cluster_server(input, output, session, lambda: input.cal_previous() or None, changed)
 
     @reactive.calc
     def cells():
@@ -586,6 +596,25 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         if busy():
             ui.notification_show("A run or analysis is in progress: wait for it, or cancel it, before a calibration.", type="warning")
             return
+        folder = make_calibration()
+        if folder is not None:
+            start(folder)
+
+    @reactive.effect
+    @reactive.event(input.cal_create)
+    def create_only():
+        folder = make_calibration()
+        if folder is None:
+            return
+        to_select.set(str(folder))
+        changed.set(changed() + 1)
+        threads_ = read_calibration(folder)["setup"]["run"]["threads"]
+        ui.notification_show(f"Created {Path(folder).name}, not run: choose it under Calibrations and press Resume to run it here, "
+                             f"Send it to a cluster below, or run `mobile calibrate {folder}` ({threads_} thread"
+                             f"{'s' if threads_ > 1 else ''} per run).", type="message", duration=15)
+
+    def make_calibration():
+        """The folder of a new calibration as the card says, or None after saying what is wrong."""
         found = problems()
         nagent, seed = agents(), input.seed()
         if not all(isinstance(value, int) and value >= 1 for value in (nagent, seed)):
@@ -617,10 +646,10 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
                                         n_trials=input.cal_trials(), sampler=input.cal_sampler(), startup_trials=input.cal_startup(),
                                         sampler_seed=seed, name=name or None, validation=validation())
         except (ConfigError, CalibrationError, DataError, ValueError, OSError) as error:
-            ui.notification_show(f"The calibration cannot start: {error}", type="error")
-            return
+            ui.notification_show(f"The calibration cannot be made: {error}", type="error")
+            return None
         ui.update_text("cal_name", value="")
-        start(folder)
+        return folder
 
     @reactive.effect
     @reactive.event(input.cal_resume)
@@ -639,7 +668,7 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
             ui.notification_show("This calibration has finished: all its trials are done.", type="message")
             return
         if is_running(folder):
-            ui.notification_show("This calibration is running already, in another GUI or script: wait for it, or stop it there.",
+            ui.notification_show(f"This calibration is running already ({running_where(folder)}): wait for it, or stop it there.",
                                  type="warning")
             return
         # Its runs keep the threads it was made with: as many at a time as fit in the cores with them
@@ -692,8 +721,8 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         if record["status"] == "finished":
             return ui.p(f"Calibration finished: {trials}.", class_="mt-3 mb-0")
         if record["status"] == "stopped":
-            return ui.card(ui.p(f"Calibration stopped: its first {record['failed']} trials all failed, so the others would fail too. "
-                                "The end of the log of a run:", class_="mb-1"),
+            return ui.card(ui.p(f"Calibration stopped: {record['failed']} trials failed, too many to go on (the first ones all, or "
+                                "more than one in ten). The end of the log of a run:", class_="mb-1"),
                            ui.tags.pre(record.get("failure") or "", class_="small mb-1"),
                            ui.p("Fix the cause and press Resume.", class_="mb-0"), class_="border-danger mt-3")
         return ui.p(f"Calibration {record['status']}: {trials}. Choose it under Calibrations and press Resume to go on.", class_="mt-3 mb-0")
@@ -702,6 +731,8 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
     def refresh_calibrations():
         changed()
         found = list_calibrations(setup().runs_dir)
+        if any(record.get("status") == "running" and is_running(folder) for folder, record in found.items()):
+            reactive.invalidate_later(ELSEWHERE_SECONDS)  # Run by another process, e.g. a batch job: its label changes
         with reactive.isolate():
             selected = to_select() or (input.cal_previous() if input.cal_previous() in found else next(iter(found), None))
             to_select.set(None)
@@ -734,9 +765,13 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         if record.get("validation"):
             first, last = record["validation"]
             lines.append(f"Validation window {first} to {last}: left out of the calibration, each trial scored on it too")
-        lines.insert(0, f"Status: {status_of(folder, record)}"
-                     + (" (no process runs it any more, e.g. the GUI was closed: Resume goes on with it)"
-                        if status_of(folder, record) == "interrupted" else ""))
+        status = status_of(folder, record)
+        if status == "running" and not (running() and running_folder() == folder):
+            reactive.invalidate_later(REFRESH_SECONDS)  # Run by another process: drawn again as it goes on
+        lines.insert(0, f"Status: {status}"
+                     + (" (no process runs it any more, e.g. the GUI was closed or the job ended: Resume goes on with it)"
+                        if status == "interrupted" else f" by another process: {running_where(folder)}"
+                        if status == "running" and not (running() and running_folder() == folder) else ""))
         lines.append(f"Sampler {record['sampler']['name']}, {record['n_trials']} trials, seeds {record['seeds']}, "
                      f"{record['setup']['run']['threads']} thread{'s' if record['setup']['run']['threads'] > 1 else ''} per run")
         return ui.div(ui.tags.ul(*[ui.tags.li(line) for line in lines], class_="mb-1"), ui.p(f"Folder: {folder}", class_="mb-0"),
@@ -746,7 +781,7 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
     def progress():
         """(record, rows, front) of the calibration shown, read again every few seconds while it runs."""
         folder = shown()
-        if running():
+        if running() or (folder and is_running(folder)):  # Here, or by another process, e.g. a batch job
             reactive.invalidate_later(REFRESH_SECONDS)
         changed()
         if not folder:

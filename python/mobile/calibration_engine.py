@@ -2,9 +2,15 @@
 
   calibration.json  what is calibrated, against what, with which setup, sampler and number of trials
   optuna.db         the Optuna study (SQLite): every trial, its values and objectives; a calibration resumes from it
+  status.json       written by the process running the calibration, with a heartbeat: whether it runs, where, and how far
+  optuna.snapshot.db a consistent copy of the study, written with the status, that can be copied while the trials go on
   inputs/           the driving files cut to the region and period of the setup, once for all the trials
   bin/mobile.out    the model, built by the first run and run as it is by all the others (mobile.sh -E)
-  trials/trial_<n>/ one folder per trial: its temperature file, if offset, and a run folder per seed
+  trials/trial_<n>/ one folder per trial: its temperature file, if offset, a run folder per seed, and series/: the
+                    model and the observations of each objective as compared, kept to be drawn without the output
+
+Paths in calibration.json may be relative to its folder (a calibration sent to a cluster), and the MoBILE clone is that
+of the record if it exists, else $MOBILE.
 
 A trial samples the parameters, runs the model for each seed, processes the output as each objective says and compares
 it with the observations of the objective: the values of the metrics are the objectives Optuna optimises.
@@ -18,8 +24,14 @@ the order of their temperatures holds in every trial without any trial being was
 import datetime
 import fcntl
 import json
+import math
+import os
 import shutil
+import socket
+import sqlite3
+import subprocess
 import threading
+import time
 from dataclasses import replace
 from pathlib import Path
 
@@ -28,7 +40,7 @@ import numpy as np
 import optuna
 import pandas as pd
 
-from .calibration_data import DataError, drop_window, read_observations, select_window
+from .calibration_data import DataError, drop_window, read_observations, select_window, write_observations
 from .calibration_metrics import DIRECTIONS, pair, metrics
 from .calibration_model import SPACES, model_members, process_both, seed_spread
 from .calibration_steps import apply_steps
@@ -52,6 +64,15 @@ FOLDER = "calibration"
 RECORD = "calibration.json"
 DATABASE = "optuna.db"
 LOCK = "running.lock"  # Held by the process running a calibration; the system lets go of it when that process ends
+STATUS = "status.json"
+SNAPSHOT = "optuna.snapshot.db"
+CLUSTER = "cluster.json"  # In a calibration sent to a cluster (cluster.py): where, its jobs, and what the last refresh saw
+SERIES = "series"
+HEARTBEAT_SECONDS = 60  # The status is written this often while a calibration runs, and after every trial
+STALE_SECONDS = 300  # A status not written for this long, on another computer without Slurm to ask, is of a process gone
+SNAPSHOT_SECONDS = 30  # The snapshot of the study is written at most this often, and at the end
+CRASH_RATE = 0.1  # The calibration stops when more trials fail than this share of the trials asked for (at least FAIL_FAST)
+EXPECTED_FROM = 10  # The time a trial takes is the 95th percentile of the completed trials once there are this many
 STUDY_NAME = "calibration"
 INPUTS = "inputs"
 TRIALS = "trials"
@@ -301,13 +322,33 @@ def _temperature(temperature, temp_file, pop_file):
     return {"cells": cells, "first": first, "gap": gap, "means": means, "ordered": ordered}
 
 
-def setup_config(folder, record):
-    """The configuration of the runs of a calibration, before the values of a trial."""
+def _in_folder(folder, path):
+    """A path of the record: as it is if absolute, else within the folder of the calibration. Other values (no file: "",
+    "NONE", a number) as they are."""
+    if not isinstance(path, str) or path.strip() in ("", "NONE") or Path(path).is_absolute():
+        return path
+    return str(Path(folder).resolve() / path)
+
+
+def resolved(folder, record):
+    """The record with the paths of its observations within its folder when they are relative (calibration sent to a cluster)."""
+    return {**record, "objectives": [{**objective, **{key: _in_folder(folder, objective[key]) for key in ("data", "data_raw")
+                                                      if objective.get(key)}} for objective in record["objectives"]]}
+
+
+def setup_config(folder, record, mobile=None):
+    """The configuration of the runs of a calibration, before the values of a trial. mobile: the MoBILE clone, else that of
+    the record if it exists, else $MOBILE."""
     setup = record["setup"]
-    config = from_fields(setup["mobile"], setup["project"], setup["runs_dir"], setup["run"], setup["inputs"], None,
+    if mobile is None:
+        mobile = os.path.expandvars(setup["mobile"] or "")
+        if not (mobile and Path(mobile).is_dir()) and os.environ.get("MOBILE"):
+            mobile = os.environ["MOBILE"]
+    inputs = {key: _in_folder(folder, path) for key, path in setup["inputs"].items()}
+    config = from_fields(mobile, setup["project"], setup["runs_dir"], setup["run"], inputs, None,
                          setup["period"], setup["age_structure"])
-    return replace(config, inputs=dict(record["run_inputs"]), params=dict(record["params"]),
-                   output=tuple(record["output"]) if record["output"] is not None else None)
+    return replace(config, inputs={key: _in_folder(folder, path) for key, path in record["run_inputs"].items()},
+                   params=dict(record["params"]), output=tuple(record["output"]) if record["output"] is not None else None)
 
 
 # ---------------------------------------------------------------- a trial
@@ -349,14 +390,46 @@ def objective_series(objective, run_dirs, validation=None, part=None):
     return model, read_observations(objective["data"])
 
 
-def evaluate(objectives, run_dirs, validation=None, part=None, strict=True):
+def _series_files(folder, index, part):
+    """(model, observations) files of objective `index` and a part of the period (None for the whole) kept in a folder."""
+    name = f"objective_{index}_{part or 'whole'}"
+    return Path(folder) / f"{name}_model.nc", Path(folder) / f"{name}_data.nc"
+
+
+def _touched(path):
+    """The path, with an empty file there: netCDF then writes it from a thread without HDF5 printing the error of looking for
+    one (as it does when it does not exist), which would fill the log of a batch job."""
+    Path(path).touch()
+    return path
+
+
+def _keep(folder, index, part, model, data):
+    Path(folder).mkdir(parents=True, exist_ok=True)
+    for series, path in zip((model, data), _series_files(folder, index, part)):
+        write_observations(series, _touched(path))
+
+
+def keep_series(objectives, run_dirs, folder, validation=None, part=None):
+    """Keep in a folder the model and the observations of each objective as compared, for a part of the period (None for
+    the whole), for the plots of a trial without its output. One that cannot be had is left out."""
+    for index, objective in enumerate(objectives):
+        try:
+            _keep(folder, index, part, *objective_series(objective, run_dirs, validation, part))
+        except DataError:
+            continue
+
+
+def evaluate(objectives, run_dirs, validation=None, part=None, strict=True, keep=None):
     """[value of each objective] of the runs of a trial (one per seed): the output and the observations as
     objective_series gives them (with a validation window: the part of the period, "calibration" or "validation"), paired
-    and compared by the metric of the objective. Not strict, None for a value that cannot be had instead of an error."""
+    and compared by the metric of the objective. Not strict, None for a value that cannot be had instead of an error.
+    keep: a folder to keep the series compared in (keep_series)."""
     results = []
-    for objective in objectives:
+    for index, objective in enumerate(objectives):
         try:
             model, data = objective_series(objective, run_dirs, validation, part)
+            if keep is not None:
+                _keep(keep, index, part, model, data)
             model_values, data_values, _ = pair(model, data)
             value = metrics(model_values, data_values)[objective["metric"]]
             if value is None:
@@ -398,6 +471,15 @@ def _storage(folder):
         return _STORAGES[path]
 
 
+def forget_storage(folder):
+    """Close the connections to the study of a folder, e.g. after its database was replaced by a newer copy."""
+    path = str((Path(folder) / DATABASE).resolve())
+    with _STORAGES_LOCK:
+        storage = _STORAGES.pop(path, None)
+    if storage is not None:
+        storage.engine.dispose()
+
+
 def open_study(folder, record):
     storage = _storage(folder)
     directions = ["maximize" if objective["direction"] == "maximize" else "minimize" for objective in record["objectives"]]
@@ -413,25 +495,67 @@ def counts(study):
     return completed, failed
 
 
-def run_calibration(folder, state, parallel=1, threads=None):
-    """Run the trials of a calibration not yet done, parallel at a time, and return its record.
+def run_calibration(folder, state, parallel=1, threads=None, deadline=None, trial_seconds=None, on_trial=None, mobile=None):
+    """Run the trials of a calibration until as many have completed as it asks for, parallel at a time, and return its
+    record. A trial that fails is made up for by another.
 
-    The status is finished when the trials asked for are done, cancelled, or stopped if the first FAIL_FAST trials
-    all failed (the record then holds the end of the log of a run, as failure)."""
+    deadline: time (seconds since the epoch) by which the trials must have ended, e.g. before the end of a batch job: a
+    trial is not started if the time trials take (EXPECTED_FROM) would take it past the deadline, or past then if fewer have
+    completed, the longest of them and trial_seconds. on_trial(study, trial) is called after each trial. mobile: the MoBILE
+    clone, as for setup_config.
+
+    The status is finished when the trials asked for have completed; stopped if the first FAIL_FAST trials all failed, or
+    more than CRASH_RATE of them (the record then holds the end of the log of a run, as failure); "stopped at deadline";
+    cancelled; or incomplete. Raises CalibrationError if another process runs it (is_running)."""
     folder = Path(folder)
     record = read_calibration(folder)
     if not resumable(record):
         raise CalibrationError(OLD_CALIBRATION)
+    cluster = read_cluster(folder)
+    if cluster is not None:
+        raise CalibrationError(f"this calibration was sent to {cluster.get('host')} ({cluster.get('folder')}): it runs there. "
+                               "Refresh to see how far it is, and submit a job there to go on.")
+    if is_running(folder):
+        raise CalibrationError(f"this calibration is running already: {running_where(folder)}")
     with open(folder / LOCK, "w") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             raise CalibrationError("this calibration is running already, in this or another process") from None
-        return _run_locked(folder, record, state, parallel, threads)
+        except OSError:
+            pass  # A file system without locks, e.g. some of clusters: the status file tells
+        return _run_locked(folder, record, state, parallel, threads, deadline, trial_seconds, on_trial, mobile)
 
 
-def is_running(folder):
-    """Whether a process is running the calibration now (it holds its lock), in this one or another."""
+def _now():
+    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+
+
+def _seconds_since(stamp):
+    try:
+        return time.time() - datetime.datetime.fromisoformat(stamp).timestamp()
+    except (TypeError, ValueError):
+        return math.inf
+
+
+def read_status(folder):
+    """The status file of a calibration ({job, host, pid, started, heartbeat, state, completed, failed, target, deadline}),
+    or None if it has none (never run, or made by an earlier version) or it cannot be read."""
+    try:
+        status = json.loads((Path(folder) / STATUS).read_text())
+    except (OSError, ValueError):
+        return None
+    return status if isinstance(status, dict) else None
+
+
+def _write_atomic(path, text):
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}")
+    temporary.write_text(text)
+    os.replace(temporary, path)
+
+
+def _locked(folder):
+    """Whether a process on this computer holds the lock of the calibration; None if this file system has no locks."""
     path = Path(folder) / LOCK
     if not path.exists():
         return False
@@ -440,19 +564,202 @@ def is_running(folder):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return True
+        except OSError:
+            return None
         fcntl.flock(lock, fcntl.LOCK_UN)
         return False
 
 
-def _run_locked(folder, record, state, parallel, threads):
-    config = setup_config(folder, record)
+def _alive(pid):
+    try:
+        os.kill(int(pid), 0)
+    except (TypeError, ValueError, ProcessLookupError):
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+_SQUEUE_CACHE = {}  # {job: (time asked, listed)}, not to ask Slurm every few seconds
+_SQUEUE_SECONDS = 20
+
+
+def in_squeue(job):
+    """Whether Slurm still lists the job (queued or running); None if it cannot be asked here."""
+    if not job or shutil.which("squeue") is None:
+        return None
+    asked, listed = _SQUEUE_CACHE.get(str(job), (0, None))
+    if time.time() - asked < _SQUEUE_SECONDS:
+        return listed
+    try:
+        result = subprocess.run(["squeue", "-h", "-j", str(job), "-o", "%A"], capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode == 0:
+        listed = bool(result.stdout.strip())
+    elif "invalid job id" in result.stderr.lower():
+        listed = False  # Ended long enough ago that Slurm forgot it
+    else:
+        return None  # e.g. the controller did not answer: not a reason to take over
+    _SQUEUE_CACHE[str(job)] = (time.time(), listed)
+    return listed
+
+
+def read_cluster(folder):
+    """{host, folder, sent, jobs: [{id, submitted, state, listed}], refreshed} of a calibration sent to a cluster (the local
+    folder then mirrors the one there), or None."""
+    try:
+        cluster = json.loads((Path(folder) / CLUSTER).read_text())
+    except (OSError, ValueError):
+        return None
+    return cluster if isinstance(cluster, dict) else None
+
+
+def cluster_state(cluster):
+    """'running' or 'queued' if the last refresh saw a job of the calibration so in Slurm, else None."""
+    states = {job.get("state") for job in cluster.get("jobs", []) if job.get("listed")}
+    return "running" if states & {"RUNNING", "COMPLETING"} else "queued" if states else None
+
+
+def is_running(folder):
+    """Whether a process runs the calibration now, in this one or another, on this computer or another.
+
+    Sent to a cluster: whether the last refresh saw one of its jobs in Slurm, queued or running.
+
+    By its status file: on this computer, the process holds the lock of the calibration (or, without locks, is alive); on
+    another, Slurm still lists its job, or, where Slurm cannot be asked, it wrote the status less than STALE_SECONDS ago.
+    Without a status file (calibrations of an earlier version), by the lock."""
+    cluster = read_cluster(folder)
+    if cluster is not None:
+        return cluster_state(cluster) is not None
+    status = read_status(folder)
+    if status is None:
+        return _locked(folder) is True
+    if status.get("state") != "running":
+        return False
+    if status.get("host") == socket.gethostname():
+        if status.get("job") and status.get("job") == os.environ.get("SLURM_JOB_ID"):
+            return False  # This very job, started again (requeued): what it ran before has ended
+        held = _locked(folder)
+        return _alive(status.get("pid")) if held is None else held
+    listed = in_squeue(status.get("job"))
+    if listed is not None:
+        return listed
+    return _seconds_since(status.get("heartbeat")) < STALE_SECONDS
+
+
+def running_where(folder):
+    """e.g. 'job 123 on lrdn0042, last heard of 40 s ago, 17 of 100 trials completed', from its status file; for one sent
+    to a cluster, as of the last refresh."""
+    cluster = read_cluster(folder)
+    status = read_status(folder) or {}
+    if cluster is not None:
+        jobs = [job for job in cluster.get("jobs", []) if job.get("listed")]
+        parts = [f"on {cluster.get('host')}"] + [f"job {job['id']} {job.get('state', '').lower()}" for job in jobs]
+        if status.get("target"):
+            parts.append(f"{status.get('completed', 0)} of {status['target']} trials completed")
+        refreshed = _seconds_since(cluster.get("refreshed"))
+        if math.isfinite(refreshed):
+            heard = _seconds_since(status.get("heartbeat")) - refreshed
+            if jobs and math.isfinite(heard):
+                parts.append(f"last heard of {_clock(heard)} before")
+            parts.append(f"as of the refresh {_clock(refreshed)} ago")
+        return ", ".join(parts)
+    parts = [f"job {status['job']} on {status.get('host')}" if status.get("job") else f"process {status.get('pid')} on {status.get('host')}"]
+    since = _seconds_since(status.get("heartbeat"))
+    if math.isfinite(since):
+        parts.append(f"last heard of {_clock(since)} ago")
+    if status.get("target"):
+        parts.append(f"{status.get('completed', 0)} of {status['target']} trials completed")
+    return ", ".join(parts) if status else "in this or another process"
+
+
+def _clock(seconds):
+    seconds = max(0, int(seconds))
+    if seconds < 60:
+        return f"{seconds} s"
+    if seconds < 3600:
+        return f"{seconds // 60} min"
+    return f"{seconds // 3600} h {seconds % 3600 // 60:02d} min"
+
+
+class _Status:
+    """The status file of a calibration while this process runs it: written at the start, after every trial, every
+    HEARTBEAT_SECONDS from a thread of its own, and at the end; with a snapshot of the study (SNAPSHOT_SECONDS)."""
+
+    def __init__(self, folder, target, deadline):
+        self.folder, self.lock, self.snapshot_at = Path(folder), threading.Lock(), 0.0
+        self.fields = {"job": os.environ.get("SLURM_JOB_ID"), "host": socket.gethostname(), "pid": os.getpid(), "started": _now(),
+                       "heartbeat": None, "state": "running", "completed": 0, "failed": 0, "target": target,
+                       "deadline": datetime.datetime.fromtimestamp(deadline, datetime.timezone.utc).isoformat(timespec="seconds")
+                       if deadline else None}
+        self.stop = threading.Event()
+        self.thread = threading.Thread(target=self._beat, daemon=True)
+
+    def start(self, **fields):
+        self.write(**fields)
+        self.thread.start()
+
+    def _beat(self):
+        while not self.stop.wait(HEARTBEAT_SECONDS):
+            try:
+                self.write()
+            except OSError:
+                pass  # e.g. the file system briefly away: the next beat tries again
+
+    def write(self, snapshot=False, **fields):
+        with self.lock:
+            self.fields.update(fields, heartbeat=_now())
+            _write_atomic(self.folder / STATUS, json.dumps(self.fields, indent=1) + "\n")
+            if snapshot or time.time() - self.snapshot_at >= SNAPSHOT_SECONDS:
+                self.snapshot_at = time.time()
+                self._snapshot()
+
+    def _snapshot(self):
+        """A consistent copy of the study, which can be copied away while the trials write theirs (SQLite backup)."""
+        target = self.folder / f".{SNAPSHOT}.{os.getpid()}"
+        try:
+            source, copy = sqlite3.connect(self.folder / DATABASE, timeout=60), sqlite3.connect(target)
+            try:
+                source.backup(copy)
+            finally:
+                source.close()
+                copy.close()
+            os.replace(target, self.folder / SNAPSHOT)
+        except sqlite3.Error:
+            target.unlink(missing_ok=True)
+
+    def end(self, **fields):
+        self.stop.set()
+        if self.thread.is_alive():
+            self.thread.join()
+        self.write(snapshot=True, **fields)
+
+
+def _expected_seconds(study, guess):
+    """How long a trial takes: the 95th percentile of the completed ones once there are EXPECTED_FROM, else the longest of
+    them and the guess (None if there is neither)."""
+    seconds = [(trial.datetime_complete - trial.datetime_start).total_seconds()
+               for trial in study.get_trials(deepcopy=False, states=(optuna.trial.TrialState.COMPLETE,))
+               if trial.datetime_complete and trial.datetime_start]
+    if len(seconds) >= EXPECTED_FROM:
+        return float(np.percentile(seconds, 95))
+    known = [value for value in (*seconds, guess) if value]
+    return max(known) if known else None
+
+
+def _run_locked(folder, record, state, parallel, threads, deadline=None, trial_seconds=None, on_trial=None, mobile=None):
+    config = setup_config(folder, record, mobile)
     if threads:
         config = replace(config, run={**config.run, "threads": threads})
     config.validate()
+    objectives = resolved(folder, record)["objectives"]
     study = open_study(folder, record)
     for trial in study.get_trials(deepcopy=False, states=(optuna.trial.TrialState.RUNNING,)):
-        # Left running by a calibration that stopped without finishing it, e.g. the GUI closed: done again
+        # Left running by a process that ended without finishing it, e.g. the GUI closed or a job killed: done again, and
+        # not counted as a failure
         study._storage.set_trial_user_attr(trial._trial_id, "cancelled", True)
+        study._storage.set_trial_user_attr(trial._trial_id, "ended", "the process running it ended")
         study._storage.set_trial_state_values(trial._trial_id, optuna.trial.TrialState.FAIL)
     queued = False
     if record.get("temperature") and not study.get_trials(deepcopy=False):
@@ -462,10 +769,14 @@ def _run_locked(folder, record, state, parallel, threads):
         if start is not None:
             study.enqueue_trial(start, user_attrs={"baseline": True})
             queued = True
-    completed, failed = counts(study)
-    todo = max(record["n_trials"] - completed - failed, 0)
-    state.begin(record["n_trials"], completed + failed)
+    target = record["n_trials"]
+    completed, failed_before = counts(study)
+    crash_limit = max(FAIL_FAST, CRASH_RATE * target)
+    state.begin(target, completed)
     write_calibration(folder, {**record, "status": "running"})
+    status = _Status(folder, target, deadline)
+    status.start(completed=completed, failed=failed_before)
+    at_deadline = threading.Event()
 
     def record_model(binary):
         with state.lock:
@@ -501,20 +812,36 @@ def _run_locked(folder, record, state, parallel, threads):
                 return result.run_dir
         raise TrialFailed(result.log_tail(15))
 
+    def not_started(trial, why):
+        trial.set_user_attr("cancelled", True)
+        trial.set_user_attr("ended", why)
+        study.stop()
+        raise RunCancelled(why)
+
     def objective(trial):
         if state.cancelled:
             trial.set_user_attr("cancelled", True)
             raise RunCancelled("Cancelled")
+        if at_deadline.is_set():
+            not_started(trial, "not started: the deadline was near")
+        others = study.get_trials(deepcopy=False, states=(optuna.trial.TrialState.COMPLETE, optuna.trial.TrialState.RUNNING))
+        if len(others) - 1 >= target:  # Without this one: enough trials have completed or are running
+            not_started(trial, "not started: enough trials")
+        if deadline is not None:
+            expected = _expected_seconds(study, trial_seconds)
+            if time.time() + (expected or 0) > deadline:
+                at_deadline.set()
+                not_started(trial, "not started: the deadline was near")
         values, offsets = suggest(trial, record)
         here = trial_folder(folder, trial.number)
         here.mkdir(parents=True, exist_ok=True)
         inputs = dict(config.inputs)
         if offsets:
             temperature = record["temperature"]
-            target = here / "t2m.nc"
+            target_file = here / "t2m.nc"
             with NETCDF_LOCK:
-                offset_temperature(config.inputs["temp_file"], target, temperature["cells"], offsets)
-            inputs["temp_file"] = str(target)
+                offset_temperature(config.inputs["temp_file"], _touched(target_file), temperature["cells"], offsets)
+            inputs["temp_file"] = str(target_file)
             for key, offset in offsets.items():
                 trial.set_user_attr(key, offset)
         run_config = replace(config, runs_dir=here, inputs=inputs,
@@ -524,9 +851,11 @@ def _run_locked(folder, record, state, parallel, threads):
             run_dirs = [run_seed(trial, run_config, seed) for seed in record["seeds"]]
             with NETCDF_LOCK:
                 window = record.get("validation")
-                results = evaluate(record["objectives"], run_dirs, window, "calibration" if window else None)
+                kept = here / SERIES
+                results = evaluate(objectives, run_dirs, window, "calibration" if window else None, keep=kept)
                 if window:  # Scored on the validation window too, kept with the trial; not optimised
-                    trial.set_user_attr("validation", evaluate(record["objectives"], run_dirs, window, "validation", strict=False))
+                    trial.set_user_attr("validation", evaluate(objectives, run_dirs, window, "validation", strict=False, keep=kept))
+                    keep_series(objectives, run_dirs, kept, window, None)  # The whole period too, for the plots
         except RunCancelled:
             trial.set_user_attr("cancelled", True)
             raise
@@ -536,37 +865,63 @@ def _run_locked(folder, record, state, parallel, threads):
             with state.lock:
                 state.failure = state.failure or str(error)
                 systematic = state.failed >= FAIL_FAST and state.done == state.done_before
-            if systematic:
+                crashing = failed_before + state.failed > crash_limit
+            if systematic or crashing:
                 state.update(message="stopped")
                 state.cancel()
             raise TrialFailed(str(error)) from None
         state.count("done")
         return results
 
-    def stop_when_cancelled(study, _trial):
-        if state.cancelled:
+    def after_trial(study, trial):
+        done, failed = counts(study)
+        try:
+            status.write(completed=done, failed=failed)
+        except OSError:
+            pass
+        if on_trial is not None:
+            try:
+                on_trial(study, trial)
+            except Exception:  # noqa: BLE001 - a report must not stop the calibration
+                pass
+        enough = len(study.get_trials(deepcopy=False, states=(optuna.trial.TrialState.COMPLETE, optuna.trial.TrialState.RUNNING)))
+        if state.cancelled or at_deadline.is_set() or enough >= target:
             study.stop()
 
     state.update(message="Running")
-    if todo and queued:
-        # The queued trial on its own: Optuna takes a queued trial with a row lock, which SQLite does not have, so trials
-        # run side by side could both take it (it is the run that builds the model, which the others would wait for anyway)
-        study.optimize(objective, n_trials=1, n_jobs=1, catch=(TrialFailed, RunCancelled), callbacks=[stop_when_cancelled],
-                       gc_after_trial=False)
-        todo -= 1
-    if todo and not state.cancelled:
-        study.optimize(objective, n_trials=todo, n_jobs=max(1, parallel), catch=(TrialFailed, RunCancelled),
-                       callbacks=[stop_when_cancelled], gc_after_trial=False)
-    completed, failed = counts(study)
-    if state.message == "stopped":
-        status = "stopped"
-    elif completed + failed >= record["n_trials"]:
-        status = "finished"
-    else:
-        status = "cancelled" if state.cancelled else "incomplete"
-    record = {**read_calibration(folder), "status": status, "completed": completed, "failed": failed, "failure": state.failure}
-    write_calibration(folder, record)
-    state.update(message=status)
+    catch = (TrialFailed, RunCancelled)
+    try:
+        while not (state.cancelled or at_deadline.is_set()):
+            completed, _ = counts(study)
+            if completed >= target:
+                break
+            if queued:
+                # The queued trial on its own: Optuna takes a queued trial with a row lock, which SQLite does not have, so
+                # trials run side by side could both take it (it is the run that builds the model, which the others would
+                # wait for anyway)
+                study.optimize(objective, n_trials=1, n_jobs=1, catch=catch, callbacks=[after_trial], gc_after_trial=False)
+                queued = False
+                continue
+            before = len(study.get_trials(deepcopy=False))
+            # Until enough have completed or run; then once more if some of those running failed
+            study.optimize(objective, n_trials=None, n_jobs=max(1, parallel), catch=catch, callbacks=[after_trial],
+                           gc_after_trial=False)
+            if len(study.get_trials(deepcopy=False)) == before:
+                break
+    finally:
+        completed, failed = counts(study)
+        if state.message == "stopped":
+            outcome = "stopped"
+        elif completed >= target:
+            outcome = "finished"
+        elif at_deadline.is_set():
+            outcome = "stopped at deadline"
+        else:
+            outcome = "cancelled" if state.cancelled else "incomplete"
+        record = {**read_calibration(folder), "status": outcome, "completed": completed, "failed": failed, "failure": state.failure}
+        write_calibration(folder, record)
+        status.end(state=outcome, completed=completed, failed=failed)
+    state.update(message=outcome)
     return record
 
 
@@ -591,11 +946,15 @@ def trial_comparison(folder, number, index=0, part=None):
     as the objective says, and the observations, paired as for the metrics. With a validation window, part "calibration"
     or "validation" for one part of the period, None for the whole period the model and the data share."""
     record = read_calibration(folder)
-    objective = record["objectives"][index]
+    objective = resolved(folder, record)["objectives"][index]
     here = trial_folder(folder, number)
     run_dirs = [here / f"seed_{seed}" for seed in record["seeds"]]
+    files = _series_files(here / SERIES, index, part if record.get("validation") else None)
     with NETCDF_LOCK:
-        model, data = objective_series(objective, run_dirs, record.get("validation"), part)
+        if all(path.is_file() for path in files):  # Kept with the trial: drawn without its output
+            model, data = (read_observations(path) for path in files)
+        else:
+            model, data = objective_series(objective, run_dirs, record.get("validation"), part)
     model_values, data_values, labels = pair(model, data)
     return model, data, model_values, data_values, labels
 
@@ -609,13 +968,16 @@ def status_of(folder, record):
     """The status of a calibration as it is now: 'interrupted' for one recorded as running that no process runs any more,
     e.g. after the GUI was closed or crashed."""
     status = record.get("status", "?")
+    cluster = read_cluster(folder)
+    if cluster is not None:
+        return cluster_state(cluster) or ("interrupted" if status == "running" else status)
     return "interrupted" if status == "running" and not is_running(folder) else status
 
 
 def calibration_label(folder, record):
-    """e.g. 'dz_two_cells (finished, 100 of 100 trials, 2 objectives)'; '..., earlier version' if it cannot be resumed."""
-    done = record.get("completed", 0) + record.get("failed", 0)
-    return (f"{Path(folder).name} ({status_of(folder, record)}, {done} of {record['n_trials']} trials, "
+    """e.g. 'dz_two_cells (finished, 100 of 100 trials completed, 2 objectives)'; '..., earlier version' if it cannot be resumed."""
+    done = record.get("completed", 0)
+    return (f"{Path(folder).name} ({status_of(folder, record)}, {done} of {record['n_trials']} trials completed, "
             f"{len(record['objectives'])} objective{'s' if len(record['objectives']) > 1 else ''}"
             f"{'' if resumable(record) else ', earlier version: cannot be resumed'})")
 
