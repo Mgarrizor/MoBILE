@@ -52,6 +52,15 @@ def main():
     app.add_argument("--port", type=int, default=8000, help="first port to try (default: %(default)s)")
     app.add_argument("--no-browser", action="store_true", help="do not open a browser window")
 
+    calibrate = commands.add_parser("calibrate", help="run or continue a calibration made in the GUI, e.g. in a batch job")
+    calibrate.add_argument("folder", help="the folder of the calibration")
+    calibrate.add_argument("--parallel", type=int, help="runs at the same time (default: the cores this process may use, "
+                           "divided by the threads per run of the calibration)")
+    calibrate.add_argument("--trial-minutes", type=float, help="how long a trial takes, a guess used before 10 have completed "
+                           "to decide whether one can end before the deadline")
+    calibrate.add_argument("--end-time", help="stop before this time, e.g. 2026-11-12T08:00 (default: the end of the Slurm job)")
+    calibrate.add_argument("--mobile", help="the MoBILE clone (default: that of the calibration if it exists, else $MOBILE)")
+
     args = parser.parse_args()
 
     if args.command in (None, "help"):
@@ -71,6 +80,10 @@ def main():
             config = Config.load(args.config) if args.config else load_setup(os.environ.get("MOBILE")) or Config.load()
             launch(config, port=args.port, browser=not args.no_browser)
             return
+        if args.command == "calibrate":
+            from .calibration_cli import calibrate as run_it
+
+            sys.exit(run_it(args.folder, args.parallel, args.trial_minutes, args.end_time, args.mobile))
         config = Config.load(args.config)
         _run(args, config)
     except ConfigError as error:

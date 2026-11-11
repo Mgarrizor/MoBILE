@@ -23,6 +23,21 @@ IN A TERMINAL
                              Write a copy of the example configuration to edit:
                              driving data and run settings. Parameters and
                              outputs are then set in the GUI.
+  mobile calibrate <folder>  Run or continue a calibration made in the GUI,
+                             without it, e.g. in a batch job on a cluster:
+                             one line per trial, a summary at the end.
+      --parallel 16             Runs at the same time (default: the cores
+                                this process may use / threads per run)
+      --end-time 2026-11-12T08:00
+                                Start no trial that cannot end 2 min before
+                                then (default: the end of the Slurm job)
+      --trial-minutes 20        How long a trial takes, until 10 have
+      --mobile /path/to/MoBILE  The clone (default: the calibration's, else
+                                $MOBILE)
+                             Exit 0 when done; 3 when stopped before the
+                             deadline or by SIGTERM/Ctrl+C (run it again to go
+                             on); 1 on failures or errors. In a job script,
+                             start it with `exec` so that it gets the signal.
   mobile help                This text.
 
   Run these from a folder OUTSIDE the MoBILE repository, never inside it: the

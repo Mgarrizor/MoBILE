@@ -236,6 +236,11 @@ class TestConfig(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "not available for this model"):
             self.config.with_params(mu_B=0.3)
 
+    def test_threads_at_most_32(self):
+        Config.load(CONFIG).with_run(threads=32).validate()
+        with self.assertRaisesRegex(ConfigError, "threads must be at most 32"):
+            Config.load(CONFIG).with_run(threads=33).validate()
+
     def test_spin_up_needs_a_year(self):
         # mo_spinup.f90 stops with less than 365 simulated days (ndays_year): 364 must be refused, 365 accepted
         self.assertEqual(SPIN_UP_DAYS, 365)
@@ -2486,6 +2491,11 @@ if [ -z "$prebuilt" ]; then
 fi
 echo '================= Running MoBILE ================='
 [ -n "$FAKE_FAIL" ] && { echo ' More agents than people! --> STOP'; exit 0; }
+if [ -n "$FAKE_COUNTER" ]; then  # Runs counted from 1: those in FAKE_FAIL_RUNS fail, and all from FAKE_FAIL_FROM on
+  count=$(( $(cat "$FAKE_COUNTER" 2>/dev/null || echo 0) + 1 )); echo $count > "$FAKE_COUNTER"
+  case " $FAKE_FAIL_RUNS " in *" $count "*) echo ' More agents than people! --> STOP'; exit 0 ;; esac
+  [ -n "$FAKE_FAIL_FROM" ] && [ $count -ge $FAKE_FAIL_FROM ] && { echo ' More agents than people! --> STOP'; exit 0; }
+fi
 sleep ${FAKE_SLEEP:-0}
 "$FAKE_PYTHON" "$FAKE_TOY" "$@"
 """
@@ -2681,7 +2691,7 @@ sleep ${FAKE_SLEEP:-0}
             self.assertIn("at most 1 cells", offset_cells(self.config))
         folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=6, name="shown")
         record = run_calibration(folder, StudyState(), parallel=2)
-        self.assertEqual(calibration_label(folder, record), "shown (finished, 6 of 6 trials, 2 objectives)")
+        self.assertEqual(calibration_label(folder, record), "shown (finished, 6 of 6 trials completed, 2 objectives)")
         figure = calibration_history_figure(trials_table(folder), read_calibration(folder)["objectives"])
         self.assertEqual([len(trace.x) for trace in figure.data], [6, 6, 6, 6])  # Trials and best so far, for each objective
         # The first trial is the model as it is: no offset, both cells at the temperatures of the file
@@ -2785,6 +2795,169 @@ sleep ${FAKE_SLEEP:-0}
         self.assertEqual((record["status"], status_of(killed, record)), ("running", "interrupted"))
         self.assertIn("(interrupted,", calibration_label(killed, record))
         self.assertEqual(run_calibration(killed, StudyState(), parallel=2)["status"], "finished")  # And it goes on
+
+    def test_status_file_snapshot_and_kept_series(self):
+        import optuna
+
+        from mobile.calibration_engine import (SERIES, SNAPSHOT, STATUS, create_calibration, objective_series, read_status, resolved,
+                                               run_calibration, trial_comparison, trial_folder)
+        from mobile.sensitivity_runs import StudyState
+
+        window = ("2002-07-01", "2002-12-31")
+        objectives = [{**objective, "data_raw": str(self.data), "data_steps": []} for objective in self.objectives()]
+        folder = create_calibration(self.config, objectives, temperature=self.temperature(), n_trials=4, name="status",
+                                    validation=window)
+        self.assertIsNone(read_status(folder))  # Never run
+        record = run_calibration(folder, StudyState(), parallel=2)
+        status = read_status(folder)
+        self.assertEqual((status["state"], status["completed"], status["failed"], status["target"]), ("finished", 4, 0, 4))
+        self.assertEqual((status["host"], status["pid"]), (socket.gethostname(), os.getpid()))
+        self.assertFalse(list(Path(folder).glob(f".{STATUS}*")))  # Written whole: no temporary file left
+        # The snapshot is a study of its own, with every trial
+        snapshot = optuna.load_study(study_name="calibration", storage=f"sqlite:///{Path(folder) / SNAPSHOT}")
+        self.assertEqual(sum(t.state == optuna.trial.TrialState.COMPLETE for t in snapshot.trials), 4)
+        # The series compared are kept with each trial, for the whole period and each part: the same as from the output
+        objectives = resolved(folder, record)["objectives"]
+        here = trial_folder(folder, 1)
+        run_dirs = [here / f"seed_{seed}" for seed in record["seeds"]]
+        self.assertEqual(len(list((here / SERIES).glob("*.nc"))), 2 * 2 * 3)  # 2 objectives x (model, data) x 3 parts
+        for part in (None, "calibration", "validation"):
+            model, data = objective_series(objectives[0], run_dirs, window, part)
+            shutil.rmtree(run_dirs[0]) if part == "validation" else None  # The last without the output: from what was kept
+            kept = trial_comparison(folder, 1, 0, part)
+            np.testing.assert_allclose(kept[0].values, model.values)
+            np.testing.assert_allclose(kept[1].values, data.values)
+            self.assertTrue(kept[0].index.equals(model.index))
+
+    def test_running_elsewhere_and_taking_over(self):
+        from mobile.calibration_engine import (STATUS, CalibrationError, _SQUEUE_CACHE, counts, create_calibration, in_squeue,
+                                               is_running, open_study, read_calibration, run_calibration, status_of)
+        from mobile.sensitivity_runs import StudyState
+
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=3, name="elsewhere")
+        study = open_study(folder, read_calibration(folder))
+        left = study.ask()  # A trial the other process was running when it ended
+        write_calibration_status = lambda **fields: (Path(folder) / STATUS).write_text(json.dumps(
+            {"host": "lrdn0042", "pid": 1, "state": "running", "target": 3, "completed": 0, **fields}))
+        now = datetime.datetime.now(datetime.timezone.utc)
+        # On another computer, without Slurm to ask: by the heartbeat
+        write_calibration_status(heartbeat=now.isoformat())
+        self.assertTrue(is_running(folder))
+        with self.assertRaisesRegex(CalibrationError, "running already: process 1 on lrdn0042, last heard of"):
+            run_calibration(folder, StudyState())
+        write_calibration_status(heartbeat=(now - datetime.timedelta(minutes=10)).isoformat())
+        self.assertFalse(is_running(folder))
+        self.assertEqual(status_of(folder, {"status": "running"}), "interrupted")
+        # With Slurm: by whether it still lists the job, whatever the heartbeat
+        bin_dir = self.root / "slurm"
+        bin_dir.mkdir()
+        (bin_dir / "squeue").write_text('#!/bin/bash\nfor a in "$@"; do [ "$a" = 77 ] && { echo 77; exit 0; }; done\n'
+                                        'echo "slurm_load_jobs error: Invalid job id specified" >&2; exit 1\n')
+        (bin_dir / "squeue").chmod(0o755)
+        with mock.patch.dict(os.environ, {"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}):
+            _SQUEUE_CACHE.clear()
+            self.assertEqual((in_squeue("77"), in_squeue("78")), (True, False))
+            write_calibration_status(job="77", heartbeat=(now - datetime.timedelta(hours=2)).isoformat())
+            self.assertTrue(is_running(folder))  # Listed: running, though silent for long (e.g. a slow file system)
+            write_calibration_status(job="78", heartbeat=now.isoformat())
+            self.assertFalse(is_running(folder))  # Not listed: ended, though heard of just now
+            record = run_calibration(folder, StudyState(), parallel=1)  # So this one takes over
+        self.assertEqual((record["status"], record["completed"], record["failed"]), ("finished", 3, 0))
+        ended = open_study(folder, record).trials[left.number]
+        self.assertEqual((ended.state.name, ended.user_attrs.get("ended")), ("FAIL", "the process running it ended"))
+        self.assertEqual(counts(open_study(folder, record)), (3, 0))  # Not a failure
+
+    def test_failed_trials_are_made_up_for(self):
+        from mobile.calibration_engine import create_calibration, run_calibration
+        from mobile.sensitivity_runs import StudyState
+
+        # One run at a time, so the runs come in order: the second trial fails twice (its two attempts), the others not
+        counter = self.root / "count.txt"
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=5, name="made_up")
+        with mock.patch.dict(os.environ, {"FAKE_COUNTER": str(counter), "FAKE_FAIL_RUNS": "2 3"}):
+            record = run_calibration(folder, StudyState(), parallel=1)
+        self.assertEqual((record["status"], record["completed"], record["failed"]), ("finished", 5, 1))
+        # Too many failures after a success (more than CRASH_RATE of the trials, at least FAIL_FAST): stopped
+        counter.unlink()
+        crashing = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=10, name="crashing")
+        with mock.patch.dict(os.environ, {"FAKE_COUNTER": str(counter), "FAKE_FAIL_FROM": "2"}):
+            record = run_calibration(crashing, StudyState(), parallel=1)
+        self.assertEqual((record["status"], record["completed"], record["failed"]), ("stopped", 1, 4))
+
+    def test_deadline(self):
+        from mobile.calibration_engine import create_calibration, read_status, run_calibration
+        from mobile.sensitivity_runs import StudyState
+
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=50, name="deadline")
+        # A guess of how long a trial takes that does not fit: none starts
+        record = run_calibration(folder, StudyState(), parallel=2, deadline=time.time() + 60, trial_seconds=120)
+        self.assertEqual((record["status"], record["completed"], record["failed"]), ("stopped at deadline", 0, 0))
+        self.assertEqual(read_status(folder)["state"], "stopped at deadline")
+        # Then from the time the trials take: as many as fit, all ended by the deadline
+        with mock.patch.dict(os.environ, {"FAKE_SLEEP": "0.3"}):
+            deadline = time.time() + 4
+            record = run_calibration(folder, StudyState(), parallel=2, deadline=deadline)
+            ended = time.time()
+        self.assertEqual(record["status"], "stopped at deadline")
+        self.assertTrue(2 <= record["completed"] < 50, record["completed"])
+        self.assertLess(ended, deadline + 0.5)
+        record = run_calibration(folder, StudyState(), parallel=4)  # Without one: to the end
+        self.assertEqual((record["status"], record["completed"]), ("finished", 50))
+
+    def test_command_line(self):
+        import signal
+        import subprocess
+
+        from mobile.calibration_engine import create_calibration, read_calibration, read_status
+
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=8, name="batch")
+        command = [sys.executable, "-m", "mobile", "calibrate", str(folder)]
+        environment = {**os.environ, "PYTHONPATH": str(Path(MOBILE) / "python")}
+        too_many = subprocess.run([*command, "--parallel", "100000"], env=environment, capture_output=True, text=True, timeout=60)
+        self.assertEqual(too_many.returncode, 1)
+        self.assertIn("Use --parallel", too_many.stdout)
+        # Stopped by SIGTERM, as by Slurm before the end of a job: the runs cancelled, resumable, exit 3
+        job = subprocess.Popen([*command, "--parallel", "1"], env={**environment, "FAKE_SLEEP": "0.5"}, stdout=subprocess.PIPE,
+                               stderr=subprocess.STDOUT, text=True)
+        for _ in range(300):
+            if (read_status(folder) or {}).get("completed", 0) >= 1:
+                break
+            time.sleep(0.1)
+        job.send_signal(signal.SIGTERM)
+        output = job.communicate(timeout=60)[0]
+        self.assertEqual(job.returncode, 3, output)
+        self.assertRegex(output, r"trial 0 completed in \dm\d\ds: timing [-0-9.]+, swings [-0-9.e]+ \| Pareto front 1 trials \| 1 of 8 completed")
+        self.assertIn("cancelled (SIGTERM)", output)
+        self.assertEqual((read_calibration(folder)["status"], read_status(folder)["state"]), ("cancelled", "cancelled"))
+        # The same command again goes on to the end: exit 0
+        done = subprocess.run([*command, "--parallel", "2"], env=environment, capture_output=True, text=True, timeout=300)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("finished", done.stdout)
+        self.assertEqual(read_calibration(folder)["completed"], 8)
+
+    def test_moved_folder(self):
+        # As sent to a cluster: the folder elsewhere, its paths relative to it, the observations in it, MoBILE from $MOBILE
+        from mobile.calibration_engine import create_calibration, read_calibration, run_calibration, write_calibration
+        from mobile.sensitivity_runs import StudyState
+
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=2, name="moved")
+        moved = self.root / "elsewhere" / "moved"
+        shutil.copytree(folder, moved)
+        (moved / "inputs").mkdir(exist_ok=True)
+        (moved / "data").mkdir()
+        record = read_calibration(moved)
+        for key in ("rain_file", "temp_file", "pop_file"):
+            shutil.copy(record["run_inputs"][key], moved / "inputs" / Path(record["run_inputs"][key]).name)
+            record["run_inputs"][key] = record["setup"]["inputs"][key] = f"inputs/{Path(record['run_inputs'][key]).name}"
+        shutil.copy(self.data, moved / "data" / "cases.nc")
+        record["objectives"] = [{**objective, "data": "data/cases.nc"} for objective in record["objectives"]]
+        record["setup"]["mobile"] = "/nowhere/MoBILE"
+        write_calibration(moved, record)
+        shutil.rmtree(folder)
+        os.rename(self.root / "temperature.nc", self.root / "temperature_gone.nc")  # Not read from where it was
+        with mock.patch.dict(os.environ, {"MOBILE": str(self.config.mobile)}):
+            result = run_calibration(moved, StudyState(), parallel=1)
+        self.assertEqual((result["status"], result["completed"]), ("finished", 2))
 
     def test_regions_share_an_offset(self):
         from mobile.calibration_engine import create_calibration, read_calibration, region_mean, run_calibration, trials_table

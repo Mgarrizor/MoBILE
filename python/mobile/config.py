@@ -31,6 +31,7 @@ OPTIONAL_DEFAULTS = {"counterfactual": 0}
 
 # character(len=200) in mo_control.f90; a namelist read truncates longer paths silently
 MAX_PATH_LENGTH = 200
+MAX_THREADS = 32  # The model's random-number streams allow no more threads per run
 
 
 def example_config():
@@ -176,6 +177,9 @@ class Config:
         for key, value in self.run.items():
             if not isinstance(value, int) or isinstance(value, bool):
                 errors.append(f"run: {key} must be an integer, got {value!r}")
+        threads = self.run.get("threads")
+        if isinstance(threads, int) and not isinstance(threads, bool) and threads > MAX_THREADS:
+            errors.append(f"run: threads must be at most {MAX_THREADS}, got {threads}: the model's random numbers allow no more")
 
         errors += region_problems(self.region)
         problems = period_problems(self.period)

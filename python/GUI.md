@@ -357,7 +357,17 @@ together (the Pareto front):
   also in a new GUI and after the GUI was closed or crashed: it is then listed as **interrupted** (recorded as running,
   but no process runs it any more). A calibration runs in one process at a time: Resume refuses one that another GUI or
   script is running. A resumed calibration keeps its threads per run, and runs as many at a time as fit in the cores
-  with them.
+  with them. It goes on until as many trials have **completed** as asked for: a trial that fails is made up for by
+  another. It stops if its first 3 trials all fail, or more than one in ten of the trials asked for (at least 3).
+  Trials left running by a process that ended (the GUI closed, a job killed) are not counted as failures.
+- **Without the GUI**, e.g. in a batch job on a cluster: `mobile calibrate <folder>` runs or continues it, one line per
+  trial, and stops cleanly before the end of a Slurm job (no trial is started that would not end 2 minutes before it,
+  judged by how long trials take) or on SIGTERM / Ctrl+C; run the same command again to go on (`mobile help` has the
+  options and exit codes). The process running a calibration writes `status.json` in its folder, at least every
+  minute: a calibration run by another process, on this computer or another, is shown as running ("by another
+  process: job 123 on lrdn0042, last heard of 40 s ago, 17 of 100 trials completed") and drawn again as it goes on.
+  On another computer it counts as running while Slurm lists its job, or, where Slurm cannot be asked, while its
+  status is less than 5 minutes old.
   The calibration running, or the one chosen, is drawn below: each objective trial by trial with the best so far, the
   Pareto front with the offsets and parameters of each trial and the mean temperatures they give, and with a validation
   window its scores on it, in grey (sorted by trial, by an objective or by a validation score, high to low or low to
@@ -376,7 +386,9 @@ together (the Pareto front):
   **parameter importances** (PED-ANOVA, turned for objectives that are maximised), **slice**, **parallel
   coordinates**, **contour**, **rank**, the **empirical distribution** of the objective, and the **timeline** of the
   trials. Optuna's figures show what it samples, dT₁ and the gaps; the offsets of the cells follow from them. Its folder, `calibration/<name>/` in the
-  results folder, holds `calibration.json`, the Optuna study (`optuna.db`), the model (`bin/`) and the trials. A
+  results folder, holds `calibration.json`, the Optuna study (`optuna.db`, and `optuna.snapshot.db`, a copy that can be
+  copied while it runs), `status.json`, the model (`bin/`) and the trials, each with the series its objectives compared
+  (`series/`), from which its plots are drawn. A
   calibration made by an earlier version of the engine is listed with "earlier version: cannot be resumed": it can be
   looked at, not run further.
 

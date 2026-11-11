@@ -17,7 +17,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from .calibration_engine import (
     OLD_CALIBRATION, SAMPLER_LINKS, SAMPLERS, CalibrationError, best_trials, calibration_label, calibrations_dir, create_calibration,
-    is_running, list_calibrations, read_calibration, resumable, run_calibration, status_of, trial_comparison, trial_folder, trials_table,
+    is_running, list_calibrations, read_calibration, resumable, run_calibration, running_where, status_of, trial_comparison, trial_folder, trials_table,
 )
 from .calibration_data import DataError
 from .calibration_model import DRIVER_PERIODS, DRIVERS, driver_panel
@@ -39,6 +39,7 @@ DRIVER_FLAGS = ("out_vect", "out_vecinfc")  # Written by every run of a calibrat
 MAX_CELLS = 20  # Temperature offsets are calibrated for at most this many cells or regions
 MAX_SIMULATED = 5000  # And the cells of the setup, grouped in regions or not, at most this many
 REFRESH_SECONDS = 3  # How often the progress of a calibration is drawn again while it runs
+ELSEWHERE_SECONDS = 30  # How often the list of calibrations is read again while one runs in another process
 
 
 def calibration_run_card():
@@ -639,7 +640,7 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
             ui.notification_show("This calibration has finished: all its trials are done.", type="message")
             return
         if is_running(folder):
-            ui.notification_show("This calibration is running already, in another GUI or script: wait for it, or stop it there.",
+            ui.notification_show(f"This calibration is running already ({running_where(folder)}): wait for it, or stop it there.",
                                  type="warning")
             return
         # Its runs keep the threads it was made with: as many at a time as fit in the cores with them
@@ -692,8 +693,8 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         if record["status"] == "finished":
             return ui.p(f"Calibration finished: {trials}.", class_="mt-3 mb-0")
         if record["status"] == "stopped":
-            return ui.card(ui.p(f"Calibration stopped: its first {record['failed']} trials all failed, so the others would fail too. "
-                                "The end of the log of a run:", class_="mb-1"),
+            return ui.card(ui.p(f"Calibration stopped: {record['failed']} trials failed, too many to go on (the first ones all, or "
+                                "more than one in ten). The end of the log of a run:", class_="mb-1"),
                            ui.tags.pre(record.get("failure") or "", class_="small mb-1"),
                            ui.p("Fix the cause and press Resume.", class_="mb-0"), class_="border-danger mt-3")
         return ui.p(f"Calibration {record['status']}: {trials}. Choose it under Calibrations and press Resume to go on.", class_="mt-3 mb-0")
@@ -702,6 +703,8 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
     def refresh_calibrations():
         changed()
         found = list_calibrations(setup().runs_dir)
+        if any(record.get("status") == "running" and is_running(folder) for folder, record in found.items()):
+            reactive.invalidate_later(ELSEWHERE_SECONDS)  # Run by another process, e.g. a batch job: its label changes
         with reactive.isolate():
             selected = to_select() or (input.cal_previous() if input.cal_previous() in found else next(iter(found), None))
             to_select.set(None)
@@ -734,9 +737,13 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         if record.get("validation"):
             first, last = record["validation"]
             lines.append(f"Validation window {first} to {last}: left out of the calibration, each trial scored on it too")
-        lines.insert(0, f"Status: {status_of(folder, record)}"
-                     + (" (no process runs it any more, e.g. the GUI was closed: Resume goes on with it)"
-                        if status_of(folder, record) == "interrupted" else ""))
+        status = status_of(folder, record)
+        if status == "running" and not (running() and running_folder() == folder):
+            reactive.invalidate_later(REFRESH_SECONDS)  # Run by another process: drawn again as it goes on
+        lines.insert(0, f"Status: {status}"
+                     + (" (no process runs it any more, e.g. the GUI was closed or the job ended: Resume goes on with it)"
+                        if status == "interrupted" else f" by another process: {running_where(folder)}"
+                        if status == "running" and not (running() and running_folder() == folder) else ""))
         lines.append(f"Sampler {record['sampler']['name']}, {record['n_trials']} trials, seeds {record['seeds']}, "
                      f"{record['setup']['run']['threads']} thread{'s' if record['setup']['run']['threads'] > 1 else ''} per run")
         return ui.div(ui.tags.ul(*[ui.tags.li(line) for line in lines], class_="mb-1"), ui.p(f"Folder: {folder}", class_="mb-0"),
@@ -746,7 +753,7 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
     def progress():
         """(record, rows, front) of the calibration shown, read again every few seconds while it runs."""
         folder = shown()
-        if running():
+        if running() or (folder and is_running(folder)):  # Here, or by another process, e.g. a batch job
             reactive.invalidate_later(REFRESH_SECONDS)
         changed()
         if not folder:
