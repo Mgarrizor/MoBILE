@@ -4,6 +4,7 @@ import argparse
 import os
 import shutil
 import sys
+from pathlib import Path
 
 from .config import Config, ConfigError, example_config
 from .help import TEXT
@@ -71,7 +72,9 @@ def main():
         print(f"Wrote {args.destination}")
         return
 
-    _exit_if_tools_missing()
+    # A calibration whose model was built already (e.g. by an earlier job) runs it as it is: no compiler needed
+    if not (args.command == "calibrate" and (Path(args.folder) / "bin" / "mobile.out").is_file()):
+        _exit_if_tools_missing()
     try:
         if args.command in ("gui", "app"):
             from .app import launch

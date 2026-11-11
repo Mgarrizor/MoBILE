@@ -2912,7 +2912,12 @@ sleep ${FAKE_SLEEP:-0}
 
         folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=8, name="batch")
         command = [sys.executable, "-m", "mobile", "calibrate", str(folder)]
-        environment = {**os.environ, "PYTHONPATH": str(Path(MOBILE) / "python")}
+        # No compiler (as on CI): refused while the model is still to be built
+        bare = {**os.environ, "PYTHONPATH": str(Path(MOBILE) / "python"), "PATH": "/usr/bin:/bin"}
+        refused = subprocess.run(command, env=bare, capture_output=True, text=True, timeout=60)
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn("needed to compile MoBILE: gfortran", refused.stderr)
+        environment = {**bare, "PATH": f"{self.stand_in_compilers()}{os.pathsep}/usr/bin:/bin"}
         too_many = subprocess.run([*command, "--parallel", "100000"], env=environment, capture_output=True, text=True, timeout=60)
         self.assertEqual(too_many.returncode, 1)
         self.assertIn("Use --parallel", too_many.stdout)
@@ -2934,6 +2939,20 @@ sleep ${FAKE_SLEEP:-0}
         self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
         self.assertIn("finished", done.stdout)
         self.assertEqual(read_calibration(folder)["completed"], 8)
+        # Its model built and kept, a later run of it (e.g. another job) needs no compiler
+        self.assertTrue((Path(folder) / "bin" / "mobile.out").is_file())
+        again = subprocess.run(command, env=bare, capture_output=True, text=True, timeout=60)
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertIn("8 of 8 trials completed so far", again.stdout)
+
+    def stand_in_compilers(self):
+        """A folder of stand-ins for the tools `mobile` looks for before it builds: the stand-in mobile.sh builds nothing."""
+        folder = self.root / "compilers"
+        folder.mkdir(exist_ok=True)
+        for name in ("make", "gfortran", "nf-config", "nc-config"):
+            (folder / name).write_text("#!/bin/bash\n")
+            (folder / name).chmod(0o755)
+        return folder
 
     def test_moved_folder(self):
         # As sent to a cluster: the folder elsewhere, its paths relative to it, the observations in it, MoBILE from $MOBILE
@@ -2997,6 +3016,8 @@ echo "$@" >> "$HOME/scancel.txt"
         local_bin, remote_bin = self.root / "local_bin", self.root / "remote_bin"
         for folder in (home, local_bin, remote_bin):
             folder.mkdir(exist_ok=True)
+        for tool in self.stand_in_compilers().iterdir():  # Those of the cluster, for `mobile calibrate` there
+            shutil.copy(tool, remote_bin / tool.name)
         scripts = {local_bin / "ssh": self.FAKE_SSH, **{remote_bin / name: text for name, text in self.FAKE_SLURM.items()},
                    remote_bin / "mobile": f'#!/bin/bash\nPYTHONPATH={Path(MOBILE) / "python"} exec {sys.executable} -m mobile "$@"\n'}
         for path, text in scripts.items():

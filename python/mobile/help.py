@@ -38,6 +38,8 @@ IN A TERMINAL
                              deadline or by SIGTERM/Ctrl+C (run it again to go
                              on); 1 on failures or errors. In a job script,
                              start it with `exec` so that it gets the signal.
+                             Needs the compilers only to build the model: not
+                             once it is in the folder (bin/mobile.out).
   mobile help                This text.
 
   Run these from a folder OUTSIDE the MoBILE repository, never inside it: the
