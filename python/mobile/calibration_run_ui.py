@@ -27,7 +27,7 @@ from .config import ConfigError
 from .cells import cell_areas
 from .driving import LAT_NAMES, LON_NAMES, climatology, first_name, open_field
 from .layout import HA_BELOW_ONE, OUTPUT_FLAGS, UNIT_LABELS, parameter_label, sections, with_tip
-from .plots import calibration_history_figure, comparison_figure, message_figure, regions_figure, send_figure
+from .plots import calibration_history_figure, comparison_figure, mark_windows, message_figure, regions_figure, send_figure
 from .region import region_ranges
 from .runner import NETCDF_LOCK
 from .shapes import ShapeError, areas, outlines, read_shapes
@@ -51,6 +51,20 @@ def calibration_run_card():
              "looks for the values that do best on all the objectives together (the Pareto front).", class_="small text-muted mb-2"),
         ui.h6("Objectives"),
         ui.output_ui("cal_objectives"),
+        ui.input_switch("cal_validation", with_tip("Validation window", "Splits the period the model and the data share in two, "
+                        "to test the calibrated model on years it did not see."), value=False),
+        ui.panel_conditional("input.cal_validation", ui.div(
+            ui.input_date_range("cal_validation_dates", "Validation window (first and last day)", format="yyyy-mm-dd", width="22rem"),
+            ui.tags.ul(
+                ui.tags.li(ui.tags.strong("Calibration window", style="color: #2e9e6b;"), ": the rest of the period the model and "
+                           "the data share. The calibration uses only the data of these years: each trial is scored on them, and "
+                           "Optuna chooses the next trials from those scores."),
+                ui.tags.li(ui.tags.strong("Validation window", style="color: #8e5bd0;"), ": the years given here, at first the "
+                           "last five. Their data are never used to calibrate: each trial is scored on them too, with the same "
+                           "metrics, only to show how well it does on years left out (next to its calibration scores)."),
+                ui.tags.li("Both are cut before the steps of the Model and Data boxes, so e.g. a climatology objective is that of "
+                           "the calibration window only. The Model and data card above gives the metrics of each window for its run."),
+                class_="small text-muted mb-2"))),
         ui.h6("What to calibrate", class_="mt-2"),
         ui.input_switch("cal_offsets", with_tip("Temperature offsets", "A shift dT of the temperature of each cell, or region of "
                         "cells, ticked, e.g. for the temperature where people live within a coarse cell. They keep the order of their "
@@ -478,10 +492,29 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         if threads():
             ui.update_numeric("cal_parallel", value=max(1, (os.cpu_count() or 1) // threads()))
 
+    def validation():
+        """(first, last) dates of the validation window if it is on, None if off; raises ValueError if it is incomplete."""
+        if not input.cal_validation():
+            return None
+        dates = input.cal_validation_dates()
+        if not dates or dates[0] is None or dates[1] is None:
+            raise ValueError("The validation window needs a first and a last day.")
+        if dates[0] > dates[1]:
+            raise ValueError("The validation window must start before it ends.")
+        return str(dates[0]), str(dates[1])
+
     def problems():
         found = []
         if not objectives():
             found.append("Add at least one objective (in Model and data, above).")
+        try:
+            if validation() is not None:
+                old = [o["name"] for o in objectives() if not o.get("data_raw")]
+                if old:
+                    found.append(f"A validation window needs the observations as loaded, which {', '.join(old)} lack: add "
+                                 f"{'it' if len(old) == 1 else 'them'} again.")
+        except ValueError as error:
+            found.append(str(error))
         parameters = chosen_parameters()
         for parameter in parameters:
             low, high = parameter.low, parameter.high
@@ -582,7 +615,7 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
             folder = create_calibration(config, [{k: v for k, v in o.items() if k not in ("output", "describe")} for o in objectives()],
                                         parameters=parameters, temperature=temperature, seeds=[seed + i for i in range(input.cal_seeds())],
                                         n_trials=input.cal_trials(), sampler=input.cal_sampler(), startup_trials=input.cal_startup(),
-                                        sampler_seed=seed, name=name or None)
+                                        sampler_seed=seed, name=name or None, validation=validation())
         except (ConfigError, CalibrationError, DataError, ValueError, OSError) as error:
             ui.notification_show(f"The calibration cannot start: {error}", type="error")
             return
@@ -698,6 +731,9 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
                          f"{temperature['gap']} °C; means {', '.join(f'{m:.2f}' for m in temperature['means'])} °C")
         for parameter in record.get("parameters", []):
             lines.append(f"{parameter['name']}: {parameter['distribution']} from {parameter['low']:.4g} to {parameter['high']:.4g}")
+        if record.get("validation"):
+            first, last = record["validation"]
+            lines.append(f"Validation window {first} to {last}: left out of the calibration, each trial scored on it too")
         lines.insert(0, f"Status: {status_of(folder, record)}"
                      + (" (no process runs it any more, e.g. the GUI was closed: Resume goes on with it)"
                         if status_of(folder, record) == "interrupted" else ""))
@@ -738,15 +774,21 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         names = [o["name"] for o in record["objectives"]]
         means = (record.get("temperature") or {}).get("means") or []
         parameters = [parameter["name"] for parameter in record.get("parameters", [])]
+        checked = bool(record.get("validation"))
         header = ui.tags.tr(ui.tags.th("Trial"), *[ui.tags.th(name) for name in names],
+                            *[ui.tags.th(f"{name} (validation)", class_="text-secondary") for name in names if checked],
                             *[ui.tags.th(f"dT{k + 1} → mean") for k in range(len(means))], *[ui.tags.th(name) for name in parameters])
         rows = [ui.tags.tr(ui.tags.td(str(row["number"])), *[ui.tags.td(f"{value:.4g}") for value in row["values"]],
+                           *[ui.tags.td("–" if value is None else f"{value:.4g}", class_="text-secondary")
+                             for value in ((row.get("validation") or [None] * len(names)) if checked else [])],
                            *[ui.tags.td(f"{row['offsets'][f'dT_{k + 1}']:+.2f} → {means[k] + row['offsets'][f'dT_{k + 1}']:.2f} °C")
                              for k in range(len(means))],
                            *[ui.tags.td(f"{row['params'][name]:.4g}") for name in parameters])
                 for row in sort_front(front)]
         return ui.div(ui.tags.strong(with_tip("Pareto front", "The trials no other trial beats on every objective: the best trade-offs "
-                                              "between the objectives (for one objective, the best trial)."), class_="small"),
+                                              "between the objectives (for one objective, the best trial). With a validation "
+                                              "window, each trial's scores on it follow, in grey: not used to choose the trials."),
+                                     class_="small"),
                       ui.tags.table(ui.tags.thead(header), ui.tags.tbody(*rows), class_="table table-sm small mb-1"), class_="mt-2")
 
     def sort_choices(record):
@@ -755,6 +797,9 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
             better = "high" if objective["direction"] == "maximize" else "low"
             for order, text in (("desc", "high to low"), ("asc", "low to high")):
                 choices[f"{k}:{order}"] = f"{objective['name']}, {text}{' (best first)' if text.startswith(better) else ''}"
+                if record.get("validation"):
+                    choices[f"v{k}:{order}"] = (f"{objective['name']} (validation), {text}"
+                                                f"{' (best first)' if text.startswith(better) else ''}")
         return choices
 
     @render.ui
@@ -773,6 +818,14 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         if not key or key == "number" or ":" not in key:
             return sorted(front, key=lambda row: row["number"])
         index, order = key.split(":")
+        if index.startswith("v"):  # By a validation score; trials without one last
+            k = int(index[1:])
+
+            def score(row):
+                value = (row.get("validation") or [None] * (k + 1))[k]
+                return (value is not None, value if value is not None else 0.0) if order == "desc" else \
+                    (value is None, value if value is not None else 0.0)
+            return sorted(front, key=score, reverse=order == "desc")
         return sorted(front, key=lambda row: row["values"][int(index)], reverse=order == "desc")
 
     @render.ui
@@ -805,7 +858,9 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         if isinstance(figure, str):
             await send_figure(session, "cal_best_plot", message_figure(figure))
             return
-        figure.update_layout(title=f"Trial {number}, against {found[0]['objectives'][index]['name']} (model scaled to the mean of the data)")
+        row = next((row for row in found[2] if row["number"] == number), {})
+        figure.update_layout(title=f"Trial {number}, against {found[0]['objectives'][index]['name']} (model scaled to the mean of the data)"
+                                   f"{validation_scores(found[0], row)}")
         await send_figure(session, "cal_best_plot", figure)
 
     best_problem = reactive.value(None)
@@ -820,8 +875,11 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         trial does not change once done; each is given as a copy, for its own title."""
         key = (folder, number, index, tuple(sorted(chosen.items())))
         if key not in comparisons:
+            window = record.get("validation")
             try:
                 model, data, m, d, labels = trial_comparison(folder, number, index)
+                if window and data.shape != "dated":  # E.g. a climatology: that of the calibration years, as scored
+                    model, data, m, d, labels = trial_comparison(folder, number, index, "calibration")
             except (DataError, OSError, KeyError, ValueError) as error:
                 return f"Trial {number} cannot be drawn: {error}.", None
             # The drivers of the run of the trial (its first seed), within the periods the model and the data share
@@ -834,9 +892,23 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
                         drivers.append((name, DRIVERS[name][0], driver_panel(run_dir, name, period, how, by_month, first, last)))
                 except (DataError, OSError, KeyError) as error:
                     problems.append(f"{DRIVERS[name][0]}: {error}")
-            comparisons[key] = (comparison_figure(model, data, labels, m, d, scale=True, drivers=drivers), "; ".join(problems) or None)
+            figure = comparison_figure(model, data, labels, m, d, scale=True, drivers=drivers)
+            if window and data.shape == "dated":
+                mark_windows(figure, (str(data.index["start"].min().date()), str(data.index["end"].max().date())), window)
+            elif window:
+                figure.add_annotation(x=0, y=1, xref="paper", yref="paper", text="calibration window only", showarrow=False,
+                                      xanchor="left", yanchor="bottom", font={"size": 11, "color": "#64748b"})
+            comparisons[key] = (figure, "; ".join(problems) or None)
         figure, problem = comparisons[key]
         return go.Figure(figure), problem
+
+    def validation_scores(record, row):
+        """'; validation: name value, ...' of a trial, for a title, if the calibration has a validation window."""
+        scores = row.get("validation")
+        if not record.get("validation") or not scores:
+            return ""
+        return "; validation: " + ", ".join(f"{o['name']} {'–' if value is None else f'{value:.3g}'}"
+                                            for o, value in zip(record["objectives"], scores))
 
     start_problem = reactive.value(None)
 
@@ -868,7 +940,8 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
             return
         what = "no temperature offset" if start else "the first trial (none without offsets)"
         values = ", ".join(f"{o['name']} {value:.3g}" for o, value in zip(record["objectives"], row["values"]))
-        figure.update_layout(title=f"Start: trial {row['number']}, {what} ({values}), against {record['objectives'][index]['name']}")
+        figure.update_layout(title=f"Start: trial {row['number']}, {what} ({values}), against {record['objectives'][index]['name']}"
+                                   f"{validation_scores(record, row)}")
         await send_figure(session, "cal_start_plot", figure)
 
     @render.ui

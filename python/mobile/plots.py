@@ -626,6 +626,37 @@ def _driver_trace(observations, colour, label):
     return kind(x=x, y=observations.values, name=label, hovertemplate=f"{label}: %{{y:.4g}} {observations.units}<extra></extra>", **style)
 
 
+CALIBRATION_WINDOW = "#2e9e6b"  # Green and purple: apart from the blue of the data and the red of the model
+VALIDATION_WINDOW = "#8e5bd0"
+WINDOW_BAR = 16  # Height of the bars of the windows, in pixels
+
+
+def mark_windows(figure, span, validation):
+    """Semi-transparent bars along the top of a time-series figure, each across the dates of a window and named in it:
+    the calibration window in green (span, the period the model and the data share, without the validation window: one
+    bar, or two if the validation window lies inside), the validation window in purple. span and validation are
+    (first, last) dates; the bars sit just above the first panel, whose x axis all the panels share."""
+    first, last = pd.Timestamp(span[0]), pd.Timestamp(span[1])
+    start, end = pd.Timestamp(validation[0]), pd.Timestamp(validation[1])
+    bars = [(first, min(last, start - pd.Timedelta(days=1)), "Calibration window", CALIBRATION_WINDOW),
+            (max(first, start), min(last, end), "Validation window", VALIDATION_WINDOW),
+            (max(first, end + pd.Timedelta(days=1)), last, "Calibration window", CALIBRATION_WINDOW)]
+    top = max((axis.domain[1] for axis in figure.select_yaxes() if axis.domain), default=1.0)
+    for annotation in figure.layout.annotations:  # The title of the first panel goes above the bars
+        if annotation.yref == "paper" and annotation.y is not None and annotation.y >= top - 1e-6:
+            annotation.yshift = (annotation.yshift or 0) + WINDOW_BAR + 4
+    for x0, x1, name, colour in bars:
+        if x0 > x1:
+            continue
+        figure.add_shape(type="rect", xref="x", yref="paper", ysizemode="pixel", yanchor=top, x0=x0, x1=x1, y0=3, y1=3 + WINDOW_BAR,
+                         fillcolor=colour, opacity=0.45, line_width=0, layer="above")
+        figure.add_annotation(x=x0 + (x1 - x0) / 2, y=top, yshift=3 + WINDOW_BAR / 2, xref="x", yref="paper", text=name,
+                              showarrow=False, font={"size": 10, "color": "#1f1f1f"}, yanchor="middle")
+    margin = figure.layout.margin.to_plotly_json()
+    figure.update_layout(margin={**margin, "t": (margin.get("t") or 44) + WINDOW_BAR + 8})
+    return figure
+
+
 def comparison_figure(model, data, labels, model_values, data_values, scale=False, drivers=()):
     """The model and the observations on the periods (months, seasons, years, age bands) they share, as paired by
     calibration_metrics.pair. With scale, the model times the ratio of the means, to compare timing by eye; the legend

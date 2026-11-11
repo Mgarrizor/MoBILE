@@ -377,6 +377,24 @@ def select_window(observations, first=None, last=None):
     return _subset(observations, keep).with_note(f"window {first or 'start'} to {last or 'end'}: {int(keep.sum())} values")
 
 
+def drop_window(observations, first, last):
+    """The dated observations whose periods lie wholly outside first and last (dates, both included; a period across either
+    end is left out too), or the yearly ones outside those years: e.g. those left to calibrate on, a validation window kept out."""
+    if observations.shape == "dated":
+        start, end = observations.index["start"].to_numpy(), observations.index["end"].to_numpy()
+        keep = (end < np.datetime64(pd.Timestamp(first).date(), "D")) | (start > np.datetime64(pd.Timestamp(last).date(), "D"))
+    elif observations.shape == "yearly":
+        years = observations.index["year"].to_numpy()
+        keep = (years < pd.Timestamp(first).year) | (years > pd.Timestamp(last).year)
+    else:
+        raise DataError("only dated or yearly observations have a window in time")
+    if not keep.any():
+        raise DataError(f"no observations outside {first} to {last}")
+    if keep.all():
+        return observations
+    return _subset(observations, keep).with_note(f"without {first} to {last}: {int(keep.sum())} values")
+
+
 def _subset(observations, keep):
     return replace(
         observations, values=observations.values[keep], index=observations.index[keep].reset_index(drop=True),

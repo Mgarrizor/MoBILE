@@ -26,10 +26,11 @@ from pathlib import Path
 import netCDF4
 import numpy as np
 import optuna
+import pandas as pd
 
-from .calibration_data import DataError, read_observations
+from .calibration_data import DataError, drop_window, read_observations, select_window
 from .calibration_metrics import DIRECTIONS, pair, metrics
-from .calibration_model import SPACES, model_members, seed_spread
+from .calibration_model import SPACES, model_members, process_both, seed_spread
 from .calibration_steps import apply_steps
 from .cells import cell_areas
 from .config import MAX_PATH_LENGTH, ConfigError
@@ -187,7 +188,7 @@ def offset_temperature(source, target, cells, offsets):
 # ---------------------------------------------------------------- creating
 
 def create_calibration(config, objectives, parameters=(), temperature=None, seeds=(12345,), n_trials=100,
-                       sampler="tpe", startup_trials=10, sampler_seed=1, name=None):
+                       sampler="tpe", startup_trials=10, sampler_seed=1, name=None, validation=None):
     """Write the folder of a new calibration and return it.
 
     config: the setup, with the parameters not calibrated and the outputs the objectives need.
@@ -197,7 +198,9 @@ def create_calibration(config, objectives, parameters=(), temperature=None, seed
     temperature: {cells: [{lat, lon}, or {lat, lon, members: [{lat, lon}]} for a region whose cells share one offset] from
     the coolest to the warmest (regions by their mean weighted by people), first: (low, high) of dT_1 in °C, gap: (low,
     high) of each next gap, low at least 0, ordered: True (default) to keep their order, or False for each dT_k sampled on
-    its own within the range of dT_1}, or None."""
+    its own within the range of dT_1}, or None.
+    validation: (first, last) dates of a validation window, or None: the objectives are calibrated on the period the model
+    and the data share without it, and each trial is scored on it too, with the same metrics, kept with the trial."""
     if not objectives:
         raise CalibrationError("give at least one objective")
     if not parameters and not temperature:
@@ -208,6 +211,10 @@ def create_calibration(config, objectives, parameters=(), temperature=None, seed
         if objective.get("space", "people") not in SPACES:
             raise CalibrationError(f"unknown space {objective['space']!r}: one of {', '.join(SPACES)}")
         read_observations(objective["data"])  # Raises DataError if it cannot be read
+        if objective.get("data_raw"):
+            read_observations(objective["data_raw"])
+    if validation is not None:
+        validation = _validation(validation, objectives)
     for parameter in parameters:
         if parameter.distribution not in ("uniform", "loguniform"):
             raise CalibrationError(f"{parameter.name}: only uniform and log-uniform ranges can be calibrated")
@@ -242,7 +249,9 @@ def create_calibration(config, objectives, parameters=(), temperature=None, seed
         "run_inputs": run_inputs,
         "parameters": [{"name": p.name, "distribution": p.distribution, "low": p.low, "high": p.high} for p in parameters],
         "temperature": temperature,
+        "validation": validation,
         "objectives": [{"space": "people", "aggregation": None, "steps": [], **objective, "data": str(Path(objective["data"]).resolve()),
+                        **({"data_raw": str(Path(objective["data_raw"]).resolve())} if objective.get("data_raw") else {}),
                         "direction": DIRECTIONS[objective["metric"]]} for objective in objectives],
         "seeds": [int(seed) for seed in seeds],
         "n_trials": int(n_trials),
@@ -253,6 +262,29 @@ def create_calibration(config, objectives, parameters=(), temperature=None, seed
     write_calibration(folder, record)
     open_study(folder, record)  # The database exists from the start: the GUI may read it while the first trials run
     return folder
+
+
+def _validation(validation, objectives):
+    """[first, last] of a validation window, checked: within the observations of every objective, with some left out of it."""
+    try:
+        first, last = (pd.Timestamp(value) for value in validation)
+    except (TypeError, ValueError):
+        raise CalibrationError(f"the validation window needs a first and a last date: {validation!r}") from None
+    if first > last:
+        raise CalibrationError("the validation window must start before it ends")
+    window = (str(first.date()), str(last.date()))
+    for objective in objectives:
+        if not objective.get("data_raw"):
+            raise CalibrationError(f"{objective['name']}: a validation window needs the observations as loaded: add the objective again")
+        data = read_observations(objective["data_raw"])
+        if data.shape != "dated":
+            raise CalibrationError(f"{objective['name']}: a validation window needs dated observations")
+        try:
+            select_window(data, *window)
+            drop_window(data, *window)
+        except DataError as error:
+            raise CalibrationError(f"{objective['name']}: {error}") from None
+    return list(window)
 
 
 def _temperature(temperature, temp_file, pop_file):
@@ -300,20 +332,40 @@ def suggest(trial, record):
     return values, offsets
 
 
-def evaluate(objectives, run_dirs):
-    """[value of each objective] of the runs of a trial (one per seed): the output processed by the steps of the
-    objective (for several seeds, the median of the seeds each processed), compared with its observations."""
+def objective_series(objective, run_dirs, validation=None, part=None):
+    """(model, data) of an objective for the runs of a trial (one per seed). With the raw observations and their steps
+    (objectives made since: data_raw, data_steps), both are first cut to the period they share, then each processed by
+    its own steps (calibration_model.process_both), so that e.g. a climatology covers the same years on both sides. With
+    only the observations as processed (earlier objectives), those, and the model output processed by its steps (for
+    several seeds, the median of the seeds each processed). validation and part as for process_both: with a validation
+    window, part "calibration" leaves it out, "validation" keeps it only."""
+    members = [member for run_dir in run_dirs
+               for member in model_members(run_dir, objective["variable"], objective["space"], None, objective["aggregation"])]
+    if objective.get("data_raw"):
+        model, data, _ = process_both(members, objective["steps"], read_observations(objective["data_raw"]),
+                                      objective.get("data_steps", []), validation=validation, part=part)
+        return model, data
+    model = apply_steps(members[0], objective["steps"]) if len(members) == 1 else seed_spread(members, objective["steps"])
+    return model, read_observations(objective["data"])
+
+
+def evaluate(objectives, run_dirs, validation=None, part=None, strict=True):
+    """[value of each objective] of the runs of a trial (one per seed): the output and the observations as
+    objective_series gives them (with a validation window: the part of the period, "calibration" or "validation"), paired
+    and compared by the metric of the objective. Not strict, None for a value that cannot be had instead of an error."""
     results = []
     for objective in objectives:
-        members = [member for run_dir in run_dirs
-                   for member in model_members(run_dir, objective["variable"], objective["space"], None, objective["aggregation"])]
-        model = (apply_steps(members[0], objective["steps"]) if len(members) == 1
-                 else seed_spread(members, objective["steps"]))
-        data = read_observations(objective["data"])
-        model_values, data_values, _ = pair(model, data)
-        value = metrics(model_values, data_values)[objective["metric"]]
-        if value is None:
-            raise DataError(f"{objective['name']}: {objective['metric']} is not defined for these values (e.g. a flat series)")
+        try:
+            model, data = objective_series(objective, run_dirs, validation, part)
+            model_values, data_values, _ = pair(model, data)
+            value = metrics(model_values, data_values)[objective["metric"]]
+            if value is None:
+                raise DataError(f"{objective['name']}: {objective['metric']} is not defined for these values (e.g. a flat series)")
+        except DataError:
+            if strict:
+                raise
+            results.append(None)
+            continue
         results.append(abs(value) if objective["direction"] == "zero" else value)
     return results
 
@@ -471,7 +523,10 @@ def _run_locked(folder, record, state, parallel, threads):
         try:
             run_dirs = [run_seed(trial, run_config, seed) for seed in record["seeds"]]
             with NETCDF_LOCK:
-                results = evaluate(record["objectives"], run_dirs)
+                window = record.get("validation")
+                results = evaluate(record["objectives"], run_dirs, window, "calibration" if window else None)
+                if window:  # Scored on the validation window too, kept with the trial; not optimised
+                    trial.set_user_attr("validation", evaluate(record["objectives"], run_dirs, window, "validation", strict=False))
         except RunCancelled:
             trial.set_user_attr("cancelled", True)
             raise
@@ -527,22 +582,20 @@ def trials_table(folder):
         seconds = (trial.datetime_complete - trial.datetime_start).total_seconds() if trial.datetime_complete and trial.datetime_start else None
         rows.append({"number": trial.number, "state": trial.state.name, "values": trial.values, "params": dict(trial.params),
                      "offsets": offsets, "seconds": seconds, "failure": trial.user_attrs.get("failure"),
-                     "baseline": bool(trial.user_attrs.get("baseline"))})
+                     "baseline": bool(trial.user_attrs.get("baseline")), "validation": trial.user_attrs.get("validation")})
     return rows
 
 
-def trial_comparison(folder, number, index=0):
+def trial_comparison(folder, number, index=0, part=None):
     """(model, data, model values, data values, labels) of objective `index` for a completed trial: its runs processed
-    as the objective says, and the observations, paired as for the metrics."""
+    as the objective says, and the observations, paired as for the metrics. With a validation window, part "calibration"
+    or "validation" for one part of the period, None for the whole period the model and the data share."""
     record = read_calibration(folder)
     objective = record["objectives"][index]
     here = trial_folder(folder, number)
     run_dirs = [here / f"seed_{seed}" for seed in record["seeds"]]
     with NETCDF_LOCK:
-        members = [member for run_dir in run_dirs
-                   for member in model_members(run_dir, objective["variable"], objective["space"], None, objective["aggregation"])]
-        model = apply_steps(members[0], objective["steps"]) if len(members) == 1 else seed_spread(members, objective["steps"])
-        data = read_observations(objective["data"])
+        model, data = objective_series(objective, run_dirs, record.get("validation"), part)
     model_values, data_values, labels = pair(model, data)
     return model, data, model_values, data_values, labels
 

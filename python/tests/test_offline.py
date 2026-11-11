@@ -2392,6 +2392,83 @@ print("Program finished successfully")
 """
 
 
+class TestSharedPeriod(unittest.TestCase):
+    """Model and data are cut to the period they share before their steps, so that a climatology covers the same years."""
+
+    @staticmethod
+    def daily(first, last, value):
+        from mobile.calibration_data import Observations
+
+        day = np.arange(np.datetime64(first), np.datetime64(last) + 1)
+        values = value(day.astype("datetime64[Y]").astype(int) + 1970) * np.ones(len(day))
+        return Observations(shape="dated", values=values, index=pd.DataFrame({"start": day, "end": day}), aggregation="sum",
+                            units="fraction", name="x")
+
+    def test_climatology_over_the_shared_years_only(self):
+        from mobile.calibration_data import DataError
+        from mobile.calibration_metrics import pair
+        from mobile.calibration_model import process_both, shared_span
+        from mobile.calibration_steps import apply_steps
+
+        steps = [{"kind": "aggregate", "period": "month", "how": "sum", "complete": True, "days": 1}, {"kind": "climatology", "by": "month"}]
+        model = self.daily("2001-01-01", "2002-12-31", lambda year: 1.0)
+        # The data are 1 a day in 2001-2002 and 10 a day in the years around them, monthly as loaded
+        data = apply_steps(self.daily("1999-01-01", "2004-12-31", lambda year: np.where((year >= 2001) & (year <= 2002), 1.0, 10.0)),
+                           steps[:1])
+        self.assertEqual(shared_span(model, data), ("2001-01-01", "2002-12-31"))
+        m, d, span = process_both([model], steps, data, steps[1:])
+        self.assertEqual(span, ("2001-01-01", "2002-12-31"))
+        m, d, _ = pair(m, d)
+        np.testing.assert_allclose(m, d)  # Both 1 a day: the years around do not enter
+        self.assertEqual(round(float(d[0]), 6), 31.0)
+        # Without the cut the data's January would mix in the 10s: what the earlier objectives did
+        self.assertGreater(float(apply_steps(data, steps[1:]).values[0]), 31.0)
+        # Several seeds: each cut, then the median and range
+        m2, _, _ = process_both([model, self.daily("2000-06-01", "2002-12-31", lambda year: 3.0)], steps, data, steps[1:])
+        self.assertEqual(float(m2.values[0]), 62.0)  # Median of 31 and 93
+        # Nothing shared
+        with self.assertRaises(DataError):
+            shared_span(self.daily("1990-01-01", "1990-12-31", lambda year: 1.0), data)
+        # Not dated (a climatology loaded as such): nothing to cut
+        self.assertIsNone(process_both([model], steps, apply_steps(data, steps[1:]), [])[2])
+
+    def test_validation_window_kept_out_before_the_steps(self):
+        from mobile.calibration_data import DataError, drop_window
+        from mobile.calibration_model import process_both
+        from mobile.calibration_steps import apply_steps
+
+        steps = [{"kind": "aggregate", "period": "month", "how": "sum", "complete": True, "days": 1}, {"kind": "climatology", "by": "month"}]
+        model = self.daily("2001-01-01", "2002-12-31", lambda year: np.where(year == 2001, 1.0, 2.0))
+        data = apply_steps(model, steps[:1])  # Monthly: 1 a day in 2001, 2 a day in 2002
+        window = ("2002-01-01", "2002-12-31")
+        m, d, _ = process_both([model], steps, data, steps[1:], validation=window, part="calibration")
+        self.assertEqual((float(m.values[0]), float(d.values[0])), (31.0, 31.0))  # January of 2001 only
+        m, d, _ = process_both([model], steps, data, steps[1:], validation=window, part="validation")
+        self.assertEqual((float(m.values[0]), float(d.values[0])), (62.0, 62.0))  # January of 2002 only
+        m, d, _ = process_both([model], steps, data, steps[1:], validation=window)  # No part: the whole shared period
+        self.assertEqual(float(d.values[0]), 46.5)
+        # A month across the start of the window is left out of the calibration too
+        self.assertEqual(len(drop_window(data, "2002-01-15", "2002-12-31")), 12)
+        with self.assertRaises(DataError):
+            drop_window(data, "2000-01-01", "2003-12-31")
+        with self.assertRaises(DataError):  # Not dated: no window in time
+            process_both([model], steps, apply_steps(data, steps[1:]), [], validation=window, part="calibration")
+
+    def test_window_bars(self):
+        import plotly.graph_objects as go
+
+        from mobile.plots import CALIBRATION_WINDOW, VALIDATION_WINDOW, mark_windows
+
+        span = ("1985-01-01", "2004-12-31")
+        for window, colours in ((("2000-01-01", "2004-12-31"), [CALIBRATION_WINDOW, VALIDATION_WINDOW]),
+                                (("1993-01-01", "1997-12-31"), [CALIBRATION_WINDOW, VALIDATION_WINDOW, CALIBRATION_WINDOW]),
+                                (("1980-01-01", "1989-12-31"), [VALIDATION_WINDOW, CALIBRATION_WINDOW])):  # Clipped to the span
+            figure = mark_windows(go.Figure(go.Scatter(x=["1985-01-15", "2004-12-15"], y=[0, 1])), span, window)
+            self.assertEqual([shape.fillcolor for shape in figure.layout.shapes], colours)
+            self.assertEqual(str(figure.layout.shapes[0].x0)[:10], "1985-01-01")
+            self.assertEqual(str(figure.layout.shapes[-1].x1)[:10], "2004-12-31")
+
+
 class TestCalibrationEngine(unittest.TestCase):
     """A calibration with Optuna, on a toy model: new cases grow with the temperature above 18 °C. Observations made
     from it at known temperature offsets of two cells must be found again."""
@@ -2488,6 +2565,30 @@ sleep ${FAKE_SLEEP:-0}
 
     def temperature(self):
         return {"cells": self.cells, "first": (-2.0, 2.0), "gap": (0.0, 3.0)}
+
+    def test_objectives_with_raw_data_are_cut_to_the_shared_period(self):
+        from mobile.calibration_data import Observations, read_observations, write_observations
+        from mobile.calibration_engine import objective_series
+        from mobile.calibration_steps import apply_steps
+        from mobile.runner import Runner
+
+        result = Runner(self.config).run("cut")
+        self.assertTrue(result.ok, result.log_tail())
+        folder = result.run_dir
+        loaded = read_observations(self.data)  # Monthly, 2001-2002
+        # The same months with a year of big values before and after: loaded as such, not cut
+        months = pd.date_range("2000-01-01", "2003-12-01", freq="MS")
+        values = np.where((months.year >= 2001) & (months.year <= 2002), np.resize(loaded.values, len(months)), 1.0)
+        index = pd.DataFrame({"start": months.values.astype("datetime64[D]"), "end": (months + pd.offsets.MonthEnd(0)).values.astype("datetime64[D]")})
+        raw = self.root / "raw.nc"
+        write_observations(Observations(shape="dated", values=values, index=index, aggregation="sum", units="fraction", name="cases"), raw)
+        climatology = [{"kind": "climatology", "by": "month"}]
+        objective = {"name": "season", "data": str(self.data), "variable": "Inew", "space": "people", "aggregation": None,
+                     "steps": self.MONTHLY + climatology, "metric": "rmse_relative"}
+        cut = objective_series({**objective, "data_raw": str(raw), "data_steps": climatology}, [folder])[1]
+        np.testing.assert_allclose(cut.values, apply_steps(loaded, climatology).values)  # Only 2001-2002
+        old = objective_series(objective, [folder])[1]  # Earlier objectives: the data as processed, read as they are
+        np.testing.assert_allclose(old.values, loaded.values)
 
     def test_offsets_keep_the_order_of_the_cells(self):
         from mobile.calibration_engine import cell_means, offset_temperature, offsets_from
@@ -2593,6 +2694,32 @@ sleep ${FAKE_SLEEP:-0}
         model, data, m, d, labels = trial_comparison(folder, best["number"], 0)
         self.assertEqual((len(labels), labels[0], labels[-1]), (24, "2001-01", "2002-12"))
         self.assertAlmostEqual(float(np.corrcoef(m, d)[0, 1]), best["values"][0], places=6)  # The plot is what was scored
+
+    def test_validation_window(self):
+        from mobile.calibration_engine import (CalibrationError, create_calibration, evaluate, read_calibration, run_calibration,
+                                               trial_comparison, trial_folder, trials_table)
+        from mobile.sensitivity_runs import StudyState
+
+        window = ("2002-07-01", "2002-12-31")
+        objectives = [{**objective, "data_raw": str(self.data), "data_steps": []} for objective in self.objectives()]
+        for given, why, wrong in ((self.objectives(), "add the objective again", window), (objectives, "no observations", ("1990-01-01", "1990-12-31")),
+                                  (objectives, "start before", window[::-1])):
+            with self.assertRaisesRegex(CalibrationError, why):
+                create_calibration(self.config, given, temperature=self.temperature(), n_trials=2, validation=wrong)
+        folder = create_calibration(self.config, objectives, temperature=self.temperature(), n_trials=4, name="validated", validation=window)
+        record = run_calibration(folder, StudyState(), parallel=2)
+        self.assertEqual(record["status"], "finished")
+        record = read_calibration(folder)
+        self.assertEqual(record["validation"], list(window))
+        rows = trials_table(folder)
+        self.assertTrue(all(len(row["validation"]) == 2 and all(isinstance(v, float) for v in row["validation"]) for row in rows))
+        row = rows[0]
+        run_dirs = [trial_folder(folder, row["number"]) / f"seed_{seed}" for seed in record["seeds"]]
+        # Scored on the months outside the window; the window apart, kept with the trial
+        np.testing.assert_allclose(row["values"], evaluate(record["objectives"], run_dirs, window, "calibration"))
+        np.testing.assert_allclose(row["validation"], evaluate(record["objectives"], run_dirs, window, "validation"))
+        self.assertFalse(np.allclose(row["values"], evaluate(record["objectives"], run_dirs)))
+        self.assertEqual([len(trial_comparison(folder, row["number"], 0, part)[4]) for part in (None, "calibration", "validation")], [24, 18, 6])
 
     def test_results_views(self):
         from mobile.calibration_engine import create_calibration, run_calibration

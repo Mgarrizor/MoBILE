@@ -215,3 +215,40 @@ def driver_panel(folder, name, period="month", how=None, by_month=False, first=N
             hint = DRIVER_OUTPUTS.get(name)
             raise DataError(f"{error}{f': {hint}' if hint else ''}") from None
     return panel
+
+
+def shared_span(model, data):
+    """(first, last) dates both dated series cover, from the later start to the earlier end; None if either is not dated
+    (e.g. observations imported as a climatology), when no common window can be cut."""
+    if model.shape != "dated" or data.shape != "dated":
+        return None
+    first = max(pd.Timestamp(model.index["start"].min()), pd.Timestamp(data.index["start"].min()))
+    last = min(pd.Timestamp(model.index["end"].max()), pd.Timestamp(data.index["end"].max()))
+    if first > last:
+        raise DataError("the model and the data share no period")
+    return str(first.date()), str(last.date())
+
+
+def process_both(members, model_steps, data, data_steps, others=None, model_note=None, validation=None, part=None):
+    """(model, data, span): the model (each run taken, e.g. the seeds of a band) and the observations, both first cut to
+    the period they share, then each processed by its own steps, so that the statistics of both, such as a climatology,
+    cover the same years. For several runs, the median and range of the runs each processed (seed_spread). span is the
+    (first, last) dates cut to, or None if they could not be cut (not dated).
+
+    validation: (first, last) dates of a validation window, with part "calibration" for the shared period without it,
+    "validation" for the window only (both before the steps), or None for the whole shared period."""
+    from .calibration_data import drop_window, select_window
+    from .calibration_steps import apply_steps
+
+    span = shared_span(members[0], data)
+    if span is not None:
+        members = [select_window(member, *span) for member in members]
+        data = select_window(data, *span)
+    if validation is not None and part is not None:
+        if span is None:
+            raise DataError("a validation window needs dated observations")
+        cut = drop_window if part == "calibration" else select_window
+        members = [cut(member, *validation) for member in members]
+        data = cut(data, *validation)
+    model = apply_steps(members[0], model_steps) if len(members) == 1 else seed_spread(members, model_steps, None, model_note)
+    return model, apply_steps(data, data_steps, others), span
