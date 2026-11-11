@@ -5,6 +5,7 @@ progress: the objectives trial by trial and the best trial against the data (cal
 import asyncio
 import os
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import netCDF4
@@ -23,6 +24,7 @@ from .calibration_data import DataError
 from .calibration_model import DRIVER_PERIODS, DRIVERS, driver_panel
 from .calibration_results import FIGURES, ResultsError, figure_help, results_figure
 from .calibration_steps import STATISTICS
+from .cluster_ui import cluster_section, cluster_server
 from .config import ConfigError
 from .cells import cell_areas
 from .driving import LAT_NAMES, LON_NAMES, climatology, first_name, open_field
@@ -101,7 +103,9 @@ def calibration_run_card():
                 ui.input_numeric("cal_seeds", with_tip("Seeds per trial", "Each trial runs every seed, from the sidebar seed up; "
                                  "the objectives compare the median of the seeds, each processed."), value=1, min=1, step=1),
                 ui.input_numeric("cal_threads", with_tip("Threads per run", "CPU threads of each run, at first those of the setup. "
-                                 "Results depend on the number: it is kept with the calibration, and a resumed one uses it too."),
+                                 "Results depend on the number: it is kept with the calibration, and a resumed one uses it too. On a LEONARDO "
+                                 "DCGP node, 16 runs × 7 threads did best for Senegal 1998–2003 (9.85 M agents); other "
+                                 "setups may differ."),
                                  value=1, min=1, step=1),
                 ui.input_numeric("cal_parallel", with_tip("Runs at the same time", "Each with the threads per run above. The model "
                                  "is built once, by the first run."), value=1, min=1, step=1),
@@ -113,6 +117,9 @@ def calibration_run_card():
                 ui.div(
                     ui.input_task_button("cal_run", "Run calibration", label_busy="Running…", class_="btn-primary flex-fill"),
                     ui.input_action_button("cal_cancel", "Cancel", class_="flex-fill", disabled=True),
+                    ui.input_action_button("cal_create", with_tip("Create only", "Make the calibration without running it: "
+                                           "to run it on a cluster (below), or later with Resume or `mobile calibrate`."),
+                                           class_="flex-fill"),
                     class_="d-flex gap-2 mt-2",
                 ),
             ),
@@ -128,6 +135,7 @@ def calibration_run_card():
             col_widths=(10, 2),
         ),
         ui.output_ui("cal_previous_info"),
+        cluster_section(),
         ui.div(id="cal_history_plot", style="min-height: 380px;"),
         ui.output_ui("cal_front_sort_choice"),
         ui.output_ui("cal_front"),
@@ -316,6 +324,7 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
     last = reactive.value(None)  # The record of the last calibration run in this session, or "error"
     running_folder = reactive.value(None)
     to_select = reactive.value(None)
+    cluster_server(input, output, session, lambda: input.cal_previous() or None, changed)
 
     @reactive.calc
     def cells():
@@ -587,6 +596,25 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         if busy():
             ui.notification_show("A run or analysis is in progress: wait for it, or cancel it, before a calibration.", type="warning")
             return
+        folder = make_calibration()
+        if folder is not None:
+            start(folder)
+
+    @reactive.effect
+    @reactive.event(input.cal_create)
+    def create_only():
+        folder = make_calibration()
+        if folder is None:
+            return
+        to_select.set(str(folder))
+        changed.set(changed() + 1)
+        threads_ = read_calibration(folder)["setup"]["run"]["threads"]
+        ui.notification_show(f"Created {Path(folder).name}, not run: choose it under Calibrations and press Resume to run it here, "
+                             f"Send it to a cluster below, or run `mobile calibrate {folder}` ({threads_} thread"
+                             f"{'s' if threads_ > 1 else ''} per run).", type="message", duration=15)
+
+    def make_calibration():
+        """The folder of a new calibration as the card says, or None after saying what is wrong."""
         found = problems()
         nagent, seed = agents(), input.seed()
         if not all(isinstance(value, int) and value >= 1 for value in (nagent, seed)):
@@ -618,10 +646,10 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
                                         n_trials=input.cal_trials(), sampler=input.cal_sampler(), startup_trials=input.cal_startup(),
                                         sampler_seed=seed, name=name or None, validation=validation())
         except (ConfigError, CalibrationError, DataError, ValueError, OSError) as error:
-            ui.notification_show(f"The calibration cannot start: {error}", type="error")
-            return
+            ui.notification_show(f"The calibration cannot be made: {error}", type="error")
+            return None
         ui.update_text("cal_name", value="")
-        start(folder)
+        return folder
 
     @reactive.effect
     @reactive.event(input.cal_resume)

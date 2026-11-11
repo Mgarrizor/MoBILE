@@ -66,6 +66,7 @@ DATABASE = "optuna.db"
 LOCK = "running.lock"  # Held by the process running a calibration; the system lets go of it when that process ends
 STATUS = "status.json"
 SNAPSHOT = "optuna.snapshot.db"
+CLUSTER = "cluster.json"  # In a calibration sent to a cluster (cluster.py): where, its jobs, and what the last refresh saw
 SERIES = "series"
 HEARTBEAT_SECONDS = 60  # The status is written this often while a calibration runs, and after every trial
 STALE_SECONDS = 300  # A status not written for this long, on another computer without Slurm to ask, is of a process gone
@@ -340,8 +341,8 @@ def setup_config(folder, record, mobile=None):
     the record if it exists, else $MOBILE."""
     setup = record["setup"]
     if mobile is None:
-        mobile = setup["mobile"]
-        if not Path(mobile).is_dir() and os.environ.get("MOBILE"):
+        mobile = os.path.expandvars(setup["mobile"] or "")
+        if not (mobile and Path(mobile).is_dir()) and os.environ.get("MOBILE"):
             mobile = os.environ["MOBILE"]
     inputs = {key: _in_folder(folder, path) for key, path in setup["inputs"].items()}
     config = from_fields(mobile, setup["project"], setup["runs_dir"], setup["run"], inputs, None,
@@ -470,6 +471,15 @@ def _storage(folder):
         return _STORAGES[path]
 
 
+def forget_storage(folder):
+    """Close the connections to the study of a folder, e.g. after its database was replaced by a newer copy."""
+    path = str((Path(folder) / DATABASE).resolve())
+    with _STORAGES_LOCK:
+        storage = _STORAGES.pop(path, None)
+    if storage is not None:
+        storage.engine.dispose()
+
+
 def open_study(folder, record):
     storage = _storage(folder)
     directions = ["maximize" if objective["direction"] == "maximize" else "minimize" for objective in record["objectives"]]
@@ -501,6 +511,10 @@ def run_calibration(folder, state, parallel=1, threads=None, deadline=None, tria
     record = read_calibration(folder)
     if not resumable(record):
         raise CalibrationError(OLD_CALIBRATION)
+    cluster = read_cluster(folder)
+    if cluster is not None:
+        raise CalibrationError(f"this calibration was sent to {cluster.get('host')} ({cluster.get('folder')}): it runs there. "
+                               "Refresh to see how far it is, and submit a job there to go on.")
     if is_running(folder):
         raise CalibrationError(f"this calibration is running already: {running_where(folder)}")
     with open(folder / LOCK, "w") as lock:
@@ -591,12 +605,33 @@ def in_squeue(job):
     return listed
 
 
+def read_cluster(folder):
+    """{host, folder, sent, jobs: [{id, submitted, state, listed}], refreshed} of a calibration sent to a cluster (the local
+    folder then mirrors the one there), or None."""
+    try:
+        cluster = json.loads((Path(folder) / CLUSTER).read_text())
+    except (OSError, ValueError):
+        return None
+    return cluster if isinstance(cluster, dict) else None
+
+
+def cluster_state(cluster):
+    """'running' or 'queued' if the last refresh saw a job of the calibration so in Slurm, else None."""
+    states = {job.get("state") for job in cluster.get("jobs", []) if job.get("listed")}
+    return "running" if states & {"RUNNING", "COMPLETING"} else "queued" if states else None
+
+
 def is_running(folder):
     """Whether a process runs the calibration now, in this one or another, on this computer or another.
+
+    Sent to a cluster: whether the last refresh saw one of its jobs in Slurm, queued or running.
 
     By its status file: on this computer, the process holds the lock of the calibration (or, without locks, is alive); on
     another, Slurm still lists its job, or, where Slurm cannot be asked, it wrote the status less than STALE_SECONDS ago.
     Without a status file (calibrations of an earlier version), by the lock."""
+    cluster = read_cluster(folder)
+    if cluster is not None:
+        return cluster_state(cluster) is not None
     status = read_status(folder)
     if status is None:
         return _locked(folder) is True
@@ -614,8 +649,22 @@ def is_running(folder):
 
 
 def running_where(folder):
-    """e.g. 'job 123 on lrdn0042, last heard of 40 s ago, 17 of 100 trials completed', from its status file."""
+    """e.g. 'job 123 on lrdn0042, last heard of 40 s ago, 17 of 100 trials completed', from its status file; for one sent
+    to a cluster, as of the last refresh."""
+    cluster = read_cluster(folder)
     status = read_status(folder) or {}
+    if cluster is not None:
+        jobs = [job for job in cluster.get("jobs", []) if job.get("listed")]
+        parts = [f"on {cluster.get('host')}"] + [f"job {job['id']} {job.get('state', '').lower()}" for job in jobs]
+        if status.get("target"):
+            parts.append(f"{status.get('completed', 0)} of {status['target']} trials completed")
+        refreshed = _seconds_since(cluster.get("refreshed"))
+        if math.isfinite(refreshed):
+            heard = _seconds_since(status.get("heartbeat")) - refreshed
+            if jobs and math.isfinite(heard):
+                parts.append(f"last heard of {_clock(heard)} before")
+            parts.append(f"as of the refresh {_clock(refreshed)} ago")
+        return ", ".join(parts)
     parts = [f"job {status['job']} on {status.get('host')}" if status.get("job") else f"process {status.get('pid')} on {status.get('host')}"]
     since = _seconds_since(status.get("heartbeat"))
     if math.isfinite(since):
@@ -919,6 +968,9 @@ def status_of(folder, record):
     """The status of a calibration as it is now: 'interrupted' for one recorded as running that no process runs any more,
     e.g. after the GUI was closed or crashed."""
     status = record.get("status", "?")
+    cluster = read_cluster(folder)
+    if cluster is not None:
+        return cluster_state(cluster) or ("interrupted" if status == "running" else status)
     return "interrupted" if status == "running" and not is_running(folder) else status
 
 

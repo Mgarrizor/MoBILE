@@ -379,6 +379,23 @@ together (the Pareto front):
   for this. With a validation window, semi-transparent bars along the top of these plots mark the calibration window
   (green) and the validation window (purple), and their titles give the trial's validation scores; an objective that
   is not a dated series, e.g. a climatology, is drawn for the calibration window only, as scored.
+- **Create only** makes the calibration without running it: to run it on a cluster, or later (Resume, or
+  `mobile calibrate`).
+- **Run on a cluster (Slurm)**, under Calibrations, for the calibration chosen there: **Send** copies its folder to the
+  cluster (into the folder there of the Cluster settings), with the driving files and the observations it uses, its
+  paths made relative to it, and its age structure (compute nodes have no internet); its observations are listed and
+  copied only once you tick that they may be. **Submit job** writes a batch script there and submits it: one node,
+  `mobile calibrate` with as many runs at a time as fit in the CPUs with the calibration's threads per run; a job
+  submitted while another is listed waits for it (`--dependency=afterany`). Close the GUI if you like. **Refresh**
+  copies back the status, a snapshot of the study, the series each trial compared and the job logs (never the model
+  output), and asks Slurm about the jobs: the views below then show it as for a calibration run here, with the end of
+  the log of the last job. **Stop job** asks a running job to stop as at its time limit (resumable: submit again), or
+  cancels a queued one. While a calibration is on a cluster, the copy here only shows it: it is not run here. Every
+  action uses `ssh -o BatchMode=yes <host>`: log in first (e.g. CINECA's certificate of the day), or it says so at
+  once. The **Cluster settings** (host, folder there, MoBILE there, setup lines, account, partition, QOS, time limit,
+  CPUs, whole node, runs at the same time, a guess of how long a trial takes) each have an ⓘ and what to put; they
+  are kept for the next session. Defaults: CINECA LEONARDO, a DCGP node of 112 cores, where 16 runs × 7 threads per
+  run did best for Senegal 1998–2003 (9.85 M agents); other setups may differ.
 - **Results**, for the calibration running or chosen, its figure chosen from a menu, of the objective chosen where the
   figure is of one, with what it shows and a link to Optuna's documentation: the **distributions of the calibrated
   values**, each offset and model parameter (log-uniform ones on a log scale), over all the trials, the best tenth by the objective and the Pareto front (a narrow spread of the best means

@@ -2959,6 +2959,148 @@ sleep ${FAKE_SLEEP:-0}
             result = run_calibration(moved, StudyState(), parallel=1)
         self.assertEqual((result["status"], result["completed"]), ("finished", 2))
 
+    # A stand-in ssh: runs the command here, in a shell whose HOME is that of the cluster and whose PATH has its Slurm
+    FAKE_SSH = """#!/bin/bash
+while [ "$1" = "-o" ]; do shift 2; done
+host=$1; shift
+[ -n "$FAKE_SSH_DENY" ] && { echo "** WARNING: connection is not using a post-quantum key exchange algorithm." >&2;
+                              echo "$host: Permission denied (publickey)." >&2; exit 255; }
+echo "$*" >> "$FAKE_REMOTE_HOME/commands.txt"
+HOME="$FAKE_REMOTE_HOME" PATH="$FAKE_REMOTE_BIN:$PATH" exec bash -c "$*"
+"""
+    # sbatch runs the job at once, to its end, then says its id; squeue lists what FAKE_SQUEUE says; sacct, that it completed
+    FAKE_SLURM = {
+        "sbatch": """#!/bin/bash
+echo "$@" >> "$HOME/sbatch.txt"
+script=${@: -2:1}; folder=${@: -1}
+id=$(( $(cat "$HOME/next_id" 2>/dev/null || echo 1000) + 1 )); echo $id > "$HOME/next_id"
+[ -z "$FAKE_SQUEUE" ] && SLURM_JOB_ID=$id bash "$script" "$folder" > "$folder/logs/$id.out" 2>&1
+echo "$id;leonardo"
+""",
+        "squeue": """#!/bin/bash
+[ -n "$FAKE_SQUEUE" ] && echo "$FAKE_SQUEUE"
+true
+""",
+        "sacct": """#!/bin/bash
+for job in $(echo "$5" | tr , ' '); do echo "$job|COMPLETED"; done
+""",
+        "scancel": """#!/bin/bash
+echo "$@" >> "$HOME/scancel.txt"
+""",
+    }
+
+    def cluster(self):
+        """Settings of a stand-in cluster here: ssh, Slurm and `mobile` in folders of their own."""
+        from mobile.cluster import ClusterSettings
+
+        home = self.root / "cluster_home"
+        local_bin, remote_bin = self.root / "local_bin", self.root / "remote_bin"
+        for folder in (home, local_bin, remote_bin):
+            folder.mkdir(exist_ok=True)
+        scripts = {local_bin / "ssh": self.FAKE_SSH, **{remote_bin / name: text for name, text in self.FAKE_SLURM.items()},
+                   remote_bin / "mobile": f'#!/bin/bash\nPYTHONPATH={Path(MOBILE) / "python"} exec {sys.executable} -m mobile "$@"\n'}
+        for path, text in scripts.items():
+            path.write_text(text)
+            path.chmod(0o755)
+        config_dir = self.root / "config_here"
+        cached = config_dir / "worldpop" / "Global2000_2020" / "SEN_2012.json"
+        cached.parent.mkdir(parents=True)
+        cached.write_text((Path(MOBILE) / "python" / "mobile" / "age_structures" / "Global2000_2020" / "SEN_2012.json").read_text())
+        patch = mock.patch.dict(os.environ, {"PATH": f"{local_bin}{os.pathsep}{os.environ['PATH']}", "FAKE_REMOTE_HOME": str(home),
+                                             "FAKE_REMOTE_BIN": str(remote_bin), "MOBILE_CONFIG_DIR": str(config_dir)})
+        patch.start()
+        self.addCleanup(patch.stop)
+        return ClusterSettings(host="leonardo", folder="~/work/calibration", mobile=str(self.config.mobile), account="", partition="",
+                               qos="", time="00:10:00", cpus=2, exclusive=False, setup="# the modules and the venv here"), home
+
+    def test_cluster_send_submit_refresh(self):
+        import optuna
+
+        from mobile.calibration_engine import (CalibrationError, SERIES, create_calibration, is_running, open_study, read_calibration,
+                                               read_cluster, run_calibration, status_of, trial_comparison, trial_folder)
+        from mobile.cluster import ClusterError, last_log, observation_files, refresh, send, submit
+        from mobile.sensitivity_runs import StudyState
+
+        settings, home = self.cluster()
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=3, name="sent")
+        self.assertEqual(observation_files(folder), [(str(self.data.resolve()), self.data.stat().st_size)])
+        with self.assertRaisesRegex(ClusterError, "tick that its observations may be copied"):
+            send(folder, settings)
+        there = Path(send(folder, settings, cleared=True))
+        self.assertEqual(there, home / "work" / "calibration" / "sent")  # ~ as the shell there sees it
+        record = json.loads((there / "calibration.json").read_text())
+        self.assertEqual({objective["data"] for objective in record["objectives"]}, {"data/objective_0_data_cases.nc", "data/objective_1_data_cases.nc"})
+        self.assertEqual(record["run_inputs"]["temp_file"], "inputs/external/temp_file_temperature.nc")
+        self.assertTrue((there / "inputs" / "external" / "temp_file_temperature.nc").is_file())
+        self.assertTrue((home / ".config" / "mobile" / "worldpop" / "Global2000_2020" / "SEN_2012.json").is_file())
+        with self.assertRaisesRegex(ClusterError, "sent already"):
+            send(folder, settings, cleared=True)
+        with self.assertRaisesRegex(CalibrationError, "sent to leonardo"):  # The folder here only mirrors it
+            run_calibration(folder, StudyState())
+        # The job: runs it there, from that folder alone (the data here moved away), to the end
+        os.rename(self.data, self.root / "cases_away.nc")
+        job = submit(folder, settings)
+        self.assertEqual(job, "1001")
+        script = (there / "job.sh").read_text()
+        self.assertIn('exec mobile calibrate "$1" --parallel 2', script)
+        self.assertIn(f"#SBATCH --output={there}/logs/%j.out", script)
+        self.assertNotIn("--account", script)  # Empty: not given
+        self.assertEqual(json.loads((there / "calibration.json").read_text())["completed"], 3)
+        self.assertFalse((Path(folder) / "optuna.db").stat().st_size and open_study(folder, read_calibration(folder)).trials)
+        # Refreshed: the study, the progress, the series of each trial and the log; never the output
+        refresh(folder)
+        record = read_calibration(folder)
+        self.assertEqual((record["status"], record["completed"], status_of(folder, record), is_running(folder)), ("finished", 3, "finished", False))
+        self.assertEqual(read_cluster(folder)["jobs"][0]["state"], "COMPLETED")  # As sacct says
+        trials = open_study(folder, record).trials
+        self.assertEqual(sum(trial.state == optuna.trial.TrialState.COMPLETE for trial in trials), 3)
+        self.assertTrue((trial_folder(folder, 2) / SERIES).is_dir())
+        self.assertFalse(list(Path(folder).glob("trials/*/seed_*")))
+        model, data, *_ = trial_comparison(folder, 2, 0)  # Drawn here from the series kept there
+        self.assertEqual(len(model), len(data))
+        job_id, tail = last_log(folder)
+        self.assertEqual(job_id, "1001")
+        self.assertIn("exit 0: done", tail)
+
+    def test_cluster_jobs_and_login(self):
+        from mobile.calibration_engine import create_calibration, is_running, read_calibration, running_where, status_of
+        from mobile.cluster import ClusterError, ClusterSettings, job_script, refresh, send, stop, submit
+
+        settings, home = self.cluster()
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=3, name="queued")
+        with mock.patch.dict(os.environ, {"FAKE_SSH_DENY": "1"}):
+            with self.assertRaisesRegex(ClusterError, r"cannot connect to leonardo: log in to the cluster first.*\(leonardo: Permission denied \(publickey\)\.\)"):
+                send(folder, settings, cleared=True)
+        send(folder, settings, cleared=True)
+        with mock.patch.dict(os.environ, {"FAKE_SQUEUE": "1001 PENDING"}):
+            first = submit(folder, settings)
+            refresh(folder)
+            self.assertEqual((status_of(folder, read_calibration(folder)), is_running(folder)), ("queued", True))
+            second = submit(folder, settings)  # After the first
+        self.assertIn(f"--dependency=afterany:{first}", (home / "sbatch.txt").read_text().splitlines()[-1])
+        with mock.patch.dict(os.environ, {"FAKE_SQUEUE": f"{second} RUNNING"}):
+            refresh(folder)
+            self.assertEqual(status_of(folder, read_calibration(folder)), "running")
+            self.assertRegex(running_where(folder), rf"on leonardo, job {second} running, .*as of the refresh 0 s ago")
+            self.assertEqual(stop(folder), second)
+        self.assertEqual((home / "scancel.txt").read_text().strip(), f"--batch --signal=TERM {second}")
+        refresh(folder)  # Ended: sacct says completed, and its status is as written there (not run here)
+        self.assertEqual(is_running(folder), False)
+        # The script for LEONARDO's DCGP nodes, as the settings default to
+        record = read_calibration(folder)
+        record["setup"]["run"]["threads"] = 7
+        script = job_script(ClusterSettings(), record, "/leonardo_work/try26_garrido/calibration/x")
+        for line in ("#SBATCH --account=try26_garrido", "#SBATCH --partition=dcgp_usr_prod", "#SBATCH --cpus-per-task=112",
+                     "#SBATCH --exclusive", "#SBATCH --signal=B:TERM@300", "unset PYTHONPATH",
+                     'exec mobile calibrate "$1" --parallel 16'):
+            self.assertIn(line, script)
+        with self.assertRaisesRegex(ClusterError, "need 32 CPUs"):
+            job_script(replace(ClusterSettings(), parallel=4, cpus=16), {**record, "setup": {**record["setup"], "run": {"threads": 8}}}, "/x")
+        # A folder there with too long a path
+        long = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=3, name="long")
+        with self.assertRaisesRegex(ClusterError, "choose a shorter folder there"):
+            send(long, replace(settings, folder="~/" + "x" * 150), cleared=True)
+
     def test_regions_share_an_offset(self):
         from mobile.calibration_engine import create_calibration, read_calibration, region_mean, run_calibration, trials_table
         from mobile.calibration_run_ui import offset_cells, regions
