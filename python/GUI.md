@@ -209,12 +209,12 @@ Until there are results, the tab says how to get them.
 1. Press **Run**. A progress bar above the tabs shows compiling, spin-up and the day being integrated.
 2. Choose a **Variable** (and an **Age group** for variables by age) and move the **Day** slider, or play
    the days with the buttons beside it.
-3. Click a cell on the map for its time series below. Click a second cell to compare. The dotted line marks the
+3. Click a cell on the map for its time series below (it is marked at the centre of the cell, wherever in it you click, also on the outline of an area of a shapefile). Click a second cell to compare. The dotted line marks the
    day on the map. Drag to zoom in, double-click to see the whole grid again.
 4. With a seed band, pick which seed is on the map; a third plot shows the median and range across seeds.
 5. **Map display** (closed at first): colour map, linear or log scale, and minimum and maximum. **Automatic range**
    goes back to the 1st to 99th percentile of the whole run. On a log scale, zeros show in the lowest colour.
-   **Terrain** adds shaded relief.
+   **Terrain** lays the relief over the map as a shading (slopes facing away from the light, from the northwest, darker; those facing it lighter; flat ground and the sea unchanged), so that it shows where there are data too; its detail follows the size of the area, so a small region gets as much as a large one.
 
 The first time the GUI has a connection, it downloads the map background (Natural Earth) to `~/.cache/mobile`,
 and the relief (ETOPO 2022) when Terrain is first turned on. Without a connection the map is plain.
@@ -224,6 +224,8 @@ and the relief (ETOPO 2022) when Terrain is first turned on. Without a connectio
 Calibration compares the model with observations, to tune its parameters with [Optuna](https://optuna.org/). The tab
 has a **Model** box and a **Data** box side by side, each with its own processing steps, and **Model and data** below,
 which compares them (the objectives and Optuna come next).
+
+**Steps**: a column at the right of the tab (on screens 992 px wide or more) shows the steps of a calibration as boxes joined by arrows, from Setup applied to Results, and stays in view as the page scrolls. Each box is grey while its step is to do, amber while it is going on or needs attention (e.g. a calibration interrupted, or not comparable yet) and green once it is done, says which in words, and gives a short note (e.g. "running on leonardo, 37 of 300 trials"). Clicking a box scrolls to its card; Setup applied opens tab 1. The steps from Calibration created on are those of the calibration running here, or else of the one chosen under Calibrations. A switch at the top says which calibration the steps follow: **This calibration** (the one chosen under Calibrations, or running: what it was made from is stored in it, so its steps up to What to calibrate are done, with notes from its record) or **A new one** (the steps of the form, as you prepare a calibration; Calibration created, Run and Results to do). Choosing a calibration under Calibrations makes them follow it; loading data, choosing a run in the Model box or adding an objective makes them follow a new one; the switch changes it by hand. Collapsed, a C or N above the squares says which. The » button at its top collapses it to the right into a narrow rail of numbered squares in the same colours (a step to do has a dashed border; hover a square for its title and state; « opens it again); the browser remembers the choice.
 
 The **Model** box takes an output of a finished run from the results folder (**Refresh** lists runs made since), or of a
 run in any other folder: type it under **Or a run in another folder**, or **Browse**, and press **Use this run** (the
@@ -353,11 +355,19 @@ together (the Pareto front):
   processed), threads per run (at first those of the setup; kept with the calibration, as results depend on them),
   runs at the same time (at first as many as fit in the cores), and a name. The runs write the outputs of the Outputs card and those the
   objectives were made from. The model is built once, by the first run.
-- **Run calibration** shows the progress; **Cancel** stops it, and **Resume**, under Calibrations, goes on with it,
+- **Run calibration** shows the progress; **Cancel** stops it, and **Resume here**, under Calibrations, goes on with it on this computer,
   also in a new GUI and after the GUI was closed or crashed: it is then listed as **interrupted** (recorded as running,
   but no process runs it any more). A calibration runs in one process at a time: Resume refuses one that another GUI or
   script is running. A resumed calibration keeps its threads per run, and runs as many at a time as fit in the cores
-  with them. It goes on until as many trials have **completed** as asked for: a trial that fails is made up for by
+  with them. **Where transmission dies out**: a trial whose model series does not vary (no cases, so e.g. a correlation
+  is not defined) does not fail: it completes as **infeasible**, kept out of the Pareto front and of the best, drawn as
+  grey rings in the plot of the objectives. A trial is infeasible when transmission died out (no positive value of the
+  objectives' outputs in the last 365 days of the run, in more than half its seeds) or a model series did not vary.
+  How far it is from persisting is given to Optuna with it (the share of the run after the last case: just above 0 if
+  it died out at the very end, 1 if there were no cases at all), so the sampler learns where the boundary between dying
+  out and persisting is and searches along it, instead of losing those trials. Its objectives get the values of a
+  series that does not vary (correlation 0, the relative RMSE of a constant series). Every trial records when its last
+  case was, in each seed. It goes on until as many trials have **completed** as asked for: a trial that fails is made up for by
   another. It stops if its first 3 trials all fail, or more than one in ten of the trials asked for (at least 3).
   Trials left running by a process that ended (the GUI closed, a job killed) are not counted as failures.
 - **Without the GUI**, e.g. in a batch job on a cluster: `mobile calibrate <folder>` runs or continues it, one line per
@@ -379,9 +389,19 @@ together (the Pareto front):
   for this. With a validation window, semi-transparent bars along the top of these plots mark the calibration window
   (green) and the validation window (purple), and their titles give the trial's validation scores; an objective that
   is not a dated series, e.g. a climatology, is drawn for the calibration window only, as scored.
-- **Create only** makes the calibration without running it: to run it on a cluster, or later (Resume, or
-  `mobile calibrate`).
-- **Run on a cluster (Slurm)**, under Calibrations, for the calibration chosen there: **Send** copies its folder to the
+- **Create only** makes the calibration without running it, and chooses it under Calibrations: run it here with
+  **Resume here**, send it to a cluster (below), or run it with `mobile calibrate`.
+- **Use as template**, under Calibrations, fills the card and the objectives from the calibration chosen, for a new
+  one: its objectives (those whose observations are still where they were), what it calibrates and the ranges (its
+  cells or regions found again on the setup now), the validation window, the sampler, trials, start-up trials, seeds
+  (the first one in the sidebar) and threads per run, and a new name (e.g. look_2). Change what you like, then Create
+  only or Run calibration; the calibration chosen is not changed. It says what it could not fill: another setup
+  (apply it in tab 1), sliders that differ from its fixed parameters, another number of agents.
+- The settings **kept with the calibration** (and so used wherever it runs, here or on a cluster) are labelled so;
+  **Runs at the same time**, labelled **this computer**, is not kept: a job on a cluster takes those of its Cluster
+  settings. With TPE, fewer start-up trials than runs at the same time are warned of: the sampler would suggest trials
+  while almost none have ended.
+- **Run on LEONARDO (CINECA)**, under Calibrations, a Slurm cluster, for the calibration chosen there: **Send** copies its folder to the
   cluster (into the folder there of the Cluster settings), with the driving files and the observations it uses, its
   paths made relative to it, and its age structure (compute nodes have no internet); its observations are listed and
   copied only once you tick that they may be. **Submit job** writes a batch script there and submits it: one node,
@@ -402,7 +422,13 @@ together (the Pareto front):
   the data tell the offset well; a wide one, that they hardly do), and Optuna's figures: the **Pareto front**,
   **parameter importances** (PED-ANOVA, turned for objectives that are maximised), **slice**, **parallel
   coordinates**, **contour**, **rank**, the **empirical distribution** of the objective, and the **timeline** of the
-  trials. Optuna's figures show what it samples, dT₁ and the gaps; the offsets of the cells follow from them. Its folder, `calibration/<name>/` in the
+  trials; and **epidemic or endemic**: where between the two the trials are, by two measures that do not depend on the
+  number of cases or the site, from the new cases of each run (always written by a calibration), the median over its
+  seeds: the **year-to-year variability** (coefficient of variation of the cases of each full calendar year: low when
+  endemic, high when outbreak years alternate with quiet ones) and the **fade-out** share (months with no new case: 0
+  when transmission never stops). Each against every calibrated value, and the trials over each pair of calibrated
+  values coloured by their fade-out share; trials where transmission died out in red. They are recorded with every
+  trial, not optimised: no regime is imposed on the calibration. Optuna's figures show what it samples, dT₁ and the gaps; the offsets of the cells follow from them. Its folder, `calibration/<name>/` in the
   results folder, holds `calibration.json`, the Optuna study (`optuna.db`, and `optuna.snapshot.db`, a copy that can be
   copied while it runs), `status.json`, the model (`bin/`) and the trials, each with the series its objectives compared
   (`series/`), from which its plots are drawn. A

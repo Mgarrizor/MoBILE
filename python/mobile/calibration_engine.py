@@ -73,6 +73,12 @@ STALE_SECONDS = 300  # A status not written for this long, on another computer w
 SNAPSHOT_SECONDS = 30  # The snapshot of the study is written at most this often, and at the end
 CRASH_RATE = 0.1  # The calibration stops when more trials fail than this share of the trials asked for (at least FAIL_FAST)
 EXPECTED_FROM = 10  # The time a trial takes is the 95th percentile of the completed trials once there are this many
+CONSTRAINT = "constraint"  # Trial attribute: (violation,), <= 0 feasible (persistence); also given to Optuna
+PERSISTENCE = "persistence"  # Trial attribute: how long transmission lasted in each seed (persistence)
+INFEASIBLE = "infeasible"  # Trial attribute: why the trial is infeasible, for the user
+DIED_OUT_DAYS = 365  # A seed whose output has no positive value in this many last days (or all, if shorter) died out
+REGIME = "regime"  # Trial attribute: where between epidemic and endemic the runs are (regime)
+CASES = "Inew"  # The output of new cases (out_I_new), from which the regime is measured
 STUDY_NAME = "calibration"
 INPUTS = "inputs"
 TRIALS = "trials"
@@ -89,7 +95,9 @@ SAMPLER_LINKS = {
     "random": "https://optuna.readthedocs.io/en/stable/reference/samplers/generated/optuna.samplers.RandomSampler.html",
     "nsga2": "https://optuna.readthedocs.io/en/stable/reference/samplers/generated/optuna.samplers.NSGAIISampler.html",
 }
-optuna.logging.set_verbosity(optuna.logging.WARNING)
+# Optuna's warnings include a message and a traceback for every failed trial: the engine records the failure with the
+# trial (and `mobile calibrate` prints one line), so only its errors are let through
+optuna.logging.set_verbosity(optuna.logging.ERROR)
 
 
 class CalibrationError(ValueError):
@@ -319,7 +327,9 @@ def _temperature(temperature, temp_file, pop_file):
     if ordered and len(cells) > 1 and not 0 <= gap[0] < gap[1]:
         raise CalibrationError("the range of the gaps needs a low of at least 0, below its high")
     means = [region_mean(temp_file, pop_file, cell) for cell in cells]
-    return {"cells": cells, "first": first, "gap": gap, "means": means, "ordered": ordered}
+    size = temperature.get("size")  # Of the boxes of the regions, if any: kept for a calibration used as a template
+    return {"cells": cells, "first": first, "gap": gap, "means": means, "ordered": ordered,
+            **({"size": float(size)} if size else {})}
 
 
 def _in_folder(folder, path):
@@ -419,11 +429,24 @@ def keep_series(objectives, run_dirs, folder, validation=None, part=None):
             continue
 
 
-def evaluate(objectives, run_dirs, validation=None, part=None, strict=True, keep=None):
+def flat_value(metric, data_values):
+    """The value of a metric for a model series that does not vary (e.g. transmission died out), where the metric itself
+    is not defined: what a model with no timing and no swings scores. The correlation 0 (no timing in common); the relative
+    RMSE that of a constant series, the coefficient of variation of the data. None for the others (always defined)."""
+    if metric == "correlation":
+        return 0.0
+    if metric == "rmse_relative" and data_values.mean() > 0:
+        return float(np.sqrt(np.mean((1.0 - data_values / data_values.mean()) ** 2)))
+    return None
+
+
+def evaluate(objectives, run_dirs, validation=None, part=None, strict=True, keep=None, flat=None):
     """[value of each objective] of the runs of a trial (one per seed): the output and the observations as
     objective_series gives them (with a validation window: the part of the period, "calibration" or "validation"), paired
     and compared by the metric of the objective. Not strict, None for a value that cannot be had instead of an error.
-    keep: a folder to keep the series compared in (keep_series)."""
+    keep: a folder to keep the series compared in (keep_series). flat: a list to which the index of each objective whose
+    model series does not vary is added, scored then as flat_value says, instead of an error (the trial is then
+    infeasible, see persistence)."""
     results = []
     for index, objective in enumerate(objectives):
         try:
@@ -432,6 +455,10 @@ def evaluate(objectives, run_dirs, validation=None, part=None, strict=True, keep
                 _keep(keep, index, part, model, data)
             model_values, data_values, _ = pair(model, data)
             value = metrics(model_values, data_values)[objective["metric"]]
+            if value is None and flat is not None and np.ptp(model_values) == 0:
+                value = flat_value(objective["metric"], data_values)
+                if value is not None:
+                    flat.append(index)
             if value is None:
                 raise DataError(f"{objective['name']}: {objective['metric']} is not defined for these values (e.g. a flat series)")
         except DataError:
@@ -443,6 +470,80 @@ def evaluate(objectives, run_dirs, validation=None, part=None, strict=True, keep
     return results
 
 
+def persistence(objectives, run_dirs, flat=()):
+    """How long transmission lasted in the runs of a trial, and whether the trial is feasible: {days, last: [day of the
+    last positive value of each seed, -1 for none], died_out: seeds with no positive value in the last DIED_OUT_DAYS
+    (or all, if the run is shorter), flat: names of the objectives whose model series did not vary, violation, reason}.
+
+    Measured on the daily output of the variables of the objectives (the latest positive value of any of them), over the
+    whole run. Infeasible (violation > 0) if more than half the seeds died out, or an objective's series was flat. The
+    violation is graded, for the sampler to know how near the boundary between dying out and persisting a trial is: the
+    share of the run after transmission ended (the mean over the seeds that died out), from just above 0 (died out at
+    the very end) to 1 (none at all); 1 also for a flat series with transmission going on (nothing to grade it by). A
+    feasible trial gets -1."""
+    variables = {(objective["variable"], objective["space"], objective["aggregation"]) for objective in objectives}
+    days, last = 0, []
+    for run_dir in run_dirs:
+        latest = -1
+        for name, space, aggregation in sorted(variables, key=str):
+            member = model_members(run_dir, name, space, None, aggregation)[0]
+            values = np.asarray(member.values, dtype="f8")
+            days = max(days, len(values))
+            positive = np.flatnonzero(np.isfinite(values) & (values > 0))
+            latest = max(latest, int(positive[-1]) if len(positive) else -1)
+        last.append(latest)
+    window = min(DIED_OUT_DAYS, days)
+    died = [day for day in last if days - 1 - day >= window]
+    flat_names = [objectives[index]["name"] for index in sorted(set(flat))]
+    result = {"days": days, "last": last, "died_out": len(died), "flat": flat_names}
+    if died and len(died) * 2 > len(last):
+        result["violation"] = float(np.mean([(days - 1 - day) / days for day in died]))
+        never = sum(day < 0 for day in died)
+        result["reason"] = ("transmission died out: " + (f"no case at all in {never} of {len(last)} seeds" if never == len(died)
+                            else f"no case in the last {min(days - 1 - day for day in died)}–{max(days - 1 - day for day in died)} "
+                                 f"of {days} days in {len(died)} of {len(last)} seeds"
+                            if len(died) > 1 else f"no case in the last {days - 1 - died[0]} of {days} days"))
+    elif flat_names:
+        result["violation"] = 1.0
+        result["reason"] = f"the model series of {', '.join(flat_names)} does not vary"
+    else:
+        result["violation"] = -1.0
+    return result
+
+
+def regime(run_dirs):
+    """Where between epidemic and endemic behaviour the runs of a trial are, by two measures that do not depend on the
+    number of cases or the site (scale-free), from the daily new cases (CASES) of each run, over the whole run:
+
+      annual_cv  the coefficient of variation of the cases of each full calendar year (standard deviation over the mean,
+                 between years): low for endemic transmission, the same every year; high for epidemics, years of
+                 outbreaks between years with few cases. None with fewer than two full years, or no cases.
+      fade_out   the share of the full calendar months with no new case: 0 when transmission never stops; high when it
+                 fades out between outbreaks (or died out).
+
+    {annual_cv, fade_out: the median over the seeds, seeds: {annual_cv: [...], fade_out: [...]}}, or None if the runs
+    have no output of new cases."""
+    cvs, fades = [], []
+    for run_dir in run_dirs:
+        try:
+            member = model_members(run_dir, CASES, "people", None, None)[0]
+        except DataError:
+            return None
+        days = pd.to_datetime(member.index["start"].to_numpy())
+        values = pd.Series(np.nan_to_num(np.asarray(member.values, dtype="f8")), index=days)
+        full = lambda groups, length: groups.size()[groups.size() >= length]  # noqa: E731 - periods wholly in the run
+        years = values.groupby(values.index.year)
+        whole_years = full(years, 365).index
+        annual = years.sum()[whole_years]
+        cvs.append(float(annual.std(ddof=1) / annual.mean()) if len(annual) >= 2 and annual.mean() > 0 else None)
+        months = values.groupby([values.index.year, values.index.month])
+        whole = [key for key, size in months.size().items() if size >= pd.Period(f"{key[0]}-{key[1]:02d}").days_in_month]
+        sums = months.sum()[whole]
+        fades.append(float((sums <= 0).mean()) if len(sums) else None)
+    median = lambda found: float(np.median([x for x in found if x is not None])) if any(x is not None for x in found) else None  # noqa: E731
+    return {"annual_cv": median(cvs), "fade_out": median(fades), "seeds": {"annual_cv": cvs, "fade_out": fades}}
+
+
 def trial_folder(folder, number):
     return Path(folder) / TRIALS / f"trial_{number:05d}"
 
@@ -450,6 +551,9 @@ def trial_folder(folder, number):
 # ---------------------------------------------------------------- running
 
 def sampler_for(record):
+    """The sampler of a calibration. Each trial gives its feasibility to Optuna (trial.set_constraint, in the trial): the
+    samplers keep infeasible trials (transmission died out) out of the Pareto front and rank them among themselves by how
+    early it died out, so the search learns where the boundary is instead of losing those trials."""
     sampler = record["sampler"]
     if sampler["name"] == "tpe":
         return optuna.samplers.TPESampler(multivariate=True, constant_liar=True, n_startup_trials=sampler["startup_trials"],
@@ -852,10 +956,22 @@ def _run_locked(folder, record, state, parallel, threads, deadline=None, trial_s
             with NETCDF_LOCK:
                 window = record.get("validation")
                 kept = here / SERIES
-                results = evaluate(objectives, run_dirs, window, "calibration" if window else None, keep=kept)
+                flat = []
+                results = evaluate(objectives, run_dirs, window, "calibration" if window else None, keep=kept, flat=flat)
                 if window:  # Scored on the validation window too, kept with the trial; not optimised
                     trial.set_user_attr("validation", evaluate(objectives, run_dirs, window, "validation", strict=False, keep=kept))
                     keep_series(objectives, run_dirs, kept, window, None)  # The whole period too, for the plots
+                lasted = persistence(objectives, run_dirs, flat)
+                measured = regime(run_dirs)
+            if measured is not None:
+                trial.set_user_attr(REGIME, measured)
+            # Infeasible (transmission died out, or a series did not vary): completed, kept out of the front, and graded
+            # for the sampler by how near persisting it came
+            trial.set_user_attr(PERSISTENCE, {key: value for key, value in lasted.items() if key not in ("violation", "reason")})
+            trial.set_user_attr(CONSTRAINT, (lasted["violation"],))
+            trial.set_constraint("transmission", lasted["violation"])
+            if lasted["violation"] > 0:
+                trial.set_user_attr(INFEASIBLE, lasted["reason"])
         except RunCancelled:
             trial.set_user_attr("cancelled", True)
             raise
@@ -928,7 +1044,8 @@ def _run_locked(folder, record, state, parallel, threads, deadline=None, trial_s
 # ---------------------------------------------------------------- results
 
 def trials_table(folder):
-    """[{number, state, values, params, offsets, seconds}] of the trials of a calibration, in order."""
+    """[{number, state, values, params, offsets, seconds, failure, baseline, validation, infeasible (why, or None),
+    persistence, violation, regime}] of the trials of a calibration, in order."""
     record = read_calibration(folder)
     study = open_study(folder, record)
     rows = []
@@ -937,7 +1054,9 @@ def trials_table(folder):
         seconds = (trial.datetime_complete - trial.datetime_start).total_seconds() if trial.datetime_complete and trial.datetime_start else None
         rows.append({"number": trial.number, "state": trial.state.name, "values": trial.values, "params": dict(trial.params),
                      "offsets": offsets, "seconds": seconds, "failure": trial.user_attrs.get("failure"),
-                     "baseline": bool(trial.user_attrs.get("baseline")), "validation": trial.user_attrs.get("validation")})
+                     "baseline": bool(trial.user_attrs.get("baseline")), "validation": trial.user_attrs.get("validation"),
+                     "infeasible": trial.user_attrs.get(INFEASIBLE), "persistence": trial.user_attrs.get(PERSISTENCE),
+                     "violation": trial.user_attrs.get(CONSTRAINT, (None,))[0], "regime": trial.user_attrs.get(REGIME)})
     return rows
 
 
@@ -983,11 +1102,29 @@ def calibration_label(folder, record):
 
 
 def best_trials(folder):
-    """The trials on the Pareto front (for one objective, the best), as rows of trials_table."""
+    """The trials on the Pareto front (for one objective, the best), as rows of trials_table: feasible ones only."""
     record = read_calibration(folder)
     study = open_study(folder, record)
-    numbers = {trial.number for trial in study.best_trials}
-    return [row for row in trials_table(folder) if row["number"] in numbers]
+    rows = trials_table(folder)
+    numbers = set(front(study, rows))
+    return [row for row in rows if row["number"] in numbers]
+
+
+def front(study, rows):
+    """The numbers of the trials on the Pareto front among the feasible completed ones (rows of trials_table): those no
+    other is at least as good as on every objective and better on one. Computed here rather than by Optuna, which keeps
+    infeasible trials out only for samplers that take the constraints (not the random one)."""
+    signs = np.array([-1.0 if direction == optuna.study.StudyDirection.MAXIMIZE else 1.0 for direction in study.directions])
+    feasible = [row for row in rows if row["state"] == "COMPLETE" and not (row["violation"] is not None and row["violation"] > 0)]
+    if not feasible:
+        return []
+    values = np.array([row["values"] for row in feasible], dtype="f8") * signs  # All minimised
+    kept = []
+    for i, row in enumerate(feasible):
+        dominated = np.any(np.all(values <= values[i], axis=1) & np.any(values < values[i], axis=1))
+        if not dominated:
+            kept.append(row["number"])
+    return kept
 
 
 def list_calibrations(runs_dir):

@@ -23,11 +23,13 @@ from .calibration_model import (
     DRIVERS, SEED_MEAN, SPACES, chosen_seeds, default_aggregation, driver_panel, members_mean, model_members, process_both, run_choices,
     run_elsewhere, run_seeds, run_variables, seed_spread, shared_span,
 )
+from .calibration_progress import DOING, DONE, TODO, anchor, progress_column
 from .calibration_run_ui import calibration_run_card, driver_controls, paired_span
 from .calibration_steps import (
     AGGREGATE_PERIODS, COMBINATIONS, FILTER_MISSING, FILTERS, OPERATIONS, SELECTIONS, STATISTICS, STEP_KINDS, TIME_UNITS, TRANSFORMS, apply_steps,
     default_step, describe,
 )
+from .config import ConfigError
 from .layout import OPTUNA_URL, with_tip
 from .plots import comparison_figure, mark_windows, message_figure, observations_figure, send_figure
 from .results import read_run
@@ -48,8 +50,9 @@ DATA, MODEL = "cal_data", "cal_model"  # The prefixes of the ids of the two boxe
 
 
 def calibration_tab():
-    """The Calibration tab: what it is for, the Model and the Data boxes, and their comparison."""
-    return ui.div(
+    """The Calibration tab: what it is for, the Model and the Data boxes, and their comparison; at its right, the steps of
+    a calibration (calibration_progress)."""
+    content = ui.div(
         ui.p("Calibration compares the model with observations: the Model box takes an output of a finished run and the "
              "Data box loads observations, each processed by steps you choose, and the comparison below pairs them on the "
              "periods they share and gives the metrics. Several such objectives are then optimised together with ",
@@ -57,11 +60,13 @@ def calibration_tab():
              "calibration in the last card. This tab is in development: the results views (Optuna's figures, the distributions of "
              "the parameters) come next.", class_="text-muted"),
         _how_to_calibrate(),
-        ui.layout_columns(_model_box(), _data_box(), col_widths=(6, 6)),
+        ui.layout_columns(ui.div(anchor("model"), _model_box()), ui.div(anchor("data"), _data_box()), col_widths=(6, 6)),
+        anchor("compared"),
         _comparison_card(),
         calibration_run_card(),
         class_="mt-3",
     )
+    return ui.div(content, progress_column(), class_="cal-layout")
 
 
 def _how_to_calibrate():
@@ -1096,4 +1101,37 @@ def calibration_server(input, output, session, setup):
             metrics_table(values, model_values, data_values, split_metrics()),
         )
 
-    return SimpleNamespace(objectives=objectives)
+    def prepared():
+        """{step: (state, note)} of the steps of calibration_progress up to the objectives."""
+        try:
+            setup().validate()
+            states = {"setup": (DONE, None)}
+        except ConfigError:
+            states = {"setup": (DOING, "fix it in tab 1")}
+        name = model_name()[0]
+        model_values, model_problem = model.processed()
+        states["model"] = ((DONE, name) if model_values is not None
+                           else (DOING, "check the steps") if model_raw_or_error()[0] is not None
+                           else (DOING, "choose an output") if name else (TODO, None))
+        data_values, _ = data.processed()
+        states["data"] = ((DONE, chosen()) if data_values is not None
+                          else (DOING, "check the import or steps") if datasets() else (TODO, None))
+        found = paired()
+        states["compared"] = ((DONE, f"{len(found[2])} pairs") if not isinstance(found, str)
+                              else (DOING, "not comparable yet") if model_values is not None and data_values is not None
+                              else (TODO, None))
+        count = len(objectives())
+        states["objectives"] = (DONE, f"{count} objective{'s' if count > 1 else ''}") if count else (TODO, None)
+        if count:  # Objectives carry their data and model steps (e.g. from a template): those steps are not needed again
+            for key in ("data", "model", "compared"):
+                if states[key][0] != DONE:
+                    states[key] = (DONE, "in the objectives")
+        return states
+
+    @reactive.calc
+    def activity():
+        """What changes when a new calibration is being prepared: the data set shown, the run of the Model box and the
+        objectives (for the steps to follow the new one)."""
+        return chosen(), input[f"{MODEL}_run"](), tuple(objective["name"] for objective in objectives())
+
+    return SimpleNamespace(objectives=objectives, prepared=prepared, activity=activity)

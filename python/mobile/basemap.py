@@ -8,6 +8,7 @@ import base64
 import hashlib
 import io
 import json
+import math
 import os
 import urllib.request
 import zipfile
@@ -32,6 +33,8 @@ ETOPO_URL = "https://coastwatch.pfeg.noaa.gov/erddap/griddap/ETOPO_2022_v1_15s.n
 TERRAIN_EXAGGERATION = 5.0  # Relief at this scale is too flat to see otherwise
 TIMEOUT_SECONDS = 60
 PADDING_DEGREES = 2.0  # Around the grid, for zooming out
+TERRAIN_SAMPLES = 800  # Elevations across the longer side of the terrain, at most: its resolution, from the size of the area
+SHADOW_ALPHA, LIGHT_ALPHA = 0.55, 0.3  # The most a slope darkens or lightens the colours under it
 
 
 @dataclass(frozen=True)
@@ -152,7 +155,7 @@ def load_basemap(lon, lat):
 
 @dataclass(frozen=True)
 class Terrain:
-    image: str  # PNG as a data URI: land shaded from the northwest, sea transparent
+    image: str  # PNG (grey and alpha) as a data URI: the shading of the land lit from the northwest, laid over the map; sea transparent
     west: float
     north: float
     width: float
@@ -171,13 +174,39 @@ def _hillshade(elevation, lat, spacing):
     return np.clip(shade, 0.0, 1.0)
 
 
-def load_terrain(lon, lat, land_colour):
-    """Shaded relief of a grid from ETOPO 2022, on the land colour; None if it cannot be obtained."""
+def _shading(elevation, lats, lons, cached=None):
+    """The Terrain of an elevation field (lat increasing): a grey and alpha image, black with an alpha growing as the
+    ground is shaded below that of flat ground (0.71), white with an alpha as it is lit above it; transparent at sea."""
+    shade = _hillshade(np.nan_to_num(elevation), lats, abs(float(lats[1] - lats[0])))
+    flat = 0.71  # The shade of flat ground, lit from 45 degrees
+    dark = np.clip((flat - shade) / flat, 0.0, 1.0) * SHADOW_ALPHA
+    light = np.clip((shade - flat) / (1.0 - flat), 0.0, 1.0) * LIGHT_ALPHA
+    grey = np.where(dark >= light, 0, 255).astype("uint8")
+    alpha = (np.where(np.nan_to_num(elevation) > 0, np.maximum(dark, light), 0.0) * 255).astype("uint8")
+    buffer = io.BytesIO()
+    # An image has its first row at the top, so north first
+    Image.fromarray(np.stack([grey, alpha], axis=2)[::-1], "LA").save(buffer, format="PNG", optimize=True)
+    half_lat, half_lon = abs(float(lats[1] - lats[0])) / 2, abs(float(lons[1] - lons[0])) / 2
+    terrain = Terrain(
+        image="data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode(),
+        west=float(lons[0]) - half_lon, north=float(lats[-1]) + half_lat,
+        width=float(lons[-1] - lons[0]) + 2 * half_lon, height=float(lats[-1] - lats[0]) + 2 * half_lat,
+    )
+    if cached is not None:
+        cached.write_text(json.dumps(terrain.__dict__))
+    return terrain
+
+
+def load_terrain(lon, lat, land_colour=None):
+    """Shaded relief of a grid and the area around it (PADDING_DEGREES) from ETOPO 2022, as a shading to lay over the map:
+    transparent on flat ground and at sea, darker on the slopes facing away from the light, lighter on those facing it;
+    None if it cannot be obtained. Its resolution is set by the size of the area (about TERRAIN_SAMPLES across it, at
+    most the 15 arc-seconds of the source), so a small area gets as much detail as a large one. land_colour: not used
+    (the land keeps its colour under the shading), kept for the callers."""
     west, east = float(min(lon)) - PADDING_DEGREES, float(max(lon)) + PADDING_DEGREES
     south, north = float(min(lat)) - PADDING_DEGREES, float(max(lat)) + PADDING_DEGREES
-    # About 4 samples per grid cell of the 15 arc-second source
-    stride = max(1, round(cell_size(lat, lon)[1] / (15 / 3600) / 4))
-    key = hashlib.sha256(f"{west:.3f},{east:.3f},{south:.3f},{north:.3f},{stride},{land_colour}".encode()).hexdigest()[:16]
+    stride = max(1, math.ceil(max(east - west, north - south) / (15 / 3600) / TERRAIN_SAMPLES))
+    key = hashlib.sha256(f"shade-2,{west:.3f},{east:.3f},{south:.3f},{north:.3f},{stride}".encode()).hexdigest()[:16]
     cached = cache_folder() / f"terrain_{key}.json"
     try:
         if cached.is_file():
@@ -191,22 +220,6 @@ def load_terrain(lon, lat, land_colour):
             lons = dataset["longitude"][:].astype("float64")
         if lats[0] > lats[-1]:
             elevation, lats = elevation[::-1], lats[::-1]
-        shade = _hillshade(np.nan_to_num(elevation), lats, abs(float(lats[1] - lats[0])))
-        # 0.71 is the shade of flat ground, which keeps the land colour
-        factor = np.clip(shade / 0.71, 0.0, 1.15)[..., None]
-        base = np.array([int(land_colour[i:i + 2], 16) for i in (1, 3, 5)], dtype="float64")
-        rgb = np.clip(base * factor, 0, 255).astype("uint8")
-        alpha = np.where(elevation > 0, 255, 0).astype("uint8")[..., None]
-        buffer = io.BytesIO()
-        # An image has its first row at the top, so north first
-        Image.fromarray(np.concatenate([rgb, alpha], axis=2)[::-1], "RGBA").save(buffer, format="PNG", optimize=True)
-        half_lat, half_lon = abs(float(lats[1] - lats[0])) / 2, abs(float(lons[1] - lons[0])) / 2
-        terrain = Terrain(
-            image="data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode(),
-            west=float(lons[0]) - half_lon, north=float(lats[-1]) + half_lat,
-            width=float(lons[-1] - lons[0]) + 2 * half_lon, height=float(lats[-1] - lats[0]) + 2 * half_lat,
-        )
-        cached.write_text(json.dumps(terrain.__dict__))
-        return terrain
+        return _shading(elevation, lats, lons, cached)
     except (OSError, ValueError, KeyError, IndexError, RuntimeError):
         return None

@@ -13,7 +13,7 @@ import time
 
 import optuna
 
-from .calibration_engine import CalibrationError, read_calibration, run_calibration
+from .calibration_engine import CONSTRAINT, INFEASIBLE, CalibrationError, front, read_calibration, run_calibration
 from .config import ConfigError
 from .sensitivity_runs import StudyState
 
@@ -65,6 +65,8 @@ def trial_line(study, trial, names, target):
     took = f" in {_duration(took)}" if took is not None else ""
     if trial.state == optuna.trial.TrialState.COMPLETE:
         text = f"trial {trial.number} completed{took}: {_values(names, trial.values)}"
+        if trial.user_attrs.get(INFEASIBLE):
+            text += f" (infeasible: {trial.user_attrs[INFEASIBLE]})"
     elif trial.user_attrs.get("ended"):
         return None
     elif trial.user_attrs.get("cancelled"):
@@ -73,13 +75,22 @@ def trial_line(study, trial, names, target):
         reason = (trial.user_attrs.get("failure") or "").strip().splitlines()
         text = f"trial {trial.number} failed{took}" + (f": {reason[-1][:200]}" if reason else "")
     complete = study.get_trials(deepcopy=False, states=(optuna.trial.TrialState.COMPLETE,))
-    if complete:
+    infeasible = sum(bool(t.user_attrs.get(INFEASIBLE)) for t in complete)
+    best = front(study, rows_of(study))
+    if best:
         if len(names) == 1:
-            best = study.best_trial
-            text += f" | best {_values(names, best.values)} (trial {best.number})"
+            first = study.trials[best[0]]
+            text += f" | best {_values(names, first.values)} (trial {first.number})"
         else:
-            text += f" | Pareto front {len(study.best_trials)} trials"
-    return f"[{_stamp()}] {text} | {len(complete)} of {target} completed"
+            text += f" | Pareto front {len(best)} trials"
+    return (f"[{_stamp()}] {text} | {len(complete)} of {target} completed"
+            + (f", {infeasible} infeasible" if infeasible else ""))
+
+
+def rows_of(study):
+    """The rows front() takes, from a study (as trials_table gives them from a folder)."""
+    return [{"number": t.number, "state": t.state.name, "values": t.values,
+             "violation": t.user_attrs.get(CONSTRAINT, (None,))[0]} for t in study.get_trials(deepcopy=False)]
 
 
 def calibrate(folder, parallel=None, trial_minutes=None, end_time=None, mobile=None, out=sys.stdout):

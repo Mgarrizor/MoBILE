@@ -18,12 +18,15 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from .calibration_engine import (
     OLD_CALIBRATION, SAMPLER_LINKS, SAMPLERS, CalibrationError, best_trials, calibration_label, calibrations_dir, create_calibration,
-    is_running, list_calibrations, read_calibration, resumable, run_calibration, running_where, status_of, trial_comparison, trial_folder, trials_table,
+    is_running, list_calibrations, read_calibration, read_cluster, resolved, resumable, run_calibration, running_where, status_of,
+    trial_comparison,
+    trial_folder, trials_table,
 )
 from .calibration_data import DataError
 from .calibration_model import DRIVER_PERIODS, DRIVERS, driver_panel
 from .calibration_results import FIGURES, ResultsError, figure_help, results_figure
 from .calibration_steps import STATISTICS
+from .calibration_progress import DOING, DONE, TODO, anchor
 from .cluster_ui import cluster_section, cluster_server
 from .config import ConfigError
 from .cells import cell_areas
@@ -35,9 +38,11 @@ from .runner import NETCDF_LOCK
 from .shapes import ShapeError, areas, outlines, read_shapes
 from .sensitivity import SampledParameter
 from .sensitivity_runs import StudyState
+from .setup import to_dict
 from .outcome import run_name_problem
 
 DRIVER_FLAGS = ("out_vect", "out_vecinfc")  # Written by every run of a calibration, for its possible drivers
+REGIME_FLAGS = ("out_I_new",)  # And the new cases, from which the regime of every trial is measured (calibration_engine.regime)
 MAX_CELLS = 20  # Temperature offsets are calibrated for at most this many cells or regions
 MAX_SIMULATED = 5000  # And the cells of the setup, grouped in regions or not, at most this many
 REFRESH_SECONDS = 3  # How often the progress of a calibration is drawn again while it runs
@@ -52,6 +57,7 @@ def calibration_run_card():
              ui.a("Optuna", href="https://optuna.org/", target="_blank"),
              " from the trials before: every run is processed and compared with the data as each objective says, and Optuna "
              "looks for the values that do best on all the objectives together (the Pareto front).", class_="small text-muted mb-2"),
+        anchor("objectives"),
         ui.h6("Objectives"),
         ui.output_ui("cal_objectives"),
         ui.input_switch("cal_validation", with_tip("Validation window", "Splits the period the model and the data share in two, "
@@ -68,6 +74,7 @@ def calibration_run_card():
                 ui.tags.li("Both are cut before the steps of the Model and Data boxes, so e.g. a climatology objective is that of "
                            "the calibration window only. The Model and data card above gives the metrics of each window for its run."),
                 class_="small text-muted mb-2"))),
+        anchor("what"),
         ui.h6("What to calibrate", class_="mt-2"),
         ui.input_switch("cal_offsets", with_tip("Temperature offsets", "A shift dT of the temperature of each cell, or region of "
                         "cells, ticked, e.g. for the temperature where people live within a coarse cell. They keep the order of their "
@@ -92,23 +99,29 @@ def calibration_run_card():
         ui.layout_columns(
             ui.div(
                 ui.h6("Optuna"),
-                ui.input_select("cal_sampler", "Sampler", {key: text.split(":")[0] for key, text in SAMPLERS.items()}, selected="tpe"),
+                ui.input_select("cal_sampler", ui.TagList("Sampler", kept()), {key: text.split(":")[0] for key, text in SAMPLERS.items()},
+                                selected="tpe"),
                 ui.output_ui("cal_sampler_info"),
-                ui.input_numeric("cal_trials", "Trials", value=100, min=1, step=10),
-                ui.input_numeric("cal_startup", with_tip("Start-up trials", "Drawn at random before the sampler starts to learn from "
-                                 "the trials done (TPE)."), value=10, min=1, step=1),
+                ui.input_numeric("cal_trials", ui.TagList("Trials", kept()), value=100, min=1, step=10),
+                ui.input_numeric("cal_startup", ui.TagList(with_tip("Start-up trials", "Drawn at random before the sampler starts to "
+                                 "learn from the trials done (TPE). At least as many as the runs at the same time where it runs (here, or "
+                                 "on a cluster), or the first trials the sampler suggests learn from almost nothing. " + KEPT_TIP), kept()),
+                                 value=10, min=1, step=1),
             ),
             ui.div(
                 ui.h6("Runs"),
-                ui.input_numeric("cal_seeds", with_tip("Seeds per trial", "Each trial runs every seed, from the sidebar seed up; "
-                                 "the objectives compare the median of the seeds, each processed."), value=1, min=1, step=1),
-                ui.input_numeric("cal_threads", with_tip("Threads per run", "CPU threads of each run, at first those of the setup. "
-                                 "Results depend on the number: it is kept with the calibration, and a resumed one uses it too. On a LEONARDO "
-                                 "DCGP node, 16 runs × 7 threads did best for Senegal 1998–2003 (9.85 M agents); other "
-                                 "setups may differ."),
+                ui.input_numeric("cal_seeds", ui.TagList(with_tip("Seeds per trial", "Each trial runs every seed, from the sidebar seed "
+                                 "up; the objectives compare the median of the seeds, each processed. " + KEPT_TIP), kept()),
                                  value=1, min=1, step=1),
-                ui.input_numeric("cal_parallel", with_tip("Runs at the same time", "Each with the threads per run above. The model "
-                                 "is built once, by the first run."), value=1, min=1, step=1),
+                ui.input_numeric("cal_threads", ui.TagList(with_tip("Threads per run", "CPU threads of each run, at first those of the "
+                                 "setup. Results depend on the number: it is kept with the calibration, and a resumed one uses it too, "
+                                 "here or on a cluster. On a LEONARDO DCGP node, 16 runs × 7 threads did best for Senegal 1998–2003 "
+                                 "(9.85 M agents); other setups may differ."), kept()),
+                                 value=1, min=1, step=1),
+                ui.input_numeric("cal_parallel", ui.TagList(with_tip("Runs at the same time", "Each with the threads per run above. The "
+                                 "model is built once, by the first run. On this computer only: not kept with the calibration, and a job "
+                                 "on a cluster takes the runs at the same time of the Cluster settings."), local()),
+                                 value=1, min=1, step=1),
                 ui.input_text("cal_name", "Calibration name (optional)", placeholder="e.g. two_cells_dT"),
             ),
             ui.div(
@@ -120,19 +133,25 @@ def calibration_run_card():
                     ui.input_action_button("cal_create", with_tip("Create only", "Make the calibration without running it: "
                                            "to run it on a cluster (below), or later with Resume or `mobile calibrate`."),
                                            class_="flex-fill"),
-                    class_="d-flex gap-2 mt-2",
+                    class_="d-flex flex-wrap gap-2 mt-2",
                 ),
             ),
             col_widths=(4, 4, 4), class_="mt-2",
         ),
         ui.output_ui("cal_run_status"),
+        anchor("created"),
         ui.h6("Calibrations", class_="mt-3"),
         ui.p("The running one, or one chosen here: its trials are kept in its folder, and a cancelled one resumes where it stopped.",
              class_="small text-muted mb-1"),
         ui.layout_columns(
             ui.input_select("cal_previous", None, {}, width="100%"),
-            ui.input_action_button("cal_resume", "Resume", class_="w-100"),
-            col_widths=(10, 2),
+            ui.input_action_button("cal_resume", with_tip("Resume here", "Runs the trials left of the calibration chosen on this "
+                                   "computer. One sent to a cluster runs there: submit a job in Run on LEONARDO (CINECA)."), class_="w-100 text-nowrap"),
+            ui.input_action_button("cal_template", with_tip("Use as template", "Fills this card and the objectives with those of the "
+                                   "calibration chosen (objectives, what to calibrate and its ranges, validation window, Optuna and runs), "
+                                   "for a new calibration: change what you like, then Create only or Run calibration. The calibration "
+                                   "chosen is not changed."), class_="w-100 text-nowrap"),
+            col_widths=(6, 3, 3),
         ),
         ui.output_ui("cal_previous_info"),
         cluster_section(),
@@ -166,6 +185,7 @@ def calibration_run_card():
             class_="border rounded p-2 mt-3",
         ),
         ui.div(
+            anchor("results"),
             ui.h6("Results", class_="mb-1"),
             ui.layout_columns(
                 ui.input_select("cal_figure", "Figure", {kind: spec[0] for kind, spec in FIGURES.items()}, selected="distributions"),
@@ -287,6 +307,56 @@ def regions(cells, size=None):
     return sorted(found, key=lambda region: region["mean"])
 
 
+KEPT_TIP = "Kept with the calibration: used wherever it runs, here or on a cluster."
+
+
+def kept():
+    """A neutral label after the title of a setting kept with the calibration (used wherever it runs)."""
+    return ui.span("kept with the calibration", class_="badge rounded-pill text-bg-light border fw-normal ms-1",
+                   style="font-size: 0.68rem;", title=KEPT_TIP)
+
+
+def local():
+    """An amber label after the title of a setting used on this computer only."""
+    return ui.span("this computer", class_="badge rounded-pill fw-normal ms-1",
+                   style="font-size: 0.68rem; background: #fff4d6; color: #8a5a00; border: 1px solid #e0a526;",
+                   title="On this computer only: not kept with the calibration, and not used by a job on a cluster.")
+
+
+REGION_SIZES = (0.1, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.75, 0.8, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0)  # Tried for templates without one
+
+
+def template_regions(record_cells, cells, size=None):
+    """(size, ticked units) of the offsets of a template on the cells of the setup now: the size of its boxes (as kept,
+    else the first of REGION_SIZES whose boxes have the same centres and cells), None for one offset per cell; and the
+    set of (lat, lon) of its units. None if they cannot be matched (e.g. another setup)."""
+    wanted = {(round(c["lat"], 6), round(c["lon"], 6)): sorted((round(m["lat"], 6), round(m["lon"], 6)) for m in c.get("members") or [])
+              for c in record_cells}
+    if not any(wanted.values()):
+        here = {(round(c["lat"], 6), round(c["lon"], 6)) for c in cells}
+        return (None, set(wanted)) if set(wanted) <= here else None
+    for candidate in ((size,) if size else REGION_SIZES):
+        units = {(round(u["lat"], 6), round(u["lon"], 6)): sorted((round(m["lat"], 6), round(m["lon"], 6)) for m in u["members"])
+                 for u in regions(cells, candidate)}
+        if all(units.get(key) == members for key, members in wanted.items()):
+            return candidate, set(wanted)
+    return None
+
+
+def unique_name(name, taken):
+    """name_2, name_3, ... : the first not taken."""
+    k = 2
+    while f"{name}_{k}" in taken:
+        k += 1
+    return f"{name}_{k}"
+
+
+def _counted(offsets, parameters):
+    """e.g. "2 offsets, 1 parameter", or "" for none."""
+    return ", ".join(part for part in (f"{offsets} offset{'s' if offsets != 1 else ''}" if offsets else "",
+                                      f"{parameters} parameter{'s' if parameters != 1 else ''}" if parameters else "") if part)
+
+
 def _clock(seconds):
     seconds = int(round(seconds))
     return f"{seconds // 3600}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
@@ -324,6 +394,7 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
     last = reactive.value(None)  # The record of the last calibration run in this session, or "error"
     running_folder = reactive.value(None)
     to_select = reactive.value(None)
+    template_pending = reactive.value(None)  # Of a template just used: {ticks, gap, ordered} for the controls drawn again
     cluster_server(input, output, session, lambda: input.cal_previous() or None, changed)
 
     @reactive.calc
@@ -352,7 +423,14 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         if isinstance(found, str):
             return ui.p(found, class_="small text-warning-emphasis")
         boxes = input.cal_regions() == "boxes"
-        rows = [ui.tags.tr(ui.tags.td(ui.input_checkbox(f"cal_cell_{i}", None, value=True)), ui.tags.td(unit["label"]),
+        with reactive.isolate():
+            pending = template_pending() or {}
+            ticks = pending.get("ticks")  # Of a template just used, once
+            if ticks is not None:
+                template_pending.set({key: value for key, value in pending.items() if key != "ticks"})
+        rows = [ui.tags.tr(ui.tags.td(ui.input_checkbox(f"cal_cell_{i}", None,
+                                                        value=True if ticks is None else (round(unit["lat"], 6), round(unit["lon"], 6)) in ticks)),
+                           ui.tags.td(unit["label"]),
                            ui.tags.td(f"{unit['mean']:.2f} °C"), ui.tags.td(f"{unit['people']:,.0f}"))
                 for i, unit in enumerate(found)]
         mean = "Mean temperature where people live (setup period)" if boxes else "Mean temperature (setup period)"
@@ -418,6 +496,10 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
             return None
         with reactive.isolate():
             on = keep_order()
+            pending = template_pending() or {}
+            if "ordered" in pending:  # As in a template just used
+                on = pending["ordered"]
+                template_pending.set({key: value for key, value in pending.items() if key != "ordered"})
         unit = "regions" if input.cal_regions() == "boxes" else "cells"
         return ui.input_switch("cal_keep_order", with_tip(f"Keep the order of the {unit}", f"On: the {unit} stay in the order of their "
                                "mean temperatures in every trial (dT₁ and gaps of at least 0). Off: each offset is sampled on its own, "
@@ -432,6 +514,10 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         with reactive.isolate():
             low = input.cal_gap_low() if "cal_gap_low" in input else 0.0
             high = input.cal_gap_high() if "cal_gap_high" in input else 5.0
+            pending = template_pending() or {}
+            if pending.get("gap"):  # Of a template just used, once
+                low, high = pending["gap"]
+                template_pending.set({key: value for key, value in pending.items() if key != "gap"})
         return ui.layout_columns(ui.input_numeric("cal_gap_low", "Gap from [°C]", value=low, min=0, step=0.5),
                                  ui.input_numeric("cal_gap_high", "Gap to [°C]", value=high, min=0, step=0.5), col_widths=(6, 6), fill=False)
 
@@ -570,10 +656,16 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         else:
             use = ui.p(f"{parallel} at a time × {per_run} thread{'s' if per_run > 1 else ''} = {parallel * per_run} of the {cores} cores "
                        "of this computer.", class_="small text-muted mb-1")
+        startup = input.cal_startup()
+        few = None
+        if input.cal_sampler() == "tpe" and isinstance(startup, int) and isinstance(parallel, int) and startup < parallel:
+            few = ui.p(f"{startup} start-up trials, fewer than the {parallel} runs at the same time: the sampler would suggest "
+                       f"trials while almost none have ended. Use at least {parallel}; on a cluster, at least its runs at the same "
+                       "time (e.g. 16 on a LEONARDO DCGP node).", class_="small text-warning-emphasis mb-1")
         return ui.TagList(ui.p(f"{trials} trials × {seeds} seed{'s' if seeds > 1 else ''} = {trials * seeds} runs, "
                                f"{len(objectives())} objective{'s' if len(objectives()) > 1 else ''}, "
                                f"{offsets} offset{'s' if offsets != 1 else ''}, {len(chosen_parameters())} model parameter"
-                               f"{'s' if len(chosen_parameters()) != 1 else ''}.", class_="mb-1"), use)
+                               f"{'s' if len(chosen_parameters()) != 1 else ''}.", class_="mb-1"), use, few)
 
     @ui.bind_task_button(button_id="cal_run")
     @reactive.extended_task
@@ -609,9 +701,9 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         to_select.set(str(folder))
         changed.set(changed() + 1)
         threads_ = read_calibration(folder)["setup"]["run"]["threads"]
-        ui.notification_show(f"Created {Path(folder).name}, not run: choose it under Calibrations and press Resume to run it here, "
-                             f"Send it to a cluster below, or run `mobile calibrate {folder}` ({threads_} thread"
-                             f"{'s' if threads_ > 1 else ''} per run).", type="message", duration=15)
+        ui.notification_show(f"Created {Path(folder).name}, not run. It is chosen under Calibrations: press Resume here to run it on "
+                             f"this computer, Send it to LEONARDO in Run on LEONARDO (CINECA), or run `mobile calibrate {folder}` ({threads_} "
+                             f"thread{'s' if threads_ > 1 else ''} per run).", type="message", duration=15)
 
     def make_calibration():
         """The folder of a new calibration as the card says, or None after saying what is wrong."""
@@ -627,14 +719,16 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         if found:
             ui.notification_show(" ".join(found), type="error")
             return
-        # The outputs of the Outputs card, those the objectives were made from, and the vector densities for the drivers
+        # The outputs of the Outputs card, those the objectives were made from, the vector densities for the drivers and
+        # the new cases for the regime
         wanted = (set(selected_output()) | {flag for objective in objectives() for flag in (objective.get("output") or [])}
-                  | set(DRIVER_FLAGS))
+                  | set(DRIVER_FLAGS) | set(REGIME_FLAGS))
         output = tuple(flag for group in OUTPUT_FLAGS.values() for flag, _, _ in group if flag in wanted)
         temperature = {"cells": [{"lat": u["lat"], "lon": u["lon"], **({"members": u["members"]} if "members" in u else {})}
                                  for u in chosen_cells()],
                        "first": (input.cal_dt_low(), input.cal_dt_high()), "gap": gap_range(),
-                       "ordered": bool(keep_order())} if input.cal_offsets() else None
+                       "ordered": bool(keep_order()),
+                       **({"size": input.cal_region_size()} if input.cal_regions() == "boxes" else {})} if input.cal_offsets() else None
         parameters = chosen_parameters()
         calibrated = {parameter.name for parameter in parameters}
         fixed = {key: value for key, value in {**setup().params, **overrides()}.items() if key not in calibrated}
@@ -679,6 +773,112 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
             ui.notification_show(f"Resumed {parallel} at a time: its runs use {threads_} threads each, and this computer has {cores} cores.",
                                  type="message", duration=8)
         start(folder, parallel)
+
+    @reactive.effect
+    @reactive.event(input.cal_template)
+    def use_as_template():
+        """Fill the card and the objectives from the calibration chosen, for a new one; say what could not be filled."""
+        folder = input.cal_previous()
+        if not folder:
+            ui.notification_show("Choose a calibration under Calibrations first.", type="warning")
+            return
+        try:
+            record = read_calibration(folder)
+        except (OSError, ValueError) as error:
+            ui.notification_show(f"It cannot be read: {error}", type="error")
+            return
+        name, notes = Path(folder).name, []
+        # The objectives whose observations are still where they were
+        taken, missing = [], []
+        for objective in resolved(folder, record)["objectives"]:
+            files = [objective[key] for key in ("data", "data_raw") if objective.get(key)]
+            if not all(Path(path).is_file() for path in files):
+                missing.append(objective["name"])
+                continue
+            taken.append({**objective, "output": record.get("output"),
+                          "describe": f"{objective['metric'].replace('_', ' ')} of {objective['variable']}, "
+                                      f"{len(objective.get('steps') or [])} model steps: from the template {name}"})
+        objectives.set(taken)
+        if missing:
+            notes.append(f"objectives left out, their observations are no longer where they were: {', '.join(missing)}")
+        # Validation window
+        window = record.get("validation")
+        ui.update_switch("cal_validation", value=bool(window))
+        if window:
+            ui.update_date_range("cal_validation_dates", start=window[0], end=window[1])
+        # Optuna and runs; the sidebar seed is the first seed
+        ui.update_select("cal_sampler", selected=record["sampler"]["name"])
+        ui.update_numeric("cal_trials", value=record["n_trials"])
+        ui.update_numeric("cal_startup", value=record["sampler"]["startup_trials"])
+        ui.update_numeric("cal_seeds", value=len(record["seeds"]))
+        ui.update_numeric("cal_threads", value=record["setup"]["run"]["threads"])
+        ui.update_numeric("seed", value=record["seeds"][0])
+        ui.update_text("cal_name", value=unique_name(name, set(list_names())))
+        # Model parameters
+        sliders = slider_setup()["sliders"]
+        calibrated = {parameter["name"]: parameter for parameter in record.get("parameters", [])}
+        for slider in sliders:
+            ui.update_checkbox(f"cal_use_{slider}", value=slider in calibrated)
+        for parameter in calibrated.values():
+            if parameter["name"] not in sliders:
+                notes.append(f"{parameter['name']} is not a slider of this model: left out")
+                continue
+            ui.update_select(f"cal_dist_{parameter['name']}", selected=parameter["distribution"])
+            ui.update_numeric(f"cal_low_{parameter['name']}", value=parameter["low"])
+            ui.update_numeric(f"cal_high_{parameter['name']}", value=parameter["high"])
+        # Temperature offsets: on the cells or regions of the setup now
+        temperature = record.get("temperature")
+        ui.update_switch("cal_offsets", value=bool(temperature))
+        if temperature:
+            ui.update_numeric("cal_dt_low", value=temperature["first"][0])
+            ui.update_numeric("cal_dt_high", value=temperature["first"][1])
+            here = cells()
+            matched = None if isinstance(here, str) else template_regions(temperature["cells"], here, temperature.get("size"))
+            if matched is None:
+                notes.append("its offset cells or regions are not those of the setup now: tick them by hand")
+            else:
+                size, ticks = matched
+                mode = "boxes" if size else "cells"
+                redrawn = input.cal_regions() != mode or (size and input.cal_region_size() != size)
+                ui.update_radio_buttons("cal_regions", selected=mode)
+                if size:
+                    ui.update_numeric("cal_region_size", value=size)
+                pending = {"gap": tuple(temperature["gap"]), "ordered": bool(temperature.get("ordered", True))}
+                if redrawn:
+                    pending["ticks"] = ticks  # Taken by the table when it is drawn again
+                else:
+                    found = units()
+                    for i, unit in enumerate(found if not isinstance(found, str) else []):
+                        ui.update_checkbox(f"cal_cell_{i}", value=(round(unit["lat"], 6), round(unit["lon"], 6)) in ticks)
+                    if "cal_gap_low" in input:
+                        ui.update_numeric("cal_gap_low", value=temperature["gap"][0])
+                        ui.update_numeric("cal_gap_high", value=temperature["gap"][1])
+                    if "cal_keep_order" in input:
+                        ui.update_switch("cal_keep_order", value=bool(temperature.get("ordered", True)))
+                template_pending.set(pending)
+        # What is not set here: the setup, the sliders not calibrated, the agents
+        applied = to_dict(setup())
+        differing = [key for key in ("inputs", "region", "period", "age_structure") if record["setup"].get(key) != applied.get(key)]
+        if differing:
+            notes.append(f"it was made with another setup ({', '.join(differing)} differ): apply that setup in tab 1 for the same "
+                         "calibration")
+        fixed = {key: float(value) for key, value in {**setup().params, **overrides()}.items() if key not in calibrated}
+        changed_sliders = sorted(key for key in set(fixed) | set(record.get("params", {}))
+                                 if key not in calibrated and abs(fixed.get(key, float("nan")) - record["params"].get(key, float("nan"))) > 1e-12
+                                 or (key in fixed) != (key in record.get("params", {})))
+        if changed_sliders:
+            notes.append(f"the sliders now differ from its fixed parameters ({', '.join(changed_sliders[:5])}"
+                         f"{', …' if len(changed_sliders) > 5 else ''}): the new one takes the sliders as they are")
+        if record["setup"]["run"].get("nagent") != agents():
+            notes.append(f"it had {record['setup']['run'].get('nagent'):,} agents, the sidebar gives {agents():,}")
+        ui.notification_show(ui.TagList(f"Filled from {name} for a new calibration (named {unique_name(name, set(list_names()))}): "
+                                        "change what you like, then Create only or Run calibration.",
+                                        ui.tags.ul(*[ui.tags.li(note) for note in notes], class_="mb-0") if notes else None),
+                             type="warning" if notes else "message", duration=None if notes else 10)
+
+    def list_names():
+        root = calibrations_dir(setup().runs_dir)
+        return [path.name for path in root.iterdir()] if root.is_dir() else []
 
     @reactive.effect
     def enable_buttons():
@@ -803,10 +1003,17 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
     @render.ui
     def cal_front():
         found = progress()
-        if found is None or not found[2]:
+        if found is None:
             return None
-        record, _, front = found
+        record, every, front = found
+        if not front:
+            dead = [row for row in every if row["state"] == "COMPLETE" and row.get("infeasible")]
+            return (ui.p(f"No Pareto front yet: in all {len(dead)} completed trials transmission died out (infeasible). "
+                         "Results › Epidemic or endemic shows where.", class_="small text-muted mt-2 mb-0")
+                    if dead else None)
         names = [o["name"] for o in record["objectives"]]
+        completed = [row for row in every if row["state"] == "COMPLETE"]
+        dead = sum(bool(row.get("infeasible")) for row in completed)
         means = (record.get("temperature") or {}).get("means") or []
         parameters = [parameter["name"] for parameter in record.get("parameters", [])]
         checked = bool(record.get("validation"))
@@ -821,10 +1028,15 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
                            *[ui.tags.td(f"{row['params'][name]:.4g}") for name in parameters])
                 for row in sort_front(front)]
         return ui.div(ui.tags.strong(with_tip("Pareto front", "The trials no other trial beats on every objective: the best trade-offs "
-                                              "between the objectives (for one objective, the best trial). With a validation "
-                                              "window, each trial's scores on it follow, in grey: not used to choose the trials."),
+                                              "between the objectives (for one objective, the best trial), among those where "
+                                              "transmission persisted. With a validation window, each trial's scores on it "
+                                              "follow, in grey: not used to choose the trials."),
                                      class_="small"),
-                      ui.tags.table(ui.tags.thead(header), ui.tags.tbody(*rows), class_="table table-sm small mb-1"), class_="mt-2")
+                      ui.tags.table(ui.tags.thead(header), ui.tags.tbody(*rows), class_="table table-sm small mb-1"),
+                      ui.p(f"In {dead} of the {len(completed)} completed trials transmission died out (infeasible: kept out of the "
+                           "front, and the sampler learns where that happens). Results › Epidemic or endemic shows them.",
+                           class_="small text-muted mb-0") if dead else None,
+                      class_="mt-2")
 
     def sort_choices(record):
         choices = {"number": "Trial number"}
@@ -1024,4 +1236,55 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
                 return
         await send_figure(session, "cal_results_plot", results[key])
 
-    return SimpleNamespace(running=running, cancel=state.cancel)
+    def what_states():
+        """{"what": (state, note)} of the form: the offsets and parameters ticked for a new calibration."""
+        parameters, cells_ = len(chosen_parameters()), len(chosen_cells()) if input.cal_offsets() else 0
+        what = _counted(cells_, parameters)
+        return {"what": (DONE, what) if what else (TODO, None)}
+
+    def calibration_states():
+        """(name, {step: (state, note)} of every step) of the calibration running here, else of the one chosen under
+        Calibrations: what it was made from is stored in it, so the steps up to What to calibrate are done; or (None,
+        None) when there is none."""
+        folder = shown()
+        if not folder:
+            return None, None
+        name = Path(folder).name
+        found = progress()
+        if found is None:
+            return name, {key: (DONE, "stored") for key in ("setup", "data", "model", "compared", "objectives", "what")} | {
+                "created": (DONE, name), "run": (TODO, None), "results": (TODO, None)}
+        record, rows, front_ = found
+        objectives_ = record["objectives"]
+        files = {Path(objective.get("data_raw") or objective["data"]).name for objective in objectives_}
+        variables = sorted({objective["variable"] for objective in objectives_})
+        cells_ = len((record.get("temperature") or {}).get("cells") or [])
+        states = {
+            "setup": (DONE, "stored with it"),
+            "data": (DONE, f"{len(files)} file{'s' if len(files) != 1 else ''}, stored"),
+            "model": (DONE, f"{', '.join(variables)}, stored"),
+            "compared": (DONE, "stored"),
+            "objectives": (DONE, f"{len(objectives_)} stored"),
+            "what": (DONE, _counted(cells_, len(record.get("parameters", []))) or "stored"),
+            "created": (DONE, name),
+        }
+        status = status_of(folder, record)
+        cluster = read_cluster(folder)
+        where = f" on {cluster['host']}" if cluster else ""
+        completed = sum(row["state"] == "COMPLETE" for row in rows)
+        trials = f"{completed} of {record['n_trials']} trials"
+        if status in ("running", "queued"):
+            states["run"] = (DOING, f"{status}{where}, {trials}")
+        elif status == "finished":
+            states["run"] = (DONE, f"finished{where}, {trials}")
+        elif status == "created":
+            states["run"] = (TODO, f"sent to {cluster['host']}: submit a job" if cluster else "Resume here, or send it")
+        else:
+            states["run"] = (DOING, f"{status}{where}: resume or submit, {trials}")
+        states["results"] = ((DONE, f"Pareto front of {len(front_)}") if completed >= 2 and front_
+                             else (DOING, "no front: transmission died out in all") if completed and not front_
+                             else (DOING, f"{completed} completed trial{'s' if completed != 1 else ''}") if completed
+                             else (TODO, None))
+        return name, states
+
+    return SimpleNamespace(running=running, cancel=state.cancel, what=what_states, stored=calibration_states)
