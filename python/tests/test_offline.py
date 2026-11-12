@@ -3215,7 +3215,7 @@ echo "$id;leonardo"
 true
 """,
         "sacct": """#!/bin/bash
-for job in $(echo "$5" | tr , ' '); do echo "$job|COMPLETED"; done
+for job in $(echo "$5" | tr , ' '); do echo "$job|${FAKE_SACCT:-COMPLETED}"; done
 """,
         "scancel": """#!/bin/bash
 echo "$@" >> "$HOME/scancel.txt"
@@ -3268,6 +3268,8 @@ echo "$@" >> "$HOME/scancel.txt"
         self.assertEqual(record["run_inputs"]["temp_file"], "inputs/external/temp_file_temperature.nc")
         self.assertTrue((there / "inputs" / "external" / "temp_file_temperature.nc").is_file())
         self.assertTrue((home / ".config" / "mobile" / "worldpop" / "Global2000_2020" / "SEN_2012.json").is_file())
+        self.assertEqual(record["setup"]["runs_dir"], str(there))  # No paths of this computer there
+        self.assertNotIn("shapes", record["setup"])
         with self.assertRaisesRegex(ClusterError, "sent already"):
             send(folder, settings, cleared=True)
         with self.assertRaisesRegex(CalibrationError, "sent to leonardo"):  # The folder here only mirrors it
@@ -3298,7 +3300,7 @@ echo "$@" >> "$HOME/scancel.txt"
         self.assertIn("exit 0: done", tail)
 
     def test_cluster_jobs_and_login(self):
-        from mobile.calibration_engine import create_calibration, is_running, read_calibration, running_where, status_of
+        from mobile.calibration_engine import create_calibration, is_running, read_calibration, read_cluster, running_where, status_of
         from mobile.cluster import ClusterError, ClusterSettings, job_script, refresh, send, stop, submit
 
         settings, home = self.cluster()
@@ -3313,20 +3315,35 @@ echo "$@" >> "$HOME/scancel.txt"
             self.assertEqual((status_of(folder, read_calibration(folder)), is_running(folder)), ("queued", True))
             second = submit(folder, settings)  # After the first
         self.assertIn(f"--dependency=afterany:{first}", (home / "sbatch.txt").read_text().splitlines()[-1])
+        self.assertEqual(read_cluster(folder)["jobs"][-1]["after"], first)
         with mock.patch.dict(os.environ, {"FAKE_SQUEUE": f"{second} RUNNING"}):
             refresh(folder)
             self.assertEqual(status_of(folder, read_calibration(folder)), "running")
             self.assertRegex(running_where(folder), rf"on leonardo, job {second} running, .*as of the refresh 0 s ago")
             self.assertEqual(stop(folder), second)
         self.assertEqual((home / "scancel.txt").read_text().strip(), f"--batch --signal=TERM {second}")
+        # Submit asks squeue itself: the second has ended since the refresh that listed it, and only another job is listed
+        with mock.patch.dict(os.environ, {"FAKE_SQUEUE": "9999 RUNNING"}):
+            third = submit(folder, settings)
+        self.assertNotIn("--dependency", (home / "sbatch.txt").read_text().splitlines()[-1])
+        self.assertEqual([(job["listed"], job.get("after")) for job in read_cluster(folder)["jobs"]],
+                         [(False, None), (False, first), (True, None)])
         refresh(folder)  # Ended: sacct says completed, and its status is as written there (not run here)
         self.assertEqual(is_running(folder), False)
+        # Exit 3 (stopped before the end, resumable), which Slurm records as FAILED, is said as such; exit 1 is a failure
+        logs = home / "work" / "calibration" / "queued" / "logs"
+        (logs / f"{first}.out").write_text("Trial 2 failed\nexit 1: see above\n")
+        (logs / f"{second}.out").write_text("stopped at deadline\nexit 3: not done: run the same command again to go on\n")
+        with mock.patch.dict(os.environ, {"FAKE_SACCT": "FAILED"}):
+            refresh(folder)
+        self.assertEqual([job["state"] for job in read_cluster(folder)["jobs"]], ["FAILED", "STOPPED (RESUMABLE)", "FAILED"])
         # The script for LEONARDO's DCGP nodes, as the settings default to
         record = read_calibration(folder)
         record["setup"]["run"]["threads"] = 7
         script = job_script(ClusterSettings(), record, "/leonardo_work/try26_garrido/calibration/x")
         for line in ("#SBATCH --account=try26_garrido", "#SBATCH --partition=dcgp_usr_prod", "#SBATCH --cpus-per-task=112",
                      "#SBATCH --exclusive", "#SBATCH --signal=B:TERM@60", "unset PYTHONPATH",
+                     "module load python/3.11.7 > /dev/null 2>&1",
                      'exec mobile calibrate "$1" --parallel 16'):
             self.assertIn(line, script)
         with self.assertRaisesRegex(ClusterError, "need 32 CPUs"):
@@ -3335,6 +3352,92 @@ echo "$@" >> "$HOME/scancel.txt"
         long = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=3, name="long")
         with self.assertRaisesRegex(ClusterError, "choose a shorter folder there"):
             send(long, replace(settings, folder="~/" + "x" * 150), cleared=True)
+
+    def test_cluster_information(self):
+        from mobile import cluster
+        from mobile.calibration_engine import create_calibration, read_calibration
+        from mobile.cluster import ClusterSettings, certificate, cluster_info, info_rows, job_cost, wall_seconds
+
+        settings, home = self.cluster()
+        # What LEONARDO's commands said on 11 Nov 2026, in their formats (the usage made up to add to 571 core-hours)
+        canned = {
+            "saldo": """#!/bin/bash
+echo "$*" >> "$HOME/saldo.txt"
+echo "account                start         end         total        localCluster   totConsumed     totConsumed     monthTotal     monthConsumed"
+echo "                                             (local h)   Consumed(local h)     (local h)               %      (local h)         (local h)"
+echo "-----------------------------------------------------------------------------------------------------------------------------------------"
+[ "$2" = "-a" ] && [ "$3" = "try26_garrido" ] &&  # Asked per user, it lists no project (LEONARDO, a new account)
+echo "try26_garrido       20260923    20261125          7500                 555           555             7.4          3571                 135"
+true
+""",
+            "sacctmgr": """#!/bin/bash
+case "$*" in
+  *assoc*) echo "try26_garrido||normal,dcgp_qos_dbg"; echo "try26_garrido|dcgp_usr_prod|dcgp_qos_lprod,dcgp_qos_bprod";;
+  *qos*) echo "dcgp_qos_dbg|00:30:00|cpu=224,mem=988000M,node=2|1|2";;
+esac
+""",
+            "sacct": """#!/bin/bash
+case " $* " in
+  *" -a "*) echo "$*" > "$HOME/sacct_usage.txt"; printf "2000000\n55600\n";;
+  *) echo "64190103|FAILED|28440"; echo "64192142|FAILED|25920";;
+esac
+""",
+            "sinfo": """#!/bin/bash
+printf "idle 80\nmixed 408\nallocated 942\ndrained* 12\n"
+""",
+            "squeue": """#!/bin/bash
+echo "64200001|cal_x|PENDING|0:00|20:00|(Priority)"
+""",
+        }
+        for name, text in canned.items():
+            path = self.root / "remote_bin" / name
+            path.write_text(text)
+            path.chmod(0o755)
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=3, name="info")
+        cluster._write_cluster(folder, {"host": "leonardo", "folder": "x", "jobs": [{"id": "64190103"}, {"id": "64192142"}]})
+        given = replace(settings, account="try26_garrido", qos="dcgp_qos_dbg", partition="dcgp_usr_prod", time="01:00:00", cpus=32)
+        sections = cluster_info(given, folder)
+        self.assertIn("-S 2026-09-23 -E now", (home / "sacct_usage.txt").read_text())  # From the project's start, as saldo says
+        record = {**read_calibration(folder), "completed": 78}
+        rows = {what: (value, warning) for what, value, _, warning in info_rows(sections, given, record, today=datetime.date(2026, 11, 12))}
+        self.assertEqual(rows["Budget of try26_garrido"], ("555 of 7,500 core-hours used (7.4 %); from 23 Sep 2026 to 25 Nov 2026, "
+                                                          "13 days left", True))  # Less than 2 weeks left
+        self.assertEqual(rows["Used now by try26_garrido"], ("571 core-hours since 23 Sep 2026: 6,929 left", False))
+        # sacct over the whole project timing out (24 s of the earlier 25 on LEONARDO, 12 Nov): said, never as 0 core-hours
+        timed = {what: value for what, value, *_ in info_rows({**sections, "usage": ["20260923", "sacct-exit: 124", "0"]}, given)}
+        self.assertEqual(timed["Used now by try26_garrido"], "sacct did not answer within 120 s (it is slow over a whole project): Check again later")
+        self.assertEqual(rows["Your projects and QOS"][0], "try26_garrido: dcgp_qos_bprod, dcgp_qos_dbg, dcgp_qos_lprod, normal")
+        value, warning = rows["QOS dcgp_qos_dbg"]
+        self.assertTrue(warning)
+        self.assertIn("a job runs at most 00:30:00, you may use at most 224 CPUs, 965 GB of memory, 2 nodes at a time, run at most 1 job at a time, "
+                      "queue at most 2. The time limit set, 01:00:00, is longer", value)
+        self.assertEqual(rows["This calibration"], ("2 jobs, 15.1 core-hours; 0.19 per completed trial (78 completed, as of the last refresh)", False))
+        self.assertEqual(rows["Your jobs"][0], "64200001 cal_x pending 0:00 of 20:00 (Priority)")
+        self.assertEqual(rows["Nodes of dcgp_usr_prod"][0], "80 idle, 408 mixed, 942 allocated, 12 other (down, drained, reserved…)")
+        # Without an account, QOS or partition: those parts are not asked, and the rest still said
+        rows = {what for what, *_ in info_rows(cluster_info(replace(settings, account="", qos="", partition="")), settings)}
+        self.assertEqual(rows, {"Budget of try26_garrido", "Your projects and QOS", "Your jobs"})
+        self.assertIn("saldo-exit: 0", sections["saldo"])
+        self.assertEqual((home / "saldo.txt").read_text().splitlines(), ["-b -a try26_garrido --dcgp", "-b -a try26_garrido"])  # By project, once a Check; --dcgp for a DCGP partition
+        # saldo too slow (timeout's exit 124), or not there: said as such, and the usage that needs its start date too
+        for code, said in (("124", "saldo did not answer within 120 s for your projects (it is often slow): Check again later"),
+                           ("127", "saldo is not there (not CINECA?)")):
+            rows = {what: value for what, value, *_ in info_rows({**sections, "saldo": [f"saldo-exit: {code}"], "usage": []}, given)}
+            self.assertEqual((rows["Budget"], rows["Used now by try26_garrido"]), (said, "needs the start of the project, from saldo"))
+        rows = {what: value for what, value, *_ in info_rows({**sections, "usage": []}, replace(given, account="other"))}  # Not in saldo: no usage
+        self.assertEqual(rows["Used now by other"], "not in what saldo listed: is the Account right?")
+        # Times and costs
+        self.assertEqual([wall_seconds(text) for text in ("00:30:00", "1-00:00:00", "30", "10:00", "UNLIMITED", "")],
+                         [1800, 86400, 1800, 600, None, None])
+        self.assertEqual(job_cost(replace(settings, cpus=112, time="06:00:00")), 672)
+        # The login certificate in the ssh agent, as ssh-keygen shows it
+        def run(command, **_):
+            out = {"ssh-add": "ssh-ed25519-cert-v01@openssh.com AAAA user\nssh-ed25519 AAAA plain\n",
+                   "ssh-keygen": "        Valid: from 2026-11-12T09:00:00 to 2026-11-12T21:00:00\n"}[command[0]]
+            return mock.Mock(stdout=out)
+        with mock.patch.object(cluster.subprocess, "run", run):
+            self.assertEqual(certificate(datetime.datetime(2026, 11, 12, 16, 50)), (4 * 3600 + 600, "valid until 21:00 (4 h 10 min left)"))
+            self.assertEqual(certificate(datetime.datetime(2026, 11, 12, 22, 0))[1], "expired at 21:00: log in again")
 
     def test_regions_share_an_offset(self):
         from mobile.calibration_engine import create_calibration, read_calibration, region_mean, run_calibration, trials_table
