@@ -1,4 +1,4 @@
-"""The "Run on a cluster" part of the Calibration tab: the settings of the cluster, each with what it is and what to put,
+"""The "Run on LEONARDO (CINECA)" part of the Calibration tab: the settings of the cluster, each with what it is and what to put,
 and for the calibration chosen under Calibrations: send it there, submit a job, refresh what it shows here, stop the job
 (cluster.py does them, over ssh)."""
 
@@ -76,7 +76,7 @@ def cluster_section():
     return ui.div(
         ui.accordion(
             ui.accordion_panel(
-                "Run on a cluster (Slurm)",
+                "Run on LEONARDO (CINECA)",
                 ui.p("To run a calibration made here on a cluster, without this GUI: Create only (above), choose it under "
                      "Calibrations, Send it there, Submit a job; close the GUI if you like; later, Refresh to see how far it is. "
                      "Only what is drawn here is copied back, never the model output. While it runs there, the copy here only "

@@ -957,6 +957,81 @@ class TestBasemap(unittest.TestCase):
                 self.assertIsNone(load_basemap([0.0, 1.0], [0.0, 1.0]))
 
 
+class TestCalibrationTemplate(unittest.TestCase):
+    """A calibration used as a template: its offset cells or regions found again on the cells of the setup now."""
+
+    CELLS = [{"lat": lat, "lon": lon, "mean": 15.0 + lat - 8, "people": 100.0}
+             for lat in (8.05, 8.15, 8.25, 8.35) for lon in (38.55, 38.65, 38.75, 38.85)]
+
+    def test_cells_and_regions(self):
+        from mobile.calibration_run_ui import regions, template_regions
+
+        # One offset per cell: the same cells
+        self.assertEqual(template_regions([{"lat": 8.05, "lon": 38.55}, {"lat": 8.25, "lon": 38.75}], self.CELLS),
+                         (None, {(8.05, 38.55), (8.25, 38.75)}))
+        # Regions with their size kept, and without it (calibrations made before): the size found from their boxes
+        boxes = regions(self.CELLS, 0.2)
+        recorded = [{"lat": b["lat"], "lon": b["lon"], "members": b["members"]} for b in boxes[:2]]
+        expected = {(round(b["lat"], 6), round(b["lon"], 6)) for b in boxes[:2]}
+        self.assertEqual(template_regions(recorded, self.CELLS, 0.2), (0.2, expected))
+        self.assertEqual(template_regions(recorded, self.CELLS), (0.2, expected))
+        # Not those of the setup now (another grid): nothing matched
+        self.assertIsNone(template_regions([{"lat": 10.05, "lon": 38.55}], self.CELLS))
+        moved = [{**recorded[0], "members": recorded[0]["members"][:1]}]  # A box of other cells than now
+        self.assertIsNone(template_regions(moved, self.CELLS))
+
+    def test_new_name(self):
+        from mobile.calibration_run_ui import unique_name
+
+        self.assertEqual(unique_name("look", {"look"}), "look_2")
+        self.assertEqual(unique_name("look", {"look", "look_2", "look_3"}), "look_4")
+
+
+class TestMapPointsAndRelief(unittest.TestCase):
+    def test_clicks_snap_to_the_cell_centres(self):
+        from mobile.plots import snap_to_cell
+
+        lat, lon = np.round(np.arange(8.05, 9.46, 0.1), 2), np.round(np.arange(38.55, 39.46, 0.1), 2)
+        self.assertEqual(snap_to_cell(lat, lon, 38.7312, 8.6687), (38.75, 8.65))  # Anywhere in a cell: its centre
+        self.assertEqual(snap_to_cell(lat, lon, 38.55, 8.05), (38.55, 8.05))
+        self.assertEqual(snap_to_cell(lat, lon, 38.47, 8.0), (38.55, 8.05))  # Just outside the corner: the corner cell
+        self.assertIsNone(snap_to_cell(lat, lon, 38.3, 8.6))  # More than a cell outside: nothing
+        self.assertEqual(snap_to_cell([8.75], [38.75], 38.9, 8.7, steps=(0.5, 0.5)), (38.75, 8.75))  # One cell, its size known
+
+    def test_relief_is_a_shading_over_the_data(self):
+        import base64
+        import io
+
+        import xarray as xr
+        from PIL import Image
+
+        from mobile.basemap import LIGHT_ALPHA, SHADOW_ALPHA, Basemap, _shading
+        from mobile.plots import map_figure
+
+        # Flat land, sea, and a ridge running north-south: its west slope faces the light (northwest), its east one not
+        lats, lons = np.arange(0.0, 1.0, 0.01), np.arange(0.0, 1.0, 0.01)
+        elevation = np.full((len(lats), len(lons)), 500.0)
+        elevation[:, :20] = -100.0  # Sea in the west
+        ridge = 3000.0 * np.exp(-((lons - 0.6) / 0.05) ** 2)
+        elevation[:, 20:] += ridge[20:]
+        terrain = _shading(elevation, lats, lons)
+        image = Image.open(io.BytesIO(base64.b64decode(terrain.image.split(",", 1)[1])))
+        self.assertEqual(image.mode, "LA")
+        grey, alpha = (np.asarray(image)[::-1][..., k] for k in (0, 1))  # Back to lat increasing
+        self.assertEqual(alpha[:, :20].max(), 0)  # Sea: transparent
+        self.assertEqual(alpha[50, 30], 0)  # Flat land: transparent, its colour as it is
+        lit, shaded = alpha[50, 57], alpha[50, 63]  # West and east slopes of the ridge
+        self.assertEqual((grey[50, 57], grey[50, 63]), (255, 0))  # Lighter on the lit slope, darker on the other
+        self.assertTrue(0 < lit <= LIGHT_ALPHA * 255 + 1 and 0 < shaded <= SHADOW_ALPHA * 255 + 1, (lit, shaded))
+        # Laid over the data, which keep their colours (full opacity)
+        data = xr.DataArray(np.ones((1, 2, 2)), dims=("time", "lat", "lon"),
+                            coords={"time": [np.datetime64("2000-01-01")], "lat": [0.25, 0.75], "lon": [0.25, 0.75]})
+        basemap = Basemap(land=[], lakes=[], rivers={"x": [], "y": []}, borders={"x": [], "y": []})
+        figure = map_figure(data, None, ("x", "1"), 1, (0.0, 2.0), basemap=basemap, terrain=terrain)
+        self.assertEqual(figure.layout.images[0].layer, "above")
+        self.assertIn(figure.data[0].opacity, (None, 1))
+
+
 class TestListRuns(unittest.TestCase):
     def _run(self, root, name, status="finished", pop="p.nc", date="2026-01-01T00:00:00", output=True):
         folder = Path(root) / name
@@ -2474,6 +2549,34 @@ class TestSharedPeriod(unittest.TestCase):
             self.assertEqual(str(figure.layout.shapes[-1].x1)[:10], "2004-12-31")
 
 
+class TestCalibrationProgress(unittest.TestCase):
+    """The steps at the right of the Calibration tab: every box links to a mark that exists in the tab."""
+
+    def test_links_reach_the_tab(self):
+        from mobile.calibration_progress import STEPS, step_box
+        from mobile.calibration_ui import calibration_tab
+
+        html = str(calibration_tab())
+        for key, title, target in STEPS:
+            box = str(step_box(key, title, target, "todo"))
+            if target is None:  # Setup: opens tab 1
+                self.assertIn("data-value=", box)
+                self.assertIn("setup", box)
+                continue
+            self.assertIn(f'href="#{target}"', box)
+            self.assertIn(f'id="{target}"', html, target)
+        self.assertIn('class="cal-progress"', html)
+        self.assertIn('id="cal_progress"', html)
+
+    def test_states_are_said_in_words(self):
+        from mobile.calibration_progress import WORDS, step_box
+
+        for state, word in WORDS.items():
+            box = str(step_box("run", "Run", "cal-step-calibrations", state, "running on leonardo"))
+            self.assertIn(f'class="cal-step {state}"', box)
+            self.assertIn(f">{word}<", box)  # Not by colour alone
+
+
 class TestCalibrationEngine(unittest.TestCase):
     """A calibration with Optuna, on a toy model: new cases grow with the temperature above 18 °C. Observations made
     from it at known temperature offsets of two cells must be found again."""
@@ -2980,6 +3083,114 @@ sleep ${FAKE_SLEEP:-0}
         with mock.patch.dict(os.environ, {"MOBILE": str(self.config.mobile)}):
             result = run_calibration(moved, StudyState(), parallel=1)
         self.assertEqual((result["status"], result["completed"]), ("finished", 2))
+
+    def test_transmission_dying_out_is_infeasible_not_failed(self):
+        # The toy has cases only above 18 °C: offsets of the west of -2 °C or lower (with a small gap) leave none anywhere
+        from mobile.calibration_engine import (CONSTRAINT, DataError, INFEASIBLE, create_calibration, evaluate, open_study,
+                                               read_calibration, resolved, run_calibration, trial_folder, trials_table, best_trials)
+        from mobile.calibration_results import results_figure
+        from mobile.sensitivity_runs import StudyState
+
+        temperature = {"cells": self.cells, "first": (-5.0, 1.0), "gap": (0.0, 0.5)}
+        folder = create_calibration(self.config, self.objectives(), temperature=temperature, n_trials=16, startup_trials=8, name="dying")
+        record = run_calibration(folder, StudyState(), parallel=2)
+        self.assertEqual((record["status"], record["completed"], record["failed"]), ("finished", 16, 0))  # None failed
+        rows = [row for row in trials_table(folder) if row["state"] == "COMPLETE"]
+        dead = [row for row in rows if row["infeasible"]]
+        self.assertTrue(0 < len(dead) < len(rows), [row["offsets"] for row in rows])
+        for row in rows:  # Died out exactly where the toy says (no day above 18 °C in the last year), graded by when
+            shifted = self.t2m + np.array([[row["offsets"]["dT_1"], row["offsets"]["dT_2"]]])
+            cases = np.flatnonzero((shifted > 18.0).any(axis=(1, 2)))
+            last = int(cases[-1]) if len(cases) else -1
+            died = len(self.t2m) - 1 - last >= 365
+            self.assertEqual(bool(row["infeasible"]), died, row)
+            self.assertEqual(row["persistence"]["last"], [last])
+            self.assertAlmostEqual(row["violation"], (len(self.t2m) - 1 - last) / len(self.t2m) if died else -1.0)
+        never = [row for row in dead if row["violation"] == 1.0]
+        self.assertTrue(never, "some trials should have no case at all")
+        self.assertEqual(never[0]["infeasible"], "transmission died out: no case at all in 1 of 1 seeds")
+        self.assertEqual(never[0]["values"][0], 0.0)  # The correlation of a series that does not vary
+        # Kept out of the front, which Optuna's own constraints also know of
+        front = best_trials(folder)
+        self.assertTrue(front and not any(row["infeasible"] for row in front))
+        study = open_study(folder, read_calibration(folder))
+        self.assertEqual(study.trials[never[0]["number"]].constraints, {"transmission": 1.0})
+        # Control: as before (no flat series allowed), such a trial fails
+        here = trial_folder(folder, never[0]["number"])
+        with self.assertRaisesRegex(DataError, "not defined for these values"):
+            evaluate(resolved(folder, read_calibration(folder))["objectives"], [here / "seed_12345"])
+        # The regime of every trial: the toy repeats the same seasons, so the years are alike (CV ~0) while it persists
+        self.assertEqual(never[0]["regime"]["fade_out"], 1.0)
+        self.assertIsNone(never[0]["regime"]["annual_cv"])  # No cases: not defined
+        alive = [row for row in rows if not row["infeasible"] and row["persistence"]["last"][0] == len(self.t2m) - 1]
+        self.assertTrue(alive and all(row["regime"]["annual_cv"] < 0.05 for row in alive))
+        for kind in ("boundary_cv", "boundary_fade", "boundary_pairs", "distributions", "pareto"):
+            results_figure(folder, kind)
+
+    def test_regime_measures(self):
+        from mobile.calibration_data import DataError, Observations
+        from mobile import calibration_engine
+
+        def run(first, values):
+            day = np.arange(np.datetime64(first), np.datetime64(first) + len(values))
+            return Observations(shape="dated", values=np.asarray(values, dtype="f8"), index=pd.DataFrame({"start": day, "end": day}))
+
+        def measured(*series):
+            by_dir = {f"seed_{k}": member for k, member in enumerate(series)}
+            with mock.patch.object(calibration_engine, "model_members", lambda folder, *args: [by_dir[folder]]):
+                return calibration_engine.regime(list(by_dir))
+
+        steady = run("2001-01-01", np.full(3 * 365, 1e-3))  # The same cases every day of three years
+        self.assertAlmostEqual(measured(steady)["annual_cv"], 0.0)
+        self.assertEqual(measured(steady)["fade_out"], 0.0)
+        # Outbreaks in the first and third years only, each in its first three months: the second year has none
+        days = np.arange(np.datetime64("2001-01-01"), np.datetime64("2004-01-01"))
+        outbreaks = np.where(np.isin(days.astype("datetime64[Y]").astype(int) + 1970, (2001, 2003))
+                             & ((days.astype("datetime64[M]").astype(int) % 12) < 3), 1e-3, 0.0)
+        found = measured(run("2001-01-01", outbreaks))
+        annual = np.array([outbreaks[:365].sum(), outbreaks[365:730].sum(), outbreaks[730:].sum()])
+        self.assertAlmostEqual(found["annual_cv"], annual.std(ddof=1) / annual.mean())
+        self.assertAlmostEqual(found["fade_out"], 30 / 36)  # 6 of the 36 months had cases
+        # Only whole years and months: a run from mid-June 2001 to the end of 2003 has two full years, 30 full months
+        partial = run("2001-06-15", np.full(len(np.arange(np.datetime64("2001-06-15"), np.datetime64("2004-01-01"))), 1e-3))
+        self.assertAlmostEqual(measured(partial)["annual_cv"], 0.0)
+        self.assertEqual(measured(steady, run("2001-01-01", outbreaks))["seeds"]["fade_out"], [0.0, 30 / 36])
+        self.assertAlmostEqual(measured(steady, run("2001-01-01", outbreaks))["fade_out"], 15 / 36)  # The median of the seeds
+        self.assertIsNone(measured(run("2001-01-01", np.full(400, 1e-3)))["annual_cv"])  # One full year: no CV
+        with mock.patch.object(calibration_engine, "model_members", mock.Mock(side_effect=DataError("no output"))):
+            self.assertIsNone(calibration_engine.regime(["seed_0"]))  # New cases not written
+
+    def test_persistence_is_graded(self):
+        from mobile.calibration_data import Observations
+        from mobile import calibration_engine
+
+        days = 1000
+
+        def runs(*lasts):
+            """Stand-in outputs: one daily series per run, with cases up to the day given (-1: none at all)."""
+            by_dir = {}
+            for k, last in enumerate(lasts):
+                values = np.zeros(days)
+                values[:last + 1] = 1e-3
+                day = np.arange(np.datetime64("2001-01-01"), np.datetime64("2001-01-01") + days)
+                by_dir[f"seed_{k}"] = Observations(shape="dated", values=values, index=pd.DataFrame({"start": day, "end": day}))
+            return list(by_dir), lambda folder, *args: [by_dir[folder]]
+
+        objectives = [{"name": "timing", "variable": "Inew", "space": "people", "aggregation": None}]
+        for lasts, violation in (((999,), -1.0),             # To the end
+                                 ((900,), -1.0),             # Ended 99 days before the end: less than a year, not died out
+                                 ((500,), 499 / 1000),       # Died out half way: the share of the run after
+                                 ((-1,), 1.0),               # None at all: the farthest
+                                 ((500, 999), -1.0),         # One seed of two: not more than half
+                                 ((500, 400, 999), np.mean([499 / 1000, 599 / 1000]))):  # Two of three: the mean of those
+            folders, members = runs(*lasts)
+            with mock.patch.object(calibration_engine, "model_members", members):
+                found = calibration_engine.persistence(objectives, folders)
+            self.assertAlmostEqual(found["violation"], violation, msg=lasts)
+            self.assertEqual(found["last"], list(lasts))
+        with mock.patch.object(calibration_engine, "model_members", runs(999)[1]):  # Persisting, but a series did not vary
+            found = calibration_engine.persistence(objectives, ["seed_0"], flat=[0])
+        self.assertEqual((found["violation"], found["reason"]), (1.0, "the model series of timing does not vary"))
 
     # A stand-in ssh: runs the command here, in a shell whose HOME is that of the cluster and whose PATH has its Slurm
     FAKE_SSH = """#!/bin/bash

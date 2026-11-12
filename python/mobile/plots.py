@@ -44,10 +44,21 @@ OCEAN = "#97b6e1"
 LAND = "#efefdb"
 COAST = "#a9a8a2"
 RIVER = "#7f97a8"
-TERRAIN_DATA_OPACITY = 0.7
 BORDER = "#52514e"
 TEXT = "#52514e"
 GRID = "#e6e5e0"
+
+
+def snap_to_cell(lat, lon, at_lon, at_lat, steps=None):
+    """(lon, lat) of the centre of the cell of a grid nearest to a point clicked on a map, so that the cell is marked where
+    it is, whatever the click landed on (e.g. the outline of an area of a shapefile); None for a point more than a cell
+    outside the grid. lat, lon: the centres of the grid; steps: its cell size, if known (basemap.cell_size)."""
+    lat, lon = np.asarray(lat, dtype="f8"), np.asarray(lon, dtype="f8")
+    size_lat, size_lon = cell_size(lat, lon, known=steps)
+    i, j = int(np.argmin(np.abs(lat - at_lat))), int(np.argmin(np.abs(lon - at_lon)))
+    if abs(lat[i] - at_lat) > 1.5 * size_lat or abs(lon[j] - at_lon) > 1.5 * size_lon:
+        return None
+    return float(lon[j]), float(lat[i])
 
 
 def next_cells(cells, lon, lat):
@@ -161,11 +172,11 @@ def _base_layout(**layout):
 
 
 def _add_basemap(figure, basemap, terrain=None):
-    """Land, relief and lakes under the data, rivers and borders over it. Nothing without a basemap."""
+    """Land and lakes under the data, rivers and borders over it, and the shading of the relief over all of them (so that
+    it shows where there are data too). Nothing without a basemap."""
     if basemap is None:
         return
-    # Layout images are drawn under layout shapes, so with relief the land is only its outline
-    land_fill = "rgba(0,0,0,0)" if terrain else LAND
+    land_fill = LAND
     below = {"type": "path", "xref": "x", "yref": "y", "layer": "below"}
     figure.update_layout(
         plot_bgcolor=OCEAN,
@@ -181,7 +192,7 @@ def _add_basemap(figure, basemap, terrain=None):
     if terrain:
         figure.update_layout(images=[{
             "source": terrain.image, "xref": "x", "yref": "y", "x": terrain.west, "y": terrain.north,
-            "sizex": terrain.width, "sizey": terrain.height, "sizing": "stretch", "layer": "below",
+            "sizex": terrain.width, "sizey": terrain.height, "sizing": "stretch", "layer": "above",
         }])
     for lines, color, width in ((basemap.rivers, RIVER, 0.8), (basemap.borders, BORDER, 1)):
         figure.add_trace(go.Scatter(x=lines["x"], y=lines["y"], mode="lines", line={"color": color, "width": width}, hoverinfo="skip", showlegend=False))
@@ -302,7 +313,6 @@ def map_figure(data, grid, description, day, limits, cells=(), basemap=None, ter
             customdata=values,
             zmin=zmin,
             zmax=zmax,
-            opacity=TERRAIN_DATA_OPACITY if terrain else 1,
             colorscale=[[i / (len(colours) - 1), colour] for i, colour in enumerate(colours)],
             colorbar={
                 "title": {"text": units_label(units) + (" (log scale)" if log else ""), "side": "right"},
@@ -315,7 +325,7 @@ def map_figure(data, grid, description, day, limits, cells=(), basemap=None, ter
         layout=_base_layout(
             title=label
             + ("" if basemap else ". Grey: not simulated" if grid is not None else ". Grey: no data")
-            + (". Terrain on: colours do not match the colour bar exactly" if terrain else "")
+            + (". Terrain on: its shading darkens or lightens the colours" if terrain else "")
         ),
     )
     # Shown next to the Day slider when this map is drawn, so that the two stay together
@@ -946,8 +956,11 @@ def monthly_figure(result, name, key):
 
 def calibration_history_figure(rows, objectives):
     """The value of each objective in every completed trial of a calibration (dots), and the best so far (a line), one
-    panel per objective. rows are those of calibration_engine.trials_table, objectives those of its record."""
-    done = [row for row in rows if row["state"] == "COMPLETE"]
+    panel per objective. Trials where transmission died out (infeasible) as grey rings, left out of the best so far.
+    rows are those of calibration_engine.trials_table, objectives those of its record."""
+    every = [row for row in rows if row["state"] == "COMPLETE"]
+    dead = [row for row in every if row.get("infeasible")]
+    done = [row for row in every if not row.get("infeasible")]
     figure = make_subplots(rows=len(objectives), cols=1, shared_xaxes=True, vertical_spacing=0.08,
                            subplot_titles=[f"{o['name']}: {o['metric'].replace('_', ' ')} ({'higher' if o['direction'] == 'maximize' else 'lower'} is better)"
                                            for o in objectives])
@@ -961,6 +974,12 @@ def calibration_history_figure(rows, objectives):
                                     hovertemplate=f"Trial %{{x}}: {objective['name']} %{{y:.4g}}<extra></extra>"), row=k + 1, col=1)
         figure.add_trace(go.Scatter(x=numbers, y=best, mode="lines", line={"color": OBSERVED, "width": 2, "shape": "hv"},
                                     name="Best so far", showlegend=k == 0, legendgroup="best", hoverinfo="skip"), row=k + 1, col=1)
+        if dead:
+            figure.add_trace(go.Scatter(x=[row["number"] for row in dead], y=[row["values"][k] for row in dead], mode="markers",
+                                        marker={"color": "rgba(0,0,0,0)", "size": 7, "line": {"color": "#9a9893", "width": 1.5}},
+                                        name="Transmission died out (infeasible)", showlegend=k == 0, legendgroup="dead",
+                                        text=[row["infeasible"] for row in dead],
+                                        hovertemplate="Trial %{x}: infeasible, %{text}<extra></extra>"), row=k + 1, col=1)
         figure.update_yaxes(title_text=objective["metric"].replace("_", " "), gridcolor=GRID, row=k + 1, col=1)
     figure.update_xaxes(gridcolor=GRID)
     figure.update_xaxes(title_text="Trial", row=len(objectives), col=1)

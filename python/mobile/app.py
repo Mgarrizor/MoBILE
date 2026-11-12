@@ -23,12 +23,13 @@ from .outcome import RunState, load_outcome, run_label, run_model, run_name_prob
 from .parameters import shown_parameters, slider_start, to_model, to_shown
 from .plots import (
     BOX, COLOUR_MAPS, LAND, age_cumulative_figure, age_fit_figure, age_heterogeneity_figure, age_sex_figure, cell_figure, envelope_figure, grid_figure, map_figure, message_figure,
-    MAX_DOTS, DOT_COLOURS, add_dot, default_dot, dot_label, move_dot, next_cells, remove_dot, send_figure, sig,
+    MAX_DOTS, DOT_COLOURS, add_dot, default_dot, dot_label, move_dot, next_cells, remove_dot, send_figure, sig, snap_to_cell,
 )
 from .checks import driving_days, driving_problems
 from .period import length_text, parse_day, period_days, spin_up_problem
 from .region import region_problems
 from .results import list_runs
+from .calibration_progress import progress_server
 from .calibration_run_ui import calibration_run_server
 from .calibration_ui import calibration_server, calibration_tab
 from .sensitivity_ui import sensitivity_card, sensitivity_server
@@ -159,7 +160,7 @@ def create_app(config):
                                 ui.div(ui.input_action_button("auto_range", "Automatic range", class_="btn-sm"), class_="pt-4"),
                                 col_widths=(2, 2, 2, 2, 3),
                             ),
-                            ui.input_switch("terrain", with_tip("Terrain", "Shaded relief under the map. Downloaded the first time it is used."), value=False),
+                            ui.input_switch("terrain", with_tip("Terrain", "The relief, as a shading over the map: slopes facing away from the light (northwest) darker, those facing it lighter. Downloaded the first time it is used for an area."), value=False),
                             ui.output_ui("terrain_status"),
                         ),
                         open=False,
@@ -1154,6 +1155,8 @@ def create_app(config):
             input, output, session, setup, calibration.objectives, overrides, selected_output,
             lambda: run_task.status() == "running" or analysis.running(), lambda: agents(), lambda: input.ha(), slider_setup,
         )
+        progress_server(input, calibration.prepared, calibrating.what, calibrating.stored, calibration.activity,
+                        lambda: input.cal_previous())
         for key, _, kind in (*REQUIRED_FILES, *OPTIONAL_FILES):
             browse_button(f"setup_{key}", kind)
 
@@ -1453,7 +1456,14 @@ def create_app(config):
         def select_cell():
             with reactive.isolate():
                 cell = input.cell()
-                selected_cells.set(next_cells(selected_cells(), cell["lon"], cell["lat"]))
+                outcome = current()
+                if outcome is None or not outcome.seeds:
+                    return
+                data = outcome.fields(shown_variable(outcome))[shown_member(outcome)]
+                # Marked at the centre of the cell whose series is drawn, wherever the click landed
+                snapped = snap_to_cell(data["lat"].values, data["lon"].values, cell["lon"], cell["lat"], grid().get("steps") if grid() else None)
+                if snapped is not None:
+                    selected_cells.set(next_cells(selected_cells(), *snapped))
 
         @reactive.effect
         async def draw_cell_plot():
@@ -1662,9 +1672,14 @@ def create_app(config):
         @reactive.event(input.preview_cell)
         def select_preview_cell():
             with reactive.isolate():
-                if preview_map_data() is None:
+                data = preview_map_data()
+                if data is None:
                     return
                 cell = input.preview_cell()
+                snapped = snap_to_cell(data["lat"].values, data["lon"].values, cell["lon"], cell["lat"], data.attrs.get("cell_steps"))
+                if snapped is None:
+                    return
+                cell = {"lon": snapped[0], "lat": snapped[1]}
                 dots = preview_cells()
                 if preview_adding() or not dots:
                     added = add_dot(dots, cell["lon"], cell["lat"])
