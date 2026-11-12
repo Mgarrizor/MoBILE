@@ -262,8 +262,11 @@ def job_script(settings, record, target):
     lines += ["#SBATCH --nodes=1", "#SBATCH --ntasks=1", f"#SBATCH --cpus-per-task={settings.cpus}"]
     if settings.exclusive:
         lines.append("#SBATCH --exclusive")
+    # The signal is a safety net only: Slurm may send it up to 60 s early, so it comes 60-120 s before the end, after
+    # the trials have ended (deadline: calibration_cli.DEADLINE_MARGIN = 120 s). At 300 s it cut trials still running
+    # (LEONARDO, job 64190103: 20 cancelled).
     lines += [f"#SBATCH --time={settings.time.strip()}",
-              "#SBATCH --signal=B:TERM@300  # Before the end: stop cleanly, if the deadline has not stopped it already",
+              "#SBATCH --signal=B:TERM@60  # Before the end: stop cleanly, if the deadline has not stopped it already",
               f"#SBATCH --output={target}/{LOGS}/%j.out", ""]
     lines += [line for line in settings.setup.splitlines()]
     options = f" --parallel {parallel}" + (f" --trial-minutes {settings.trial_minutes:g}" if settings.trial_minutes else "")

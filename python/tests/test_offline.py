@@ -3115,7 +3115,7 @@ echo "$@" >> "$HOME/scancel.txt"
         record["setup"]["run"]["threads"] = 7
         script = job_script(ClusterSettings(), record, "/leonardo_work/try26_garrido/calibration/x")
         for line in ("#SBATCH --account=try26_garrido", "#SBATCH --partition=dcgp_usr_prod", "#SBATCH --cpus-per-task=112",
-                     "#SBATCH --exclusive", "#SBATCH --signal=B:TERM@300", "unset PYTHONPATH",
+                     "#SBATCH --exclusive", "#SBATCH --signal=B:TERM@60", "unset PYTHONPATH",
                      'exec mobile calibrate "$1" --parallel 16'):
             self.assertIn(line, script)
         with self.assertRaisesRegex(ClusterError, "need 32 CPUs"):
