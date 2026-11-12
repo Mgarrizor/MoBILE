@@ -10,9 +10,11 @@ While it runs there, the folder there is the master, and the one here mirrors it
 run here. Every command runs `ssh -o BatchMode=yes <host>`: a missing login (e.g. a certificate of the day) fails at
 once (LOGIN), instead of waiting for a password. Files go through tar over the same ssh connection."""
 
+import datetime
 import io
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import tarfile
@@ -21,6 +23,7 @@ import time
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
+from .calibration_cli import RESUMABLE
 from .calibration_engine import (CLUSTER, DATABASE, SERIES, SNAPSHOT, STATUS, TRIALS, CalibrationError, _now, _write_atomic,
                                  forget_storage, is_running, read_calibration, read_cluster, resolved, setup_config,
                                  write_calibration)
@@ -33,6 +36,7 @@ JOB_SCRIPT = "job.sh"
 LOGIN = "log in to the cluster first (e.g. `step ssh login <your e-mail> --provisioner cineca-hpc` for CINECA), then try again"
 REMOTE_FIELDS = ("status", "completed", "failed", "failure", "binary_md5")  # Taken from the record there on refresh
 SSH_SECONDS = 60  # A command that is not a copy
+STOPPED = "STOPPED (RESUMABLE)"  # A job's state, here, when Slurm says FAILED but the calibration stopped as at its deadline
 
 
 class ClusterError(RuntimeError):
@@ -53,7 +57,8 @@ class ClusterSettings:
     exclusive: bool = True
     parallel: int = 0  # Runs at the same time; 0: the CPUs divided by the threads per run of the calibration
     trial_minutes: float = 0.0  # A guess of how long a trial takes, used until 10 have completed; 0: none
-    setup: str = ("source ~/mobile_env.sh\nmodule load python/3.11.7\nunset PYTHONPATH\n"
+    # Quiet: the module messages would fill the end of the log that Refresh shows
+    setup: str = ("source ~/mobile_env.sh > /dev/null 2>&1\nmodule load python/3.11.7 > /dev/null 2>&1\nunset PYTHONPATH\n"
                   "source ~/venvs/mobile-gui/bin/activate")
 
     @classmethod
@@ -209,7 +214,10 @@ def send(folder, settings, cleared=False):
     if len(target) + 1 + longest > MAX_PATH_LENGTH - 40:
         raise ClusterError(f"paths there would be up to {len(target) + 1 + longest} characters, more than the model takes "
                            f"({MAX_PATH_LENGTH - 40}): choose a shorter folder there")
-    extra = {"calibration.json": (json.dumps(there, indent=2) + "\n").encode()}
+    # No paths of this computer there: the runs go in the trials' folders anyway, and the shapes only draw maps here
+    there["setup"]["runs_dir"] = target
+    there["setup"].pop("shapes", None)
+    extra ={"calibration.json": (json.dumps(there, indent=2) + "\n").encode()}
     with _tar(files, extra) as archive:
         ssh(settings.host, f'mkdir -p {remote(target)} && tar xf - -C {remote(target)}', "copying the calibration",
             data=archive, timeout=3600)
@@ -275,20 +283,30 @@ def job_script(settings, record, target):
 
 
 def submit(folder, settings):
-    """Submit a job that runs the calibration there, after the last one if Slurm still lists it. Returns its id."""
+    """Submit a job that runs the calibration there, after the last of its jobs that Slurm lists now (asked in the same
+    call, not taken from the last refresh). Returns its id; the job it waits for, if any, is its "after" in CLUSTER."""
     folder = Path(folder)
     cluster = _cluster(folder)
     target = cluster["folder"]
     script = job_script(settings, read_calibration(folder), target)
-    listed = [job for job in cluster["jobs"] if job.get("listed")]
-    after = f" --dependency=afterany:{listed[-1]['id']}" if listed else ""
-    answer = ssh(cluster["host"], f"mkdir -p {remote(target + '/' + LOGS)} && cat > {remote(target + '/' + JOB_SCRIPT)} && "
-                                  f"cd {remote(target)} && sbatch --parsable{after} {JOB_SCRIPT} {remote(target)}",
+    ids = [job["id"] for job in cluster["jobs"]]
+    # The jobs of it that squeue lists, on a line of their own; the last of them, in the order submitted, is waited for
+    ask = (f"listed=\" $(squeue -h -j {','.join(ids)} -o %A 2>/dev/null | awk '{{printf \"%s \", $1}}')\"; "
+           f"after=; for job in {' '.join(ids)}; do case \"$listed\" in *\" $job \"*) after=$job;; esac; done; "
+           if ids else "listed=' '; after=; ")
+    answer = ssh(cluster["host"], f"{ask}echo \"listed:$listed\"; mkdir -p {remote(target + '/' + LOGS)} && "
+                                  f"cat > {remote(target + '/' + JOB_SCRIPT)} && cd {remote(target)} && "
+                                  f"sbatch --parsable ${{after:+--dependency=afterany:$after}} {JOB_SCRIPT} {remote(target)}",
                  "submitting the job", data=script.encode())
-    job = answer.strip().splitlines()[-1].split(";")[0] if answer.strip() else ""
+    lines = answer.strip().splitlines()
+    listed = next((line[len("listed:"):].split() for line in lines if line.startswith("listed:")), [])
+    job = lines[-1].split(";")[0] if lines else ""
     if not job.isdigit():
         raise ClusterError(f"sbatch did not give a job id: {answer.strip()[:200]}")
-    cluster["jobs"].append({"id": job, "submitted": _now(), "state": "PENDING", "listed": True})
+    for old in cluster["jobs"]:
+        old["listed"] = old["id"] in listed
+    after = next((old for old in reversed(ids) if old in listed), None)
+    cluster["jobs"].append({"id": job, "submitted": _now(), "state": "PENDING", "listed": True, "after": after})
     _write_cluster(folder, cluster)
     return job
 
@@ -338,9 +356,22 @@ def refresh(folder):
         if result.stdout:
             _extract(result.stdout, staging)
         _take(folder, staging)
+    for job in cluster["jobs"]:
+        if job["state"] in ("FAILED", "ENDED") and _stopped_resumable(folder / LOGS / f"{job['id']}.out"):
+            job["state"] = STOPPED
     cluster["refreshed"] = _now()
     _write_cluster(folder, cluster)
     return cluster
+
+
+def _stopped_resumable(log):
+    """Whether a job's log ends as `mobile calibrate` does when it stops before the end, resumable (its exit code 3, which
+    Slurm records as FAILED)."""
+    try:
+        lines = [line for line in log.read_text(errors="replace").splitlines()[-30:] if line.startswith("exit ")]
+    except OSError:
+        return False
+    return bool(lines) and lines[-1].startswith(f"exit {RESUMABLE}:")
 
 
 def _extract(data, target):
@@ -397,5 +428,221 @@ def stop(folder):
     return job["id"]
 
 
-__all__ = ["ClusterError", "ClusterSettings", "CalibrationError", "check_login", "job_script", "last_log", "load_settings",
-           "observation_files", "refresh", "remote_folder", "runs_at_once", "save_settings", "send", "stop", "submit"]
+# ---------------------------------------------------------------- cluster information
+
+INFO_SECONDS = 25  # Each command of the cluster information at most, but saldo
+SALDO_SECONDS = 120  # saldo and the project's usage (sacct -a), slow: 18 s and 24 s on LEONARDO, 12 Nov 2026
+INFO_SCRIPT = r"""export PATH="$PATH:/cineca/bin"
+t() { if command -v timeout > /dev/null; then timeout "$1" "${@:2}"; else "${@:2}"; fi 2> /dev/null; }
+echo @@assoc; assoc=$(t {seconds} sacctmgr -n -P show assoc user="$USER" format=account,partition,qos); echo "$assoc"
+# saldo by project (asked per user, it lists none for a new account), each alongside the rest: it is often slow
+saldo_dir=$(mktemp -d)
+for a in $( (echo {account}; echo "$assoc" | cut -d'|' -f1) | grep . | sort -u); do
+  (t {saldo_seconds} saldo -b -a "$a" {saldo_flags}; echo "saldo-exit: $?") > "$saldo_dir/$a" &
+done
+echo @@qos; [ -n {qos} ] && t {seconds} sacctmgr -n -P show qos {qos} format=name,maxwall,maxtrespu,maxjobspu,maxsubmitpu
+echo @@calibration; [ -n {ids} ] && t {seconds} sacct -n -X -P -j {ids} -o JobID,State,CPUTimeRAW
+echo @@mine; t {seconds} squeue --me -h -o '%A|%j|%T|%M|%l|%R'
+echo @@load; [ -n {partition} ] && t {seconds} sinfo -p {partition} -h -o '%T %D'
+wait; echo @@saldo; s=$(cat "$saldo_dir"/* 2> /dev/null); rm -rf "$saldo_dir"; echo "$s"
+echo @@usage; start=$(echo "$s" | awk -v a={account} '$1 == a && $2 ~ /^[0-9]{8}$/ {print $2}')
+if [ -n "$start" ]; then
+  echo "$start"; u=$(t {saldo_seconds} sacct -n -X -P -a -A {account} -S "${start:0:4}-${start:4:2}-${start:6:2}" -E now -o CPUTimeRAW)
+  echo "sacct-exit: $?"; echo "$u" | awk '{n += $1} END {print n + 0}'
+fi
+echo @@end
+"""
+
+
+def cluster_info(settings, folder=None):
+    """What the cluster says, in one ssh call of read-only commands: {section: its lines} (sections of INFO_SCRIPT)."""
+    cluster = read_cluster(folder) if folder else None
+    ids = ",".join(job["id"] for job in (cluster or {}).get("jobs", []))
+    values = {"seconds": str(INFO_SECONDS), "saldo_seconds": str(SALDO_SECONDS),
+              "saldo_flags": "--dcgp" if settings.partition.strip().startswith("dcgp") else "", "qos": settings.qos.strip(), "account": settings.account.strip(),
+              "partition": settings.partition.strip(), "ids": ids}
+    script = INFO_SCRIPT
+    for key, value in values.items():
+        script = script.replace("{" + key + "}", value if key.startswith("saldo_") or key == "seconds" else shlex.quote(value))
+    answer = ssh(settings.host, "bash -s", "asking the cluster", data=script.encode(), timeout=4 * INFO_SECONDS + 2 * SALDO_SECONDS + 30)
+    sections, name = {}, None
+    for line in answer.splitlines():
+        if line.startswith("@@"):
+            name = line[2:].strip()
+            sections[name] = []
+        elif name and line.strip():
+            sections[name].append(line.rstrip())
+    if "end" not in sections:
+        raise ClusterError("asking the cluster: the answer stopped early")
+    return sections
+
+
+def _hours(seconds):
+    """Core-hours, as said: 1 decimal below 100."""
+    return f"{seconds / 3600:,.1f}" if seconds < 360000 else f"{seconds / 3600:,.0f}"
+
+
+def wall_seconds(text):
+    """Seconds of a Slurm time ([d-]h:mm:ss, mm:ss or minutes), or None (e.g. UNLIMITED, empty)."""
+    text = (text or "").strip()
+    days, _, rest = text.rpartition("-") if "-" in text else ("0", "", text)
+    parts = rest.split(":")
+    if not days.isdigit() or not all(part.isdigit() for part in parts) or not 1 <= len(parts) <= 3:
+        return None
+    numbers = [int(part) for part in parts]
+    if len(numbers) == 1:
+        seconds = numbers[0] * 60  # Minutes, as for --time
+    elif len(numbers) == 2:
+        seconds = numbers[0] * 60 + numbers[1]
+    else:
+        seconds = numbers[0] * 3600 + numbers[1] * 60 + numbers[2]
+    return int(days) * 86400 + seconds
+
+
+def _memory(value):
+    """'965 GB of memory' of Slurm's 988000M (its units: K, M, G, T, each 1024 of the one before; M without a unit)."""
+    number, unit = (value[:-1], value[-1].upper()) if value[-1:].isalpha() else (value, "M")
+    try:
+        gb = float(number) * 1024 ** "KMGT".index(unit) / 1024 ** 2
+    except ValueError:
+        return f"{value} of memory"
+    return f"{gb:,.0f} GB of memory"
+
+
+def _date(stamp):
+    """'25 Nov 2026' of 20261125."""
+    return datetime.datetime.strptime(stamp, "%Y%m%d").strftime("%-d %b %Y")
+
+
+def info_rows(sections, settings, record=None, today=None):
+    """[(what, value, from, warning)] of the cluster information (cluster_info), for the settings and, if given, the record of
+    the calibration chosen (its jobs asked about). warning: the value needs attention."""
+    today = today or datetime.date.today()
+    rows = []
+    # The budget of each project, as CINECA last counted it
+    budgets = []
+    for line in sections.get("saldo", []):
+        parts = line.split()
+        if len(parts) >= 7 and len(parts[1]) == 8 and parts[1].isdigit() and parts[3].replace(".", "").isdigit():
+            account, start, end, total, used, share = parts[0], parts[1], parts[2], float(parts[3]), float(parts[5]), parts[6]
+            if any(account == known for known, *_ in budgets):
+                continue
+            left = (datetime.datetime.strptime(end, "%Y%m%d").date() - today).days
+            budgets.append((account, start, total))
+            rows.append((f"Budget of {account}", f"{used:,.0f} of {total:,.0f} core-hours used ({share} %); "
+                         f"from {_date(start)} to {_date(end)}" + (f", {left} days left" if left >= 0 else ", ended"),
+                         f"saldo -b -a {account} (as of CINECA's last update: it lags)", left < 14 or used > 0.9 * total))
+    exits = {line.split(":")[1].strip() for line in sections.get("saldo", []) if line.startswith("saldo-exit:")}
+    if "124" in exits:
+        rows.append(("Budget", f"saldo did not answer within {SALDO_SECONDS} s for "
+                     + ("a project" if budgets else "your projects") + " (it is often slow): Check again later", "saldo -b -a", True))
+    elif not budgets:
+        said = "saldo is not there (not CINECA?)" if "127" in exits else "saldo listed no project"
+        rows.append(("Budget", said, "saldo -b -a", True))
+    # Up to date: what Slurm counted since the project started, all its users
+    usage = sections.get("usage", [])
+    if settings.account and len(usage) >= 3 and usage[1] == "sacct-exit: 0" and usage[2].replace(".", "").isdigit():
+        total = next((total for account, _, total in budgets if account == settings.account), None)
+        used = float(usage[2]) / 3600
+        rows.append((f"Used now by {settings.account}", f"{used:,.0f} core-hours since {_date(usage[0])}"
+                     + (f": {total - used:,.0f} left" if total else ""), "sacct, all jobs of the project (up to date)",
+                     bool(total) and used > 0.9 * total))
+    elif settings.account and len(usage) >= 2:
+        rows.append((f"Used now by {settings.account}", f"sacct did not answer within {SALDO_SECONDS} s (it is slow over a whole "
+                     "project): Check again later" if usage[1] == "sacct-exit: 124" else f"sacct failed ({usage[1]})", "sacct", True))
+    elif settings.account and budgets:
+        rows.append((f"Used now by {settings.account}", "not in what saldo listed: is the Account right?", "sacct", True))
+    elif settings.account:
+        rows.append((f"Used now by {settings.account}", "needs the start of the project, from saldo", "sacct", False))
+    # The projects and QOS this user may use
+    allowed = {}
+    for line in sections.get("assoc", []):
+        parts = line.split("|")
+        if len(parts) >= 3 and parts[0]:
+            allowed.setdefault(parts[0], set()).update(qos for qos in parts[2].split(",") if qos)
+    if allowed:
+        rows.append(("Your projects and QOS", "; ".join(f"{account}: {', '.join(sorted(qos))}" for account, qos in sorted(allowed.items())),
+                     "sacctmgr show assoc", bool(settings.account) and settings.account not in allowed))
+    # The limits of the QOS chosen, and the time limit against them
+    for line in sections.get("qos", [])[:1]:
+        name, maxwall, tres, jobs, submit, *_ = line.split("|") + [""] * 5
+        names = {"cpu": "CPUs", "node": "nodes", "mem": "memory", "gres/gpu": "GPUs"}
+        each = [_memory(value) if key == "mem" else f"{value} {names.get(key, key)}"
+                for key, _, value in (part.partition("=") for part in tres.split(",") if part)]
+        limits = [f"a job runs at most {maxwall}" if maxwall else "no time limit"]
+        limits += [f"you may use at most {', '.join(each)} at a time" if each else "",
+                   f"run at most {jobs} job{'s' if jobs != '1' else ''} at a time" if jobs else "",
+                   f"queue at most {submit}" if submit else ""]
+        too_long = wall_seconds(maxwall) is not None and (wall_seconds(settings.time) or 0) > wall_seconds(maxwall)
+        rows.append((f"QOS {name}", ", ".join(limit for limit in limits if limit) +
+                     (f". The time limit set, {settings.time}, is longer: sbatch would refuse the job" if too_long else ""),
+                     "sacctmgr show qos", too_long))
+    # This calibration's jobs: their cost so far, and per completed trial
+    jobs = [line.split("|") for line in sections.get("calibration", []) if line.split("|")[0].isdigit()]
+    if record is not None and jobs:
+        seconds = sum(float(job[2]) for job in jobs if len(job) >= 3 and job[2].replace(".", "").isdigit())
+        completed = record.get("completed") or 0
+        per = f"; {seconds / completed / 3600:.2f} per completed trial ({completed} completed, as of the last refresh)" if completed else ""
+        rows.append(("This calibration", f"{len(jobs)} job{'s' if len(jobs) > 1 else ''}, {_hours(seconds)} core-hours{per}",
+                     "sacct over its jobs", False))
+    # All jobs of this user
+    mine = [line.split("|") for line in sections.get("mine", [])]
+    rows.append(("Your jobs", "; ".join(f"{job[0]} {job[1]} {job[2].lower()} {job[3]} of {job[4]}"
+                                        + (f" {job[5]}" if job[2] == "PENDING" and len(job) > 5 else "") for job in mine if len(job) >= 5)
+                 or "none queued or running", "squeue --me", False))
+    # How busy the partition is
+    nodes = {}
+    for line in sections.get("load", []):
+        parts = line.split()
+        if len(parts) == 2 and parts[1].isdigit():
+            state = parts[0].rstrip("*~#!%$@^-+")
+            nodes[state] = nodes.get(state, 0) + int(parts[1])
+    if nodes:
+        order = ["idle", "mixed", "allocated"]
+        said = [f"{nodes[state]} {state}" for state in order if state in nodes]
+        others = sum(count for state, count in nodes.items() if state not in order)
+        rows.append((f"Nodes of {settings.partition}", ", ".join(said) + (f", {others} other (down, drained, reserved…)" if others else ""),
+                     "sinfo", False))
+    return rows
+
+
+def certificate(now=None):
+    """(seconds left, said) of the ssh certificate in the agent here that lasts longest (e.g. that of `step ssh login`), or
+    (None, said) if there is none: logging in with a key alone needs none."""
+    now = now or datetime.datetime.now()
+    try:
+        keys = subprocess.run(["ssh-add", "-L"], capture_output=True, text=True, timeout=10).stdout.splitlines()
+    except (OSError, subprocess.TimeoutExpired):
+        return None, "ssh-add not available"
+    best = None
+    for key in keys:
+        if "-cert-" not in key.split(" ")[0]:
+            continue
+        try:
+            shown = subprocess.run(["ssh-keygen", "-L", "-f", "-"], input=key + "\n", capture_output=True, text=True, timeout=10).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        for line in shown.splitlines():
+            if line.strip().startswith("Valid:") and " to " in line:
+                try:
+                    until = datetime.datetime.fromisoformat(line.rsplit(" to ", 1)[1].strip())
+                except ValueError:
+                    continue
+                best = until if best is None or until > best else best
+    if best is None:
+        return None, "no certificate in the ssh agent: log in first (not needed if you log in with a key alone)"
+    left = (best - now).total_seconds()
+    if left <= 0:
+        return left, f"expired at {best:%H:%M}: log in again"
+    return left, f"valid until {best:%H:%M} ({int(left // 3600)} h {int(left % 3600 // 60)} min left)"
+
+
+def job_cost(settings):
+    """Core-hours a job of these settings costs at most: its CPUs for its whole time limit (or None if the time is unclear)."""
+    seconds = wall_seconds(settings.time)
+    return None if seconds is None else settings.cpus * seconds / 3600
+
+
+__all__ = ["ClusterError", "ClusterSettings", "CalibrationError", "certificate", "check_login", "cluster_info", "info_rows",
+           "job_cost", "job_script", "last_log", "load_settings", "observation_files", "refresh", "remote_folder", "runs_at_once",
+           "save_settings", "send", "stop", "submit", "wall_seconds"]

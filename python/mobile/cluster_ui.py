@@ -3,17 +3,30 @@ and for the calibration chosen under Calibrations: send it there, submit a job, 
 (cluster.py does them, over ssh)."""
 
 import asyncio
+import datetime
 from pathlib import Path
 
 from shiny import reactive, render, ui
 
 from .calibration_engine import CalibrationError, _clock, _seconds_since, read_calibration, read_cluster
-from .cluster import (ClusterError, ClusterSettings, last_log, load_settings, observation_files, refresh, remote_folder,
-                      runs_at_once, save_settings, send, stop, submit)
+from .cluster import (ClusterError, ClusterSettings, certificate, cluster_info, info_rows, job_cost, last_log, load_settings,
+                      observation_files, refresh, remote_folder, runs_at_once, save_settings, send, stop, submit, wall_seconds)
 from .config import MAX_THREADS
 from .layout import with_tip
 
+def _clock_now():
+    return datetime.datetime.now().strftime("%H:%M")
+
+
 DCGP_THREADS = 7  # Best on a LEONARDO DCGP node for Senegal 1998-2003 (9.85M agents): 16 runs of 7 threads, pinned; not general
+
+
+def cluster_label():
+    """A label after the title of the settings the jobs on the cluster use: kept on this computer, not with the calibration."""
+    return ui.span("cluster", class_="badge rounded-pill fw-normal ms-1",
+                   style="font-size: 0.68rem; background: #e7f1ff; color: #0a4b8c; border: 1px solid #6ea8fe;",
+                   title="Used by the jobs on the cluster. Kept on this computer for every calibration sent from it, not "
+                         "with the calibration.")
 
 
 def _box(control, advice=None):
@@ -60,8 +73,9 @@ def cluster_section():
                 _box(ui.input_checkbox("cl_exclusive", with_tip("Whole node (--exclusive)", "No other job on the node: runs are "
                                        "not slowed by others."), value=saved.exclusive),
                      "Yes with 112 CPUs: a DCGP node is billed whole."),
-                _box(number("cl_parallel", with_tip("Runs at the same time", "Each with the threads per run of the calibration, "
-                                                    "set when it was made. 0: as many as fit in the CPUs."),
+                _box(number("cl_parallel", ui.TagList(with_tip("Runs at the same time", "Each with the threads per run of the "
+                                                               "calibration, set when it was made. 0: as many as fit in the CPUs."),
+                                                      cluster_label()),
                             value=saved.parallel, min=0, step=1)),
                 ui.output_ui("cl_fit"),
                 _box(number("cl_trial_minutes", with_tip("A trial takes (minutes)", "A guess, used until 10 trials have "
@@ -81,7 +95,18 @@ def cluster_section():
                      "Calibrations, Send it there, Submit a job; close the GUI if you like; later, Refresh to see how far it is. "
                      "Only what is drawn here is copied back, never the model output. While it runs there, the copy here only "
                      "shows it.", class_="small text-muted"),
-                ui.accordion(ui.accordion_panel("Cluster settings", settings), open=False),
+                ui.accordion(
+                    ui.accordion_panel(ui.TagList("Cluster settings", cluster_label()), settings, value="cl_settings"),
+                    ui.accordion_panel(
+                        "Cluster information",
+                        ui.div(ui.input_action_button("cl_info", "Check", class_="btn-sm"),
+                               ui.span("Budgets, projects, the QOS chosen, your jobs, how busy the nodes are: read-only "
+                                       "commands, in one ssh call. About a minute: the budget and the project's usage are slow to ask.",
+                                       class_="small text-muted"),
+                               class_="d-flex gap-2 align-items-center mb-2"),
+                        ui.output_ui("cl_info_table"),
+                        value="cl_information"),
+                    open=False, multiple=True),
                 ui.output_ui("cl_chosen"),
                 ui.div(
                     ui.input_action_button("cl_send", "Send", class_="btn-outline-primary"),
@@ -90,6 +115,7 @@ def cluster_section():
                     ui.input_action_button("cl_stop", "Stop job"),
                     class_="d-flex gap-2 mt-2",
                 ),
+                ui.output_ui("cl_cost"),
                 ui.output_ui("cl_busy"),
                 ui.output_ui("cl_log"),
             ),
@@ -157,6 +183,13 @@ def cluster_server(input, output, session, chosen, changed):
                 lines.append(ui.p(f"For reference: on a DCGP node, 16 runs × {DCGP_THREADS} threads did best for Senegal "
                                   "1998–2003 (9.85 M agents); other setups may differ. The threads per run are set when a "
                                   "calibration is made, and results depend on them.", class_="small text-muted"))
+        sampler = found.get("sampler") or {}
+        startup = sampler.get("startup_trials")
+        if sampler.get("name") == "tpe" and isinstance(startup, int) and startup < parallel:
+            lines.append(ui.p(f"{startup} start-up trials, fewer than the {parallel} runs at the same time there: the sampler "
+                              "would suggest trials while almost none have ended. They are kept with the calibration: make a "
+                              f"new one from it (Use as template) with at least {parallel}.",
+                              class_="small text-warning-emphasis mb-1"))
         return ui.TagList(*lines)
 
     @render.ui
@@ -205,7 +238,10 @@ def cluster_server(input, output, session, chosen, changed):
             if kind == "send":
                 return f"Sent to {given.host}:{send(folder, given, cleared)}."
             if kind == "submit":
-                return f"Submitted job {submit(folder, given)}. Refresh to see how it goes."
+                job = submit(folder, given)
+                after = read_cluster(folder)["jobs"][-1].get("after")
+                return (f"Submitted job {job}" + (f", to start when job {after} ends" if after else "") +
+                        ". Refresh to see how it goes.")
             if kind == "refresh":
                 cluster = refresh(folder)
                 return "Refreshed: " + (", ".join(f"job {job['id']} {(job.get('state') or '?').lower()}" for job in cluster["jobs"])
@@ -234,11 +270,85 @@ def cluster_server(input, output, session, chosen, changed):
         cleared = bool(input.cl_cleared()) if "cl_cleared" in input else False
         action.invoke(kind, folder, given, cleared)
 
-    for kind in ("send", "submit", "refresh", "stop"):
+    def bind(kind):
+        """Its button starts an action (a function per button: Shiny warns of a default argument)."""
         @reactive.effect
         @reactive.event(input[f"cl_{kind}"])
-        def _(kind=kind):
+        def _():
             start(kind)
+
+    for kind in ("send", "submit", "refresh", "stop"):
+        bind(kind)
+
+    asked = reactive.value(None)  # (when, sections, error) of the last Check
+
+    @reactive.extended_task
+    async def info_task(given, folder):
+        try:
+            return _clock_now(), await asyncio.to_thread(cluster_info, given, folder), None
+        except (ClusterError, OSError, ValueError) as error:
+            return _clock_now(), {}, str(error)
+
+    @reactive.effect
+    @reactive.event(input.cl_info)
+    def _():
+        given = settings()
+        if not given.host:
+            ui.notification_show("Cluster settings: give the SSH host.", type="error")
+            return
+        save_settings(given)
+        folder = chosen()
+        info_task.invoke(given, folder if folder and read_cluster(folder) else None)
+
+    @reactive.effect
+    def info_done():
+        if info_task.status() in ("success", "error"):
+            with reactive.isolate():
+                asked.set(info_task.result() if info_task.status() == "success" else (_clock_now(), {}, "see the terminal"))
+
+    @render.ui
+    def cl_info_table():
+        if info_task.status() == "running":
+            return ui.p("Asking the cluster…", class_="small text-muted mb-0")
+        _, said = certificate()
+        found = asked()
+        if found is None:
+            return ui.p(f"Login certificate: {said}. Check to see the rest.", class_="small mb-0")
+        when, sections, error = found
+        if error:
+            return ui.TagList(ui.p(f"Login certificate: {said}.", class_="small mb-1"),
+                              ui.p(f"Could not ask the cluster ({when}): {error}", class_="small text-danger mb-0"))
+        rows = info_rows(sections, settings(), record())
+        rows.append(("Login certificate", said, "ssh-add here (no ssh)", said.startswith(("expired", "no certificate"))))
+        body = [ui.tags.tr(ui.tags.td(what, class_="text-nowrap"),
+                           ui.tags.td(value, class_="text-warning-emphasis" if warning else None),
+                           ui.tags.td(source, class_="text-muted"))
+                for what, value, source, warning in rows]
+        return ui.TagList(
+            ui.tags.table(ui.tags.thead(ui.tags.tr(ui.tags.th("What"), ui.tags.th("Now"), ui.tags.th("Said by"))),
+                          ui.tags.tbody(*body), class_="table table-sm small mb-1"),
+            ui.p(f"As of {when}. Core-hours: CPUs × hours of the jobs, as billed.", class_="small text-muted mb-0"))
+
+    @render.ui
+    def cl_cost():
+        """What a job of these settings costs at most, and the time limit against the QOS's, if checked."""
+        try:
+            given = settings()
+        except (TypeError, ValueError):
+            return None
+        most = job_cost(given)
+        if most is None:
+            return None
+        lines = [f"A job asks for {given.cpus} CPUs × {given.time}: at most {most:,.0f} core-hours, less if it ends sooner"
+                 + (" (a whole node is billed with --exclusive)" if given.exclusive else "") + "."]
+        warn = False
+        found = asked()
+        for line in (found[1].get("qos", [])[:1] if found else []):
+            name, maxwall = (line.split("|") + [""])[:2]
+            if wall_seconds(maxwall) is not None and (wall_seconds(given.time) or 0) > wall_seconds(maxwall) and name == given.qos:
+                lines.append(f"Longer than the {maxwall} that QOS {name} allows: sbatch would refuse it.")
+                warn = True
+        return ui.p(" ".join(lines), class_="small mt-2 mb-0 " + ("text-warning-emphasis" if warn else "text-muted"))
 
     @reactive.effect
     def collect():
@@ -269,3 +379,4 @@ def cluster_server(input, output, session, chosen, changed):
             ui.update_action_button(name, disabled=busy or cluster is None)
         listed = cluster is not None and any(job.get("listed") for job in cluster.get("jobs", []))
         ui.update_action_button("cl_stop", disabled=busy or not listed)
+        ui.update_action_button("cl_info", disabled=info_task.status() == "running")
