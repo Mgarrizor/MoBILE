@@ -13,6 +13,7 @@ can be applied again, e.g. to model output:
 """
 
 from dataclasses import replace
+from functools import lru_cache
 
 import numpy as np
 import pandas as pd
@@ -40,6 +41,15 @@ FILTERS = {"low": "Low pass: keep periods longer than", "high": "High pass: keep
            "band": "Band pass: keep periods between"}
 TIME_UNITS = {"days": 1.0, "months": 365.25 / 12, "years": 365.25}
 FILTER_ORDER = 4  # Butterworth, applied forward and backward: no shift in time
+# The ends of a filtered stretch, where the filter starts up: cut (missing, never compared, kept in the EDGE column to be
+# shown shaded) where its error on test cycles it keeps (at KEPT_GAIN or more) exceeds a share of their amplitude, or kept
+# with a note
+EDGES = {"cut": "Cut them (shown shaded, not compared)", "keep": "Keep them (a note says how far they reach)"}
+EDGE = "edge"  # The column of the values cut at the ends, for the plots
+EDGE_ERROR = 0.05  # The default largest error kept, as a share of the amplitude of a cycle the filter keeps
+EDGE_PHASES = 8  # Phases of each test cycle
+TEST_CYCLES = 6  # Test cycles of a filter, across the periods it keeps
+KEPT_GAIN = 0.9  # A cycle a filter keeps: at 90% of its amplitude or more
 COMBINATIONS = {"sum": "Sum", "mean": "Mean", "difference": "Difference (this minus the other)"}
 
 
@@ -61,7 +71,8 @@ def default_step(kind, observations):
     if kind == "transform":
         return {"kind": kind, "transform": "anomaly", "offset": 0.0, "window": 3}
     if kind == "filter":
-        return {"kind": kind, "type": "low", "short": 1.0, "long": 2.0, "unit": "years", "missing": "interpolate", "max_gap": 3}
+        return {"kind": kind, "type": "low", "short": 1.0, "long": 2.0, "unit": "years", "missing": "interpolate", "max_gap": 3,
+                "edges": "cut", "edge_error": EDGE_ERROR}
     if kind == "combine":
         return {"kind": kind, "other": None, "how": "sum"}
     raise DataError(f"no step {kind!r}")
@@ -96,6 +107,8 @@ def describe(step):
         else:
             what = (f"{step['type']} pass filter, periods {'longer' if step['type'] == 'low' else 'shorter'} than "
                     f"{amount(step['long'] if step['type'] == 'low' else step['short'], step['unit'])}")
+        if step.get("edges", "keep") == "cut":
+            what = f"{what}; ends cut where the filter's start-up error exceeds {_percent(edge_error_of(step))} of a cycle it keeps"
         if step.get("missing", "interpolate") == "interpolate":
             return f"{what}; gaps of up to {amount(int(step.get('max_gap') or 0), 'values')} interpolated for the filter only (left missing)"
         return f"{what}; each stretch without gaps filtered separately"
@@ -137,6 +150,8 @@ def _group_key(start, period, days, first):
 
 
 def aggregate(observations, step, _others):
+    if EDGE in observations.extra:
+        return _aggregate_with_ends(observations, step)
     if observations.shape != "dated":
         raise DataError("only dated values are aggregated into longer periods; use a climatology for calendar months")
     if step["period"] not in AGGREGATE_PERIODS or step["how"] not in STATISTICS:
@@ -184,6 +199,21 @@ def aggregate(observations, step, _others):
     return result.with_note(f"{dropped} incomplete {step['period']}s left out") if dropped else result
 
 
+def _aggregate_with_ends(observations, step):
+    """Aggregated as they are, and again with the values cut at the ends in: a period with one of those is cut too
+    (missing, shown with its value from the second)."""
+    plain = replace(observations, extra={column: values for column, values in observations.extra.items() if column != EDGE})
+    whole = aggregate(replace(plain, values=np.where(np.isnan(plain.values), observations.extra[EDGE], plain.values)), step, None)
+    try:
+        kept = aggregate(plain, step, None)
+    except DataError:  # Every period has a value cut at the ends
+        kept = None
+    at = {} if kept is None else {start: i for i, start in enumerate(kept.index["start"])}
+    values = np.array([kept.values[at[start]] if start in at else np.nan for start in whole.index["start"]])
+    return _with_ends(replace(whole, values=values, notes=plain.notes if kept is None else kept.notes),
+                      np.where(np.isnan(values), whole.values, np.nan))
+
+
 # ---------------------------------------------------------------- arithmetic
 
 def arithmetic(observations, step, _others):
@@ -202,19 +232,16 @@ def arithmetic(observations, step, _others):
         label = f"{operand:g}"
     if operation == "divide" and np.any(np.asarray(operand)[~np.isnan(np.asarray(operand, dtype=float))] == 0):
         raise DataError(f"division by zero: {label} has zeros")
-    values, sd = observations.values, observations.sd
-    if operation == "divide":
-        values, sd = values / operand, None if sd is None else sd / np.abs(operand)
-    elif operation == "multiply":
-        values, sd = values * operand, None if sd is None else sd * np.abs(operand)
-    elif operation == "add":
-        values = values + operand
-    else:
-        values = values - operand
+    operate = {"divide": lambda v: v / operand, "multiply": lambda v: v * operand, "add": lambda v: v + operand,
+               "subtract": lambda v: v - operand}[operation]
+    values, sd = operate(observations.values), observations.sd
+    if sd is not None and operation in ("divide", "multiply"):
+        sd = np.abs(operate(sd))  # sd / |operand|, sd × |operand|
     symbol = {"divide": "/", "multiply": "×", "add": "+", "subtract": "−"}[operation]
     units = (step.get("units") or "").strip() or (f"{observations.units} per {label}" if operation == "divide" and step["operand"] == "column"
                                                    else observations.units if operation in ("add", "subtract") else f"{observations.units} {symbol} {label}")
-    return replace(observations, values=values, sd=sd, units=units, name=f"{observations.name} {symbol} {label}")
+    return _ends_too(replace(observations, values=values, sd=sd, units=units, name=f"{observations.name} {symbol} {label}"),
+                     observations, operate)
 
 
 # ---------------------------------------------------------------- select
@@ -302,22 +329,55 @@ def transform(observations, step, _others):
         if np.any(shifted[~np.isnan(shifted)] <= 0):
             raise DataError("the log needs positive values: add an offset, e.g. 1 for counts with zeros")
         log = np.log if kind == "log" else np.log10
-        return replace(observations, values=log(shifted), sd=None, units=f"{kind}({observations.units})", name=f"{kind} {observations.name}")
+        offset = float(step.get("offset") or 0)
+
+        def operate(v):
+            with np.errstate(divide="ignore", invalid="ignore"):  # A value cut at the ends may not be positive: missing
+                return np.where(v + offset > 0, log(np.where(v + offset > 0, v + offset, 1.0)), np.nan)
+
+        return _ends_too(replace(observations, values=log(shifted), sd=None, units=f"{kind}({observations.units})",
+                                 name=f"{kind} {observations.name}"), observations, operate)
     if kind in ("standardise", "anomaly"):
+        # The mean and spread of the values compared; those cut at the ends follow by the same numbers
         mean, std = np.nanmean(values), np.nanstd(values, ddof=1)
         if kind == "anomaly":
-            return replace(observations, values=values - mean, name=f"anomaly of {observations.name}")
+            return _ends_too(replace(observations, values=values - mean, name=f"anomaly of {observations.name}"),
+                             observations, lambda v: v - mean)
         if not std > 0:
             raise DataError("the values do not vary: they cannot be standardised")
-        return replace(observations, values=(values - mean) / std, sd=None if sd is None else sd / std,
-                       units="standard deviations", name=f"standardised {observations.name}")
+        return _ends_too(replace(observations, values=(values - mean) / std, sd=None if sd is None else sd / std,
+                                 units="standard deviations", name=f"standardised {observations.name}"),
+                         observations, lambda v: (v - mean) / std)
     if kind == "moving_average":
         window = int(step.get("window") or 0)
         if window < 2 or window > len(values):
             raise DataError(f"the window must be from 2 to the number of values, {len(values)}")
-        smooth = pd.Series(values).rolling(window, center=True, min_periods=window).mean().to_numpy()
-        return replace(observations, values=smooth, sd=None, name=f"moving average of {observations.name}")
+        average = lambda v: pd.Series(v).rolling(window, center=True, min_periods=window).mean().to_numpy()
+        smooth = average(values)
+        result = replace(observations, values=smooth, sd=None, name=f"moving average of {observations.name}")
+        if EDGE in observations.extra:  # An average with a value cut at the ends in its window is cut too
+            whole = average(np.where(np.isnan(values), observations.extra[EDGE], values))
+            result = _with_ends(result, np.where(np.isnan(smooth), whole, np.nan))
+        return result
     raise DataError("choose a transform")
+
+
+# ---------------------------------------------------------------- the ends cut by a filter
+
+def _with_ends(observations, ends):
+    """observations with ends as their column of values cut at the ends (none if all missing)."""
+    extra = {column: values for column, values in observations.extra.items() if column != EDGE}
+    if np.isfinite(ends).any():
+        extra[EDGE] = ends
+    return replace(observations, extra=extra)
+
+
+def _ends_too(result, observations, operate):
+    """result, of a step that changes each value by itself (operate), with the values cut at the ends of observations
+    changed the same way, so that the plots still show them in the units of the values."""
+    if EDGE not in observations.extra:
+        return result
+    return _with_ends(result, operate(observations.extra[EDGE]))
 
 
 # ---------------------------------------------------------------- filter
@@ -356,24 +416,99 @@ def _runs(missing):
     return list(zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1)))
 
 
+def _percent(share):
+    return f"{100 * share:g}%"
+
+
+def edge_error_of(step):
+    """The largest start-up error a filter step keeps at the ends, as a share of the amplitude of a cycle it keeps."""
+    try:
+        share = float(step.get("edge_error", EDGE_ERROR))
+    except (TypeError, ValueError):
+        raise DataError("the error kept at the ends is not a number") from None
+    if not 0 < share < 1:
+        raise DataError("the error kept at the ends must be between 0 and 100% of the amplitude")
+    return share
+
+
+def kept_band(kind, periods):
+    """(shortest, longest) period, in values, of the cycles the filter keeps at KEPT_GAIN of their amplitude or more
+    (forward and backward, the gain squared); the longest is None for a low pass."""
+    sos = _design(kind, periods)
+    frequencies = np.geomspace(1e-4, 0.5, 4000)  # Cycles per value, up to the Nyquist frequency
+    gain = np.abs(signal.sosfreqz(sos, worN=2 * np.pi * frequencies)[1]) ** 2
+    kept = frequencies[gain >= KEPT_GAIN]
+    if not len(kept):
+        raise DataError("this filter keeps no cycle at 90% of its amplitude: widen the band")
+    return 1 / kept.max(), None if kind == "low" else 1 / kept.min()
+
+
+def test_cycles(kind, periods):
+    """The periods (in values) of the test cycles of a filter: TEST_CYCLES of them, evenly on a log scale across the
+    cycles it keeps (kept_band), both ends included; of a low pass, up to 5 times its cut-off; of a high pass, down to a
+    third of it, and longer than 2.5 values."""
+    shortest, longest = kept_band(kind, periods)
+    if kind == "low":
+        shortest, longest = shortest, max(5 * periods[0], shortest)
+    elif kind == "high":
+        shortest = min(max(periods[0] / 3, 2.5), longest)
+    return tuple(float(p) for p in np.geomspace(shortest, longest, TEST_CYCLES))
+
+
+@lru_cache(maxsize=256)
+def edge_error(kind, periods, n):
+    """The start-up error of a filter at each of n values of a stretch: the largest, over its test cycles (test_cycles)
+    each at EDGE_PHASES phases, of the difference between the filtered cycle and the cycle as the filter keeps it far
+    from the ends (times its gain there), as a share of the cycle's amplitude. kind and periods (in values) as in
+    frequency_filter."""
+    sos = _design(kind, periods)
+    t = np.arange(n)
+    worst = np.zeros(n)
+    for period in test_cycles(kind, periods):
+        gain = abs(signal.sosfreqz(sos, worN=[2 * np.pi / period])[1][0]) ** 2  # Forward and backward: the gain squared
+        for k in range(EDGE_PHASES):
+            cycle = np.cos(2 * np.pi * (t / period + k / EDGE_PHASES))
+            worst = np.maximum(worst, np.abs(signal.sosfiltfilt(sos, cycle) - gain * cycle))
+    worst.flags.writeable = False
+    return worst
+
+
+def edge_reach(kind, periods, n, share):
+    """(values cut at the start, at the end) of a stretch of n values: up to the farthest value from each end, within
+    its half, whose start-up error exceeds share."""
+    error = edge_error(kind, tuple(periods), n)
+    half = n // 2
+    start, end = np.flatnonzero(error[:half] > share), np.flatnonzero(error[n - half:][::-1] > share)
+    return (int(start.max()) + 1 if len(start) else 0, int(end.max()) + 1 if len(end) else 0)
+
+
+def _design(kind, periods):
+    bounds = 2.0 / periods[0] if kind in ("low", "high") else [2.0 / periods[1], 2.0 / periods[0]]
+    return signal.butter(FILTER_ORDER, bounds, btype={"low": "lowpass", "high": "highpass", "band": "bandpass"}[kind], output="sos")
+
+
 def frequency_filter(observations, step, _others):
     series, positions, sample = regular_series(observations)
     unit = TIME_UNITS[step["unit"]]
     kind = step["type"]
     short, long = float(step["short"]) * unit / sample, float(step["long"]) * unit / sample  # Periods in values
     if kind == "low":
-        bounds, btype, periods = 2.0 / long, "lowpass", (long,)
+        periods = (long,)
     elif kind == "high":
-        bounds, btype, periods = 2.0 / short, "highpass", (short,)
+        periods = (short,)
     elif kind == "band":
         if not short < long:
             raise DataError("the shorter period must be shorter than the longer one")
-        bounds, btype, periods = [2.0 / long, 2.0 / short], "bandpass", (short, long)
+        periods = (short, long)
     else:
         raise DataError("choose low, high or band pass")
     if any(period <= 2.0 for period in periods):
         raise DataError(f"a period must be longer than two values ({amount(2 * sample / unit, step['unit'])})")
-    sos = signal.butter(FILTER_ORDER, bounds, btype=btype, output="sos")
+    cut = step.get("edges", "keep") == "cut"  # Steps saved before the cut have none: kept as they were
+    if step.get("edges", "keep") not in EDGES:
+        raise DataError("choose whether the ends are cut or kept")
+    share = edge_error_of(step)
+    sos = _design(kind, periods)
     # The shortest stretch the filter runs on: longer than the longest period, and than what sosfiltfilt pads with
     shortest = max(int(np.ceil(max(periods))) + 1, 3 * (2 * len(sos) + 1) + 1)
     missing = np.isnan(series)
@@ -388,35 +523,79 @@ def frequency_filter(observations, step, _others):
                 filled.append(last - first)
     elif method != "stretches":
         raise DataError("choose how missing values are handled")
-    result = np.full(len(series), np.nan)
-    stretches, too_short = _runs(~np.isnan(working)), 0
+    result, ends = np.full(len(series), np.nan), np.full(len(series), np.nan)
+    stretches, too_short, reaches, all_cut = _runs(~np.isnan(working)), 0, [], 0
+    kept_least = 2 * max(periods)  # A stretch keeps at least two of the longest periods once its ends are cut
     for first, last in stretches:
         if last - first < shortest:
             too_short += last - first - int(missing[first:last].sum())
             continue
-        result[first:last] = signal.sosfiltfilt(sos, working[first:last])
-    if np.isnan(result[~missing]).all():
+        filtered = signal.sosfiltfilt(sos, working[first:last])
+        start, end = edge_reach(kind, periods, last - first, share)
+        reaches.append((start, end, last - first))
+        if not cut:
+            result[first:last] = filtered
+        elif last - first - start - end < kept_least:
+            ends[first:last] = filtered  # All of it unreliable: shown, not compared
+            all_cut += last - first - int(missing[first:last].sum())
+        else:
+            result[first + start:last - end] = filtered[start:len(filtered) - end]
+            ends[first:first + start], ends[last - end:last] = filtered[:start], filtered[len(filtered) - end:]
+    to_unit = lambda values: round(values * sample / unit, 2)  # Values into the unit of the step
+    in_units = lambda values: amount(to_unit(values), step["unit"])
+    if not reaches:
         raise DataError(f"no stretch of the series is long enough for this filter: it needs at least {shortest} values "
-                        f"({amount(shortest * sample / unit, step['unit'])}) without a longer gap")
-    result[missing] = np.nan  # Interpolated or absent values are not data
+                        f"({in_units(shortest)}) without a longer gap")
+    if np.isnan(result[~missing]).all():
+        # The length it would need: the ends cut on a long stretch, and two of the longest periods between them
+        start, end = edge_reach(kind, periods, int(np.ceil(40 * max(periods))), share)
+        needed = start + end + int(np.ceil(kept_least))
+        raise DataError(f"too short for this filter once its unreliable ends are cut: where its start-up error exceeds "
+                        f"{_percent(share)} of a cycle it keeps, about {in_units(start)} at the start and {in_units(end)} "
+                        f"at the end, and two of its longest periods are left between them, it needs about {needed} values "
+                        f"({in_units(needed)}) without a longer gap; the longest stretch here has {max(n for *_, n in reaches)}. "
+                        f"Choose a wider band or shorter periods, a larger error kept at the ends, or keep the ends")
+    result[missing] = ends[missing] = np.nan  # Interpolated or absent values are not data
     values = result[positions]
-    used = sum(1 for first, last in stretches if last - first >= shortest)
     said = []
     if filled:
         said.append(f"{amount(len(filled), 'gaps')} of up to {amount(max(filled), 'values')} interpolated for the filter only, left missing after")
-    if used > 1:
-        said.append(f"{amount(used, 'stretches').replace('stretche ', 'stretch ')} without gaps filtered separately")
+    if len(reaches) > 1:
+        said.append(f"{amount(len(reaches), 'stretches').replace('stretche ', 'stretch ')} without gaps filtered separately")
     if too_short:
         said.append(f"{amount(too_short, 'values')} in stretches shorter than {shortest} values left missing")
-    longest = float(step["long"]) if kind in ("low", "band") else float(step["short"])
-    # The filter starts up at each end of a stretch: measured on a 3 to 8 year band pass of a 5-year cycle, errors fall
-    # below 4% of the amplitude only about two of the longest periods kept from each end (tests)
-    said.append(f"values within about {amount(2 * longest, step['unit'])} of each end{' of a stretch' if used > 1 else ''} "
-                f"are less reliable (the filter starts up there)")
-    result_observations = replace(observations, values=values, sd=None, name=f"{kind}-pass {observations.name}")
+    said.append(edge_note(kind, periods, reaches, share, cut, to_unit, step["unit"], all_cut))
+    extra = {column: values_ for column, values_ in observations.extra.items() if column != EDGE}  # Of an earlier filter
+    if cut and np.isfinite(ends[positions]).any():
+        extra[EDGE] = ends[positions]
+    result_observations = replace(observations, values=values, sd=None, extra=extra, name=f"{kind}-pass {observations.name}")
     for note in said:
         result_observations = result_observations.with_note(note)
     return result_observations
+
+
+def edge_note(kind, periods, reaches, share, cut, to_unit, unit, all_cut=0):
+    """What was cut (or would be) at the ends of the stretches, why, and how it was measured. to_unit turns a number of
+    values into the unit (e.g. years)."""
+    in_units = lambda values: amount(to_unit(values), unit)
+    span = lambda found: in_units(found[0]) if len(found) == 1 else f"{in_units(found[0])} to {in_units(found[-1])}"
+    each = " of each stretch" if len(reaches) > 1 else ""
+    parts = [(start, end) for start, end, n in reaches if start + end < 2 * (n // 2)]  # Not above it across all of it
+    where = (f"{span(sorted({s for s, _ in parts}))} at the start and {span(sorted({e for _, e in parts}))} at the end{each}"
+             if parts else f"every value{each}")
+    cycles = f"{', '.join(f'{to_unit(p):g}' for p in test_cycles(kind, periods))} {unit}"
+    largest = max(float(edge_error(kind, tuple(periods), n).max()) for _, _, n in reaches)
+    how = (f"Measured by filtering {len(test_cycles(kind, periods))} test cycles across those the filter keeps at "
+           f"{_percent(KEPT_GAIN)} of their amplitude or more (periods of {cycles}), each at {EDGE_PHASES} phases, on a "
+           f"stretch as long, against the same cycles far from the ends times the filter's gain there; at the very ends the "
+           f"error reaches {_percent(round(largest, 2))} of the cycle's amplitude")
+    if not cut:
+        within = f"within {where}" if parts else f"at {where}"
+        return f"ends kept, though the filter's start-up error exceeds {_percent(share)} of a cycle it keeps {within}. {how}"
+    shaded = (f"; {amount(all_cut, 'values')} in stretches too short to keep two of the longest periods once cut, all shaded"
+              if all_cut else "")
+    return (f"{where} cut, shaded in the plots and not compared: there the filter's start-up error exceeds "
+            f"{_percent(share)} of a cycle it keeps{shaded}. {how}")
 
 
 # ---------------------------------------------------------------- combine

@@ -2337,7 +2337,8 @@ class TestCalibrationData(unittest.TestCase):
                                    "dated", "v", "mean", "x", date="d", period="month")
         band = apply_steps(long_series, [{"kind": "filter", "type": "band", "short": 3, "long": 8, "unit": "years"}])
         self.assertLess(np.max(np.abs(band.values[180:-180] - five[180:-180])), 0.1)
-        self.assertIn("within about 16 years of each end are less reliable", " ".join(band.notes))
+        # A step saved before the ends were cut has no "edges": kept, with a note of how far they reach
+        self.assertRegex(" ".join(band.notes), r"ends kept, though the filter's start-up error exceeds 5% of a cycle it keeps within [\d.]+ years at the start")
         with self.assertRaisesRegex(DataError, "longer than two values"):
             apply_steps(series, [{"kind": "filter", "type": "high", "short": 1, "long": 2, "unit": "months"}])
         # Missing values and missing periods: interpolated for the filter only, and put back as missing (240 months again)
@@ -2470,6 +2471,123 @@ with netCDF4.Dataset(out / "output.nc", "w") as data:
     climate[:] = t2m
 print("Program finished successfully")
 """
+
+
+class TestFilterEdges(unittest.TestCase):
+    """The ends of a frequency filter, where it starts up: measured on test cycles, cut by default, shown shaded."""
+
+    @staticmethod
+    def monthly(values, first="1990-01"):
+        from mobile.calibration_data import Observations
+        start = pd.date_range(first, periods=len(values), freq="MS")
+        index = pd.DataFrame({"start": start.values.astype("datetime64[D]"),
+                              "end": (start + pd.offsets.MonthEnd(0)).values.astype("datetime64[D]")})
+        return Observations(shape="dated", values=np.asarray(values, float), index=index, units="cases", name="cases")
+
+    def filtered(self, values, **choices):
+        from mobile.calibration_steps import apply_steps, default_step
+        series = self.monthly(values)
+        step = {**default_step("filter", series), **choices}
+        return apply_steps(series, [{key: value for key, value in step.items() if value is not None}])  # None: left out
+
+    def test_cut_where_measured(self):
+        from mobile.calibration_steps import EDGE, edge_reach
+        t = np.arange(240)
+        for choices, kind, periods in (({"type": "low", "long": 2}, "low", (24.0,)),
+                                       ({"type": "high", "short": 18, "unit": "months"}, "high", (18.0,)),
+                                       ({"type": "band", "short": 1, "long": 1.5}, "band", (12.0, 18.0))):
+            result = self.filtered(np.cos(2 * np.pi * t / 12) + np.cos(2 * np.pi * t / 60), **choices)
+            start, end = edge_reach(kind, periods, 240, 0.05)
+            self.assertGreater(start, 0)
+            kept = np.isfinite(result.values)
+            # Missing exactly where cut, and the cut values kept in their own column for the plots
+            self.assertTrue(kept[start:240 - end].all() and not kept[:start].any() and not kept[240 - end:].any(), choices)
+            self.assertTrue(np.isfinite(result.extra[EDGE][~kept]).all() and np.isnan(result.extra[EDGE][kept]).all())
+            self.assertIn("shaded in the plots and not compared", result.notes[-1])
+
+    def test_kept_values_within_the_error(self):
+        """Control: cycles kept by the filter, between its test cycles and at other phases, err by at most the share
+        set at the values kept, and by more at those cut."""
+        from scipy import signal
+        from mobile.calibration_steps import EDGE, _design, test_cycles
+        t = np.arange(480)
+        for choices, kind, periods in (({"type": "low", "long": 2}, "low", (24.0,)),
+                                       ({"type": "high", "short": 18, "unit": "months"}, "high", (18.0,)),
+                                       ({"type": "band", "short": 1.5, "long": 3}, "band", (18.0, 36.0))):
+            tests = np.log(test_cycles(kind, periods))
+            kept_error = cut_error = 0.0
+            for period in np.exp((tests[1:] + tests[:-1]) / 2):
+                gain = abs(signal.sosfreqz(_design(kind, periods), worN=[2 * np.pi / period])[1][0]) ** 2
+                for phase in np.linspace(0, 2 * np.pi, 7)[:-1]:
+                    cycle = np.cos(2 * np.pi * t / period + phase)
+                    result = self.filtered(cycle, **choices)
+                    kept = np.isfinite(result.values)
+                    kept_error = max(kept_error, np.abs(result.values[kept] - gain * cycle[kept]).max())
+                    cut_error = max(cut_error, np.abs(result.extra[EDGE][~kept] - gain * cycle[~kept]).max())
+            self.assertLessEqual(kept_error, 0.05, choices)
+            self.assertGreater(cut_error, 0.05, choices)
+
+    def test_too_short_refused(self):
+        from mobile.calibration_data import DataError
+        t = np.arange(240)
+        with self.assertRaisesRegex(DataError, r"too short for this filter once its unreliable ends are cut.*needs about \d+ values \([\d.]+ years\)"):
+            self.filtered(np.cos(2 * np.pi * t / 60), type="band", short=3, long=8)
+        # Kept, the same filter runs, and says that every value is affected
+        kept = self.filtered(np.cos(2 * np.pi * t / 60), type="band", short=3, long=8, edges="keep")
+        self.assertTrue(np.isfinite(kept.values).all())
+        self.assertIn("at every value", kept.notes[-1])
+        # A larger error kept cuts less
+        t = np.arange(360)
+        strict, loose = (self.filtered(np.cos(2 * np.pi * t / 24), type="band", short=1.5, long=3, edge_error=share) for share in (0.02, 0.2))
+        self.assertLess(np.isfinite(strict.values).sum(), np.isfinite(loose.values).sum())
+
+    def test_later_steps_carry_the_cut(self):
+        from mobile.calibration_metrics import pair
+        from mobile.calibration_steps import EDGE, apply_steps
+        t = np.arange(240)
+        series = self.monthly(10 + np.cos(2 * np.pi * t / 12) + np.cos(2 * np.pi * t / 60))
+        cut = self.filtered(series.values, type="high", short=18, unit="months")
+        # Standardised by the mean and spread of the values kept; the cut ones by the same numbers
+        z = apply_steps(cut, [{"kind": "transform", "transform": "standardise", "offset": 0, "window": 3}])
+        mean, sd = np.nanmean(cut.values), np.nanstd(cut.values, ddof=1)
+        self.assertTrue(np.allclose(z.extra[EDGE], (cut.extra[EDGE] - mean) / sd, equal_nan=True))
+        # A year with a month cut is cut too, shown with its value
+        years = apply_steps(cut, [{"kind": "aggregate", "period": "year", "how": "mean", "complete": True, "days": 7}])
+        self.assertEqual(len(years), 20)
+        self.assertTrue(np.isnan(years.values[[0, 1, -2, -1]]).all() and np.isfinite(years.values[2:-2]).all())
+        self.assertTrue(np.isfinite(years.extra[EDGE][[0, 1, -2, -1]]).all())
+        # Only the values kept are compared
+        model_values, data_values, labels = pair(cut, cut)
+        self.assertEqual(len(labels), int(np.isfinite(cut.values).sum()))
+        # A seed band: the median of the cut values too
+        from mobile.calibration_model import seed_spread
+        step = {**cut.steps[0]}
+        band = seed_spread([series, replace(series, values=series.values + 1)], [step])
+        self.assertTrue(np.array_equal(np.isfinite(band.extra[EDGE]), np.isfinite(cut.extra[EDGE])))
+
+    def test_plots_shade_the_cut(self):
+        from mobile.calibration_metrics import pair
+        from mobile.plots import comparison_figure, cut_spans, observations_figure
+        t = np.arange(240)
+        cut = self.filtered(np.cos(2 * np.pi * t / 12), type="high", short=18, unit="months")
+        self.assertEqual(len(cut_spans(cut)), 2)
+        figure = observations_figure(cut, "test")
+        self.assertEqual(len([shape for shape in figure.layout.shapes if shape.fillcolor and "214, 40, 40" in shape.fillcolor]), 2)
+        self.assertTrue(any(trace.name.endswith("cut at the ends") for trace in figure.data))
+        self.assertTrue(all(a.hovertext and "filter starts up" in a.hovertext for a in figure.layout.annotations if a.text == "cut"))
+        m, d, labels = pair(cut, cut)
+        both = comparison_figure(cut, cut, labels, m, d)
+        self.assertEqual(sum(trace.name.endswith("cut at the ends") for trace in both.data), 2)
+
+    def test_old_steps_and_describe(self):
+        from mobile.calibration_steps import EDGE, default_step, describe
+        t = np.arange(240)
+        old = self.filtered(np.cos(2 * np.pi * t / 60), type="low", long=2, edges=None)
+        self.assertNotIn(EDGE, old.extra)
+        step = default_step("filter", self.monthly(t))
+        self.assertEqual((step["edges"], step["edge_error"]), ("cut", 0.05))
+        self.assertIn("ends cut where the filter's start-up error exceeds 5% of a cycle it keeps", describe(step))
+        self.assertNotIn("ends cut", describe({key: value for key, value in step.items() if key not in ("edges", "edge_error")}))
 
 
 class TestSharedPeriod(unittest.TestCase):
