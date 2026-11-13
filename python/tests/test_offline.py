@@ -3927,5 +3927,69 @@ class TestCalibrationModel(unittest.TestCase):
         with self.assertRaisesRegex(DataError, "process them into the same shape"):
             pair(import_table(pd.DataFrame({"y": [2001], "v": [1.0]}), "yearly", "v", "sum", "x", year="y"), data)
 
+
+class TestObjectiveRecipes(unittest.TestCase):
+    """The recipes of objectives blind to how many of the cases are reported: their steps, and a control that they are
+    scale-free where they say so (synthetic monthly cases per person, no simulation)."""
+
+    @staticmethod
+    def observations(values):
+        from mobile.calibration_data import Observations
+        start = pd.date_range("1980-01", periods=288, freq="MS")  # 1980-01 to 2003-12
+        return Observations(shape="dated", values=values, units="cases per person", name="cases",
+                            index=pd.DataFrame({"start": start.values.astype("datetime64[D]"),
+                                                "end": (start + pd.offsets.MonthEnd(0)).values.astype("datetime64[D]")}))
+
+    @staticmethod
+    def cases(shift=0, seed=0):
+        """A season peaking in October (shifted by months) on a rise over the decades, with noise."""
+        t, month = np.arange(288), np.arange(288) % 12 + 1
+        level = 1e-4 + 2e-3 / (1 + np.exp(-(t - 150) / 20))
+        return level * np.exp(1.5 * np.cos(2 * np.pi * (month - 10 - shift) / 12)) * np.exp(np.random.default_rng(seed).normal(0, 0.3, 288))
+
+    def score(self, recipe, model):
+        from mobile.calibration_metrics import metrics, pair
+        from mobile.calibration_model import process_both
+        from mobile.calibration_steps import RECIPES, recipe_steps
+        steps = recipe_steps(recipe, [])
+        m, d, _ = process_both([self.observations(model)], steps, self.observations(self.cases(seed=1)), steps)
+        return metrics(*pair(m, d)[:2])[RECIPES[recipe][1]]
+
+    def test_steps_kept_and_replaced(self):
+        from mobile.calibration_steps import recipe_steps
+        prepare = [{"kind": "aggregate", "period": "month"}, {"kind": "arithmetic", "operation": "divide"}]
+        steps = recipe_steps("decadal_shape", [prepare[0], {"kind": "climatology", "by": "month"}, prepare[1]])
+        self.assertEqual(steps[:2], prepare)  # The preparing steps, in their order; the climatology replaced
+        self.assertEqual([(s["kind"], s.get("transform") or s.get("type")) for s in steps[2:]],
+                         [("transform", "log"), ("filter", "low"), ("transform", "anomaly")])
+        self.assertEqual((steps[3]["long"], steps[3]["unit"], steps[2]["offset"]), (5.0, "years", 1e-5))
+        # Another recipe replaces this one's steps, not adds to them; a log's offset is kept
+        steps[2]["offset"] = 1.0
+        again = recipe_steps("seasonal_shape", steps)
+        self.assertEqual([s["kind"] for s in again], ["aggregate", "arithmetic", "transform", "climatology"])
+        self.assertEqual(again[2]["offset"], 1.0)
+        self.assertEqual([s["kind"] for s in recipe_steps("decadal_tendency", again)], ["aggregate", "arithmetic", "filter"])
+
+    def test_blind_to_scale_not_to_timing(self):
+        model = self.cases(seed=2)
+        for recipe in ("seasonal_shape", "decadal_tendency"):
+            same = self.score(recipe, model)
+            self.assertGreater(same, 0.95, recipe)
+            for scale in (0.1, 10.0):
+                self.assertAlmostEqual(self.score(recipe, scale * model), same, delta=0.002, msg=(recipe, scale))
+        # Control: the season three months late is seen
+        self.assertLess(self.score("seasonal_shape", self.cases(shift=3, seed=2)), 0.5)
+        # The level sees the scale: 10 times too many is a bias of about ln 10 (the offset is negligible above)
+        self.assertAlmostEqual(self.score("decadal_level", 10 * model) - self.score("decadal_level", model), np.log(10), delta=0.05)
+        # The shape of the decades is blind to too many cases; far too few sink towards the offset and weigh on it
+        shape = self.score("decadal_shape", model)
+        self.assertLess(self.score("decadal_shape", 10 * model), 2 * shape)
+        self.assertGreater(self.score("decadal_shape", 0.1 * model), 3 * shape)
+
+    def test_relative_rmse_not_defined_after_a_log(self):
+        from mobile.calibration_metrics import metrics
+        values = np.log(self.cases(seed=1) + 1e-5)  # All negative
+        self.assertIsNone(metrics(values, values * 1.1)["rmse_relative"])
+
 if __name__ == "__main__":
     unittest.main()

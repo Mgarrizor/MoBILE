@@ -613,3 +613,38 @@ def combine_step(observations, step, others):
 
 STEP_FUNCTIONS = {"aggregate": aggregate, "arithmetic": arithmetic, "select": select, "climatology": climatology,
                   "transform": transform, "filter": frequency_filter, "combine": combine_step}
+
+
+# ---------------------------------------------------------------- recipes of objectives
+
+PREPARING = ("aggregate", "arithmetic", "select", "combine")  # The steps a recipe keeps: those that make the values compared
+LOG_OFFSET = 1e-5  # The offset of a recipe's log when the steps have none: 1e-5 cases per person, as in the r3 objectives
+DECADES = 5.0  # Years: the low pass of the decadal recipes
+RECIPES = {  # name: (title, metric, what it compares), the same steps on the model and the data
+    "seasonal_shape": ("Seasonal shape", "correlation",
+                       "log, then the climatology by month: the timing of the season, blind to the height of its peak"),
+    "decadal_shape": ("Decadal shape", "rmse",
+                      f"log, low pass of {DECADES:g} years, then the anomaly: how the level rises and falls over the years, "
+                      f"blind to its height"),
+    "decadal_level": ("Decadal level", "bias",
+                      f"log, then low pass of {DECADES:g} years: how high the level is, as a ratio (a bias of ln 10 = 2.30 is "
+                      f"10 times too many cases, −2.30 10 times too few)"),
+    "decadal_tendency": ("Decadal tendency, scale-free", "correlation",
+                         f"low pass of {DECADES:g} years: the timing of the rises and falls, blind to their size"),
+}
+
+
+def recipe_steps(recipe, steps):
+    """The steps of a recipe (RECIPES): those of `steps` that prepare the values (PREPARING, in their order, e.g. monthly
+    sums divided by the population) followed by the recipe's own, which replace the others (e.g. those of another
+    recipe). A log keeps the offset of a log already among the steps, else LOG_OFFSET."""
+    offset = next((step["offset"] for step in steps if step["kind"] == "transform" and step["transform"] in ("log", "log10")
+                   and step.get("offset")), LOG_OFFSET)
+    log = {"kind": "transform", "transform": "log", "offset": float(offset), "window": 3}
+    low_pass = {"kind": "filter", "type": "low", "short": 1.0, "long": DECADES, "unit": "years", "missing": "interpolate",
+                "max_gap": 3, "edges": "cut", "edge_error": EDGE_ERROR}
+    own = {"seasonal_shape": [log, {"kind": "climatology", "by": "month"}],
+           "decadal_shape": [log, low_pass, {"kind": "transform", "transform": "anomaly", "offset": 0.0, "window": 3}],
+           "decadal_level": [log, low_pass],
+           "decadal_tendency": [low_pass]}[recipe]
+    return [step for step in steps if step["kind"] in PREPARING] + [dict(step) for step in own]

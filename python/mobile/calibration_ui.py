@@ -26,8 +26,8 @@ from .calibration_model import (
 from .calibration_progress import DOING, DONE, TODO, anchor, progress_column
 from .calibration_run_ui import calibration_run_card, driver_controls, paired_span
 from .calibration_steps import (
-    AGGREGATE_PERIODS, COMBINATIONS, EDGE, EDGE_ERROR, EDGES, FILTER_MISSING, FILTERS, OPERATIONS, SELECTIONS, STATISTICS, STEP_KINDS, TIME_UNITS, TRANSFORMS, apply_steps,
-    default_step, describe,
+    AGGREGATE_PERIODS, COMBINATIONS, EDGE, EDGE_ERROR, EDGES, FILTER_MISSING, FILTERS, OPERATIONS, PREPARING, RECIPES, SELECTIONS,
+    STATISTICS, STEP_KINDS, TIME_UNITS, TRANSFORMS, apply_steps, default_step, describe, recipe_steps,
 )
 from .config import ConfigError
 from .layout import OPTUNA_URL, with_tip
@@ -164,6 +164,20 @@ def _comparison_card():
             ui.tags.strong(with_tip("Add as objective", "This comparison, as it is, becomes an objective of the calibration below: "
                                     "the observations as processed in the Data box, and the output, cells and steps of the Model box, "
                                     "applied to every run of the calibration, compared with the metric chosen here."), class_="small"),
+            ui.layout_columns(
+                ui.input_select("cal_recipe", with_tip("Recipe", "Fills the steps of both boxes and the metric for a common "
+                                "objective, blind to how many of the cases are reported. Kept, in their order, at the top: the "
+                                "steps that prepare the values (aggregate, arithmetic, select, combine; e.g. monthly sums divided "
+                                "by the population). Removed: the transforms (log, log10, standardise, anomaly, moving average), "
+                                "climatologies and frequency filters. Then the recipe's own steps: "
+                                + " ".join(f"{title}: {what}; {METRICS[metric].split(':')[0]}." for title, metric, what in RECIPES.values())
+                                + " A preparing step added after a recipe lands at the end: Apply again puts it back at the top. "
+                                "Every step can be changed afterwards."),
+                                {"": "Choose a recipe…", **{key: title for key, (title, _, _) in RECIPES.items()}}, width="100%"),
+                ui.div(ui.input_action_button("cal_recipe_apply", "Apply to both boxes", class_="btn-sm"), class_="pt-4"),
+                col_widths=(5, 7), fill=False,
+            ),
+            ui.output_ui("cal_recipe_note"),
             ui.layout_columns(
                 ui.input_text("cal_objective_name", "Name", placeholder="e.g. timing", width="100%"),
                 ui.input_select("cal_objective_metric", "Metric", {key: text.split(":")[0] for key, text in METRICS.items()},
@@ -1034,7 +1048,12 @@ def calibration_server(input, output, session, setup):
         if name in {objective["name"] for objective in objectives()}:
             objective_problem.set(f"There is an objective named {name} already.")
             return
-        _, data_values, _, _, _, _, span = result
+        _, data_values, model_paired, data_paired, _, values, span = result
+        if input.cal_objective_metric() == "rmse_relative" and values["rmse_relative"] is None:
+            objective_problem.set(f"RMSE relative divides each series by its mean, and after these steps the mean of the model is "
+                                  f"{model_paired.mean():.3g} and of the data {data_paired.mean():.3g}: it is not defined unless both "
+                                  f"are positive (not after a log or an anomaly). Use Correlation (scale-free too) or RMSE.")
+            return
         folder = model_outputs()[0]
         manifest = read_run(folder) or {}
         # The observations as processed now, kept with the calibrations of the results folder, and as loaded with the steps of
@@ -1074,6 +1093,48 @@ def calibration_server(input, output, session, setup):
     def remove_objective():
         index = int(input.cal_objective_remove()["index"])
         objectives.set([objective for i, objective in enumerate(objectives()) if i != index])
+
+    recipe_note = reactive.value(None)  # (text, a problem)
+
+    @reactive.effect
+    @reactive.event(input.cal_recipe_apply)
+    def apply_recipe():
+        recipe = input.cal_recipe()
+        if recipe not in RECIPES:
+            recipe_note.set(("Choose a recipe first.", True))
+            return
+        title, metric, what = RECIPES[recipe]
+        kept, boxes = [], []
+        for box, label in ((model, "Model"), (data, "Data")):
+            box.snapshot()
+            with reactive.isolate():
+                before = box.steps()
+                steps = recipe_steps(recipe, before)
+            box.steps.set([step if "uid" in step else {"uid": str(next(uids)), **step} for step in steps])
+            kept.append(sum(step["kind"] in PREPARING for step in steps))
+            said = lambda found: "; ".join(f"{i}. {describe(without_uid(step))}" for i, step in found) or "none"
+            boxes.append(f"{label}: kept {said([(i + 1, s) for i, s in enumerate(before) if s['kind'] in PREPARING])}; "
+                         f"removed {said([(i + 1, s) for i, s in enumerate(before) if s['kind'] not in PREPARING])}; "
+                         f"added {'; '.join(describe(step) for step in steps[kept[-1]:])}.")
+        ui.update_select("cal_objective_metric", selected=metric)
+        ui.update_text("cal_objective_name", value=title.split(",")[0].replace(" ", "_"))
+        log = next((step for step in steps if step["kind"] == "transform" and step["transform"] == "log"), None)
+        text = f"{title}: {what}. Metric: {METRICS[metric].split(':')[0]}. {' '.join(boxes)}"
+        if log is not None:
+            text += (f" The log adds {log['offset']:g} on both sides, in the units of the values (1e-5 suits cases per person; "
+                     f"for counts, e.g. 1). Against a model far too low it weighs: the low values sink towards the offset, so the "
+                     f"shape is penalised too, not only the level.")
+        if not all(kept):
+            text += (" A box has no step preparing the values: the model and the data must be in the same periods and units "
+                     "before these steps (e.g. aggregate into months, divide by the population).")
+        recipe_note.set((text, False))
+
+    @render.ui
+    def cal_recipe_note():
+        if not recipe_note():
+            return None
+        text, wrong = recipe_note()
+        return ui.p(text, class_=f"small mb-1 {'text-danger' if wrong else 'text-muted'}")
 
     @render.ui
     def cal_objective_problem():

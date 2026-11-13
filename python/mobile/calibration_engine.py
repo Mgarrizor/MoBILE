@@ -460,7 +460,10 @@ def evaluate(objectives, run_dirs, validation=None, part=None, strict=True, keep
                 if value is not None:
                     flat.append(index)
             if value is None:
-                raise DataError(f"{objective['name']}: {objective['metric']} is not defined for these values (e.g. a flat series)")
+                why = (f"the mean of the model ({model_values.mean():.3g}) or of the data ({data_values.mean():.3g}) is not "
+                       f"positive, e.g. after a log or an anomaly: use Correlation or RMSE" if objective["metric"] == "rmse_relative"
+                       else "a series does not vary (a flat series)")
+                raise DataError(f"{objective['name']}: {objective['metric']} is not defined for these values: {why}")
         except DataError:
             if strict:
                 raise
