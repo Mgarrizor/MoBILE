@@ -32,7 +32,9 @@ import sqlite3
 import subprocess
 import threading
 import time
+from contextlib import closing
 from dataclasses import replace
+from functools import lru_cache
 from pathlib import Path
 
 import netCDF4
@@ -1096,9 +1098,32 @@ def status_of(folder, record):
     return "interrupted" if status == "running" and not is_running(folder) else status
 
 
+@lru_cache(maxsize=128)
+def _study_completed(path, _stamp):
+    """The completed trials in a study database (read again when it changes), or None if it cannot be read."""
+    try:
+        with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as database:
+            return int(database.execute("SELECT count(*) FROM trials WHERE state = 'COMPLETE'").fetchone()[0])
+    except sqlite3.Error:
+        return None
+
+
+def completed_trials(folder, record):
+    """The completed trials of a calibration, counted in its study: the record has them only from when a run last ended,
+    so not while it runs, here or elsewhere (a cluster job, its study copied back by Refresh). The record's count if the
+    study cannot be read."""
+    path = Path(folder) / DATABASE
+    try:
+        stamp = path.stat().st_mtime_ns
+    except OSError:
+        return record.get("completed", 0)
+    found = _study_completed(str(path), stamp)
+    return record.get("completed", 0) if found is None else found
+
+
 def calibration_label(folder, record):
     """e.g. 'dz_two_cells (finished, 100 of 100 trials completed, 2 objectives)'; '..., earlier version' if it cannot be resumed."""
-    done = record.get("completed", 0)
+    done = completed_trials(folder, record)
     return (f"{Path(folder).name} ({status_of(folder, record)}, {done} of {record['n_trials']} trials completed, "
             f"{len(record['objectives'])} objective{'s' if len(record['objectives']) > 1 else ''}"
             f"{'' if resumable(record) else ', earlier version: cannot be resumed'})")

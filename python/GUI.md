@@ -442,15 +442,23 @@ together (the Pareto front):
   process: job 123 on lrdn0042, last heard of 40 s ago, 17 of 100 trials completed") and drawn again as it goes on.
   On another computer it counts as running while Slurm lists its job, or, where Slurm cannot be asked, while its
   status is less than 5 minutes old.
-  The calibration running, or the one chosen, is drawn below: each objective trial by trial with the best so far, the
-  Pareto front with the offsets and parameters of each trial and the mean temperatures they give, and with a validation
-  window its scores on it, in grey (sorted by trial, by an objective or by a validation score, high to low or low to
-  high), in a box of its own a trial of the front against the data of an
+  The calibration running, or the one chosen, is drawn below: each objective trial by trial with the best so far
+  (**Log scale** under it puts an objective's panel on a log scale, offered for those whose values are all above 0), the
+  Pareto front, in a panel that folds (click its title), with the offsets and parameters of each trial and the mean
+  temperatures they give, and with a validation window its scores on it, in grey. Click a column title to sort by it,
+  again for the other way (▼ high to low, ▲ low to high; an objective sorts best first at the first click; trials
+  without a value last). It is sorted at first by the distance to the ideal point, closest first (each objective
+  scaled from its best value on the front, 0, to its worst, 1; then the distance over all of them: 0 is a trial best
+  on all). The first 10 are shown, **Show all** for the rest. In a box of its own,
+  a trial of the front against the data of an
   objective (the model scaled to the mean of the data) with its **Possible drivers**, and below it, in a box of its own, where the
   calibration started: its first trial, with no temperature offset (when the ranges allow it), processed and scored like
   every other trial, with its **Possible drivers** (rainfall, temperature and vector densities of its run, as in the
-  Model and data card) in panels below that zoom together. The runs of a calibration always write the vector densities
-  for this. With a validation window, semi-transparent bars along the top of these plots mark the calibration window
+  Model and data card) in panels below that zoom together; the vector densities only if the runs wrote them (ticked
+  in the Outputs card). While a calibration runs these are read again every few seconds, but a plot is drawn again
+  only when what it shows changes, and the menus keep the choice made: a zoom or a choice is not undone by the next
+  reading. The number of trials completed, in the list of calibrations, is counted in its study, so it follows a job
+  on a cluster at each Refresh. With a validation window, semi-transparent bars along the top of these plots mark the calibration window
   (green) and the validation window (purple), and their titles give the trial's validation scores; an objective that
   is not a dated series, e.g. a climatology, is drawn for the calibration window only, as scored.
 - **Create only** makes the calibration without running it, and chooses it under Calibrations: run it here with
