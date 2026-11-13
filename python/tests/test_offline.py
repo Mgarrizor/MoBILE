@@ -4025,5 +4025,59 @@ class TestOutputsNeeded(unittest.TestCase):
         self.assertEqual(unknown, ["d"])
         self.assertEqual((output_label("out_I_new"), output_label("out_Ia_new")), ("New symptomatic cases", "New symptomatic cases (by age)"))
 
+
+class TestCalibrationProgressAndFront(unittest.TestCase):
+    """The completed trials counted in the study, and the Pareto front sorted by the distance to the ideal point."""
+
+    def test_completed_counted_in_the_study(self):
+        import optuna
+        from mobile.calibration_engine import DATABASE, STUDY_NAME, calibration_label, completed_trials
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder)
+        record = {"completed": 0, "n_trials": 10, "objectives": [{"name": "a"}], "status": "finished"}
+        self.assertEqual(completed_trials(folder, record), 0)  # No study: the record's count
+        study = optuna.create_study(study_name=STUDY_NAME, storage=f"sqlite:///{folder / DATABASE}")
+        for value in (1.0, 2.0, 3.0):
+            study.add_trial(optuna.trial.create_trial(value=value))
+        study.add_trial(optuna.trial.create_trial(state=optuna.trial.TrialState.FAIL))
+        # As a running job leaves it: the record still says 0 (written when a run ends), the study 3
+        self.assertEqual(completed_trials(folder, record), 3)
+        self.assertIn("3 of 10 trials completed", calibration_label(folder, record))
+        study.add_trial(optuna.trial.create_trial(value=4.0))
+        time.sleep(0.01)
+        os.utime(folder / DATABASE)  # A new modification time: read again
+        self.assertEqual(completed_trials(folder, record), 4)
+
+    def test_ideal_distances(self):
+        from mobile.calibration_run_ui import ideal_distances
+        objectives = [{"direction": "maximize"}, {"direction": "minimize"}, {"direction": "zero"}]
+        front = [{"number": 1, "values": [0.9, 2.0, 0.1]}, {"number": 2, "values": [0.5, 1.0, 0.1]},
+                 {"number": 3, "values": [0.7, 1.5, 0.1]}]
+        distances = ideal_distances(front, objectives)
+        # Scaled 0 (best) to 1 (worst) per objective; the third has one value on the front: 0 for all
+        self.assertAlmostEqual(distances[1], 1.0)  # Best correlation, worst RMSE
+        self.assertAlmostEqual(distances[2], 1.0)
+        self.assertAlmostEqual(distances[3], math.sqrt(0.5**2 + 0.5**2))  # Halfway on both: the closest
+        self.assertEqual(min(distances, key=distances.get), 3)
+
+    def test_sort_by_column(self):
+        from mobile.calibration_run_ui import IDEAL, front_columns, sort_rows
+        front = [{"number": 4, "values": [0.5], "validation": [0.2], "params": {"b": 2.0}, "offsets": {"dT_1": 0.5}},
+                 {"number": 1, "values": [0.9], "validation": None, "params": {"b": 1.0}, "offsets": {"dT_1": -1.0}},
+                 {"number": 7, "values": [0.5], "validation": [0.8], "params": {"b": 3.0}, "offsets": {"dT_1": 0.0}}]
+        distances = {4: 0.3, 1: 0.0, 7: 0.3}
+        numbers = lambda column, descending: [row["number"] for row in sort_rows(front, column, descending, distances)]
+        self.assertEqual(numbers("o0", True), [1, 4, 7])  # High to low; the tie by trial number
+        self.assertEqual(numbers("o0", False), [4, 7, 1])
+        self.assertEqual(numbers("v0", True), [7, 4, 1])  # Without a validation score: last, both ways
+        self.assertEqual(numbers("v0", False), [4, 7, 1])
+        self.assertEqual(numbers(IDEAL, False), [1, 4, 7])
+        self.assertEqual(numbers("p:b", True), [7, 4, 1])
+        self.assertEqual(numbers("t0", False), [1, 7, 4])
+        self.assertEqual(numbers("number", True), [7, 4, 1])
+        record = {"objectives": [{}], "validation": ["1996-01-01", "2003-12-31"], "temperature": {"means": [20.0]},
+                  "parameters": [{"name": "b"}]}
+        self.assertEqual(front_columns(record), {"number", IDEAL, "o0", "v0", "t0", "p:b"})
+
 if __name__ == "__main__":
     unittest.main()

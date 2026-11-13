@@ -1006,10 +1006,11 @@ def monthly_figure(result, name, key):
     return figure
 
 
-def calibration_history_figure(rows, objectives):
+def calibration_history_figure(rows, objectives, log=()):
     """The value of each objective in every completed trial of a calibration (dots), and the best so far (a line), one
     panel per objective. Trials where transmission died out (infeasible) as grey rings, left out of the best so far.
-    rows are those of calibration_engine.trials_table, objectives those of its record."""
+    rows are those of calibration_engine.trials_table, objectives those of its record; log: the indices of the
+    objectives drawn on a log scale."""
     every = [row for row in rows if row["state"] == "COMPLETE"]
     dead = [row for row in every if row.get("infeasible")]
     done = [row for row in every if not row.get("infeasible")]
@@ -1032,7 +1033,8 @@ def calibration_history_figure(rows, objectives):
                                         name="Transmission died out (infeasible)", showlegend=k == 0, legendgroup="dead",
                                         text=[row["infeasible"] for row in dead],
                                         hovertemplate="Trial %{x}: infeasible, %{text}<extra></extra>"), row=k + 1, col=1)
-        figure.update_yaxes(title_text=objective["metric"].replace("_", " "), gridcolor=GRID, row=k + 1, col=1)
+        figure.update_yaxes(title_text=objective["metric"].replace("_", " ") + (" (log scale)" if k in log else ""), gridcolor=GRID,
+                            type="log" if k in log else "linear", row=k + 1, col=1)
     figure.update_xaxes(gridcolor=GRID)
     figure.update_xaxes(title_text="Trial", row=len(objectives), col=1)
     figure.update_layout(_base_layout(title="Calibration: the objectives, trial by trial"), plot_bgcolor="white",
