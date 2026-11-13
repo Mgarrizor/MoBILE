@@ -16,10 +16,12 @@ import json
 import os
 import shlex
 import shutil
+import sqlite3
 import subprocess
 import tarfile
 import tempfile
 import time
+from contextlib import closing
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
@@ -36,6 +38,8 @@ JOB_SCRIPT = "job.sh"
 LOGIN = "log in to the cluster first (e.g. `step ssh login <your e-mail> --provisioner cineca-hpc` for CINECA), then try again"
 REMOTE_FIELDS = ("status", "completed", "failed", "failure", "binary_md5")  # Taken from the record there on refresh
 SSH_SECONDS = 60  # A command that is not a copy
+COPY_SECONDS = 600  # A copy back: this, plus its size at COPY_KB_PER_SECOND (LEONARDO to a home line: ~1 MB/s, 12 Nov 2026)
+COPY_KB_PER_SECOND = 100
 STOPPED = "STOPPED (RESUMABLE)"  # A job's state, here, when Slurm says FAILED but the calibration stopped as at its deadline
 
 
@@ -328,8 +332,39 @@ def _job_states(answer):
     return states
 
 
-def refresh(folder):
-    """Copy back what the GUI shows of a calibration running there, and what Slurm says of its jobs."""
+def _final_here(folder):
+    """The series folders here (as paths there) of trials that had ended in the study copied back: written in full before
+    that copy, so never copied again. A trial still running then may have been copied half-written: copied again."""
+    folder = Path(folder)
+    database = folder / DATABASE
+    if not database.is_file():
+        return []
+    try:
+        with closing(sqlite3.connect(f"file:{database}?mode=ro", uri=True)) as connection:
+            ended = {number for number, in connection.execute(
+                "SELECT number FROM trials WHERE state IN ('COMPLETE', 'PRUNED', 'FAIL')")}
+    except sqlite3.Error:  # No study here yet: copy everything
+        return []
+    return [f"{TRIALS}/{path.parent.name}/{SERIES}" for path in sorted((folder / TRIALS).glob(f"*/{SERIES}"))
+            if path.parent.name.startswith("trial_") and path.parent.name[6:].isdigit() and int(path.parent.name[6:]) in ended]
+
+
+def _to_copy(host, target, skip):
+    """(paths there to copy back, their size in kB): the small files and the series, without those in skip."""
+    wanted = f"{STATUS} {SNAPSHOT} calibration.json {LOGS} {TRIALS}/*/{SERIES}"
+    command = (f'cd {remote(target)} && skip=$(mktemp) && new=$(mktemp) && cat > "$skip" && '
+               f'{{ ls -d {wanted} 2>/dev/null | grep -vxF -f "$skip" > "$new"; '
+               f'tr "\\n" "\\0" < "$new" | xargs -0 -r du -sk 2>/dev/null | awk \'{{s += $1}} END {{print "kB", s + 0}}\'; '
+               f'cat "$new"; rm -f "$skip" "$new"; }}')
+    lines = ssh(host, command, "listing what to copy back", data="".join(f"{path}\n" for path in skip).encode()).splitlines()
+    if not lines or not lines[0].startswith("kB "):
+        raise ClusterError(f"listing what to copy back: unexpected answer from {host}")
+    return [line for line in lines[1:] if line.strip()], int(lines[0].split()[1])
+
+
+def refresh(folder, say=None):
+    """Copy back what the GUI shows of a calibration running there, and what Slurm says of its jobs. say(text): told what
+    is being copied, before the copy."""
     folder = Path(folder)
     cluster = _cluster(folder)
     host, target = cluster["host"], cluster["folder"]
@@ -341,14 +376,18 @@ def refresh(folder):
         for job in cluster["jobs"]:
             state, listed = states.get(job["id"], ("ENDED", False))  # Neither listed nor accounted for: it has ended
             job["state"], job["listed"] = state, listed
-    # The small files only: what there is of them
-    wanted = f"{STATUS} {SNAPSHOT} calibration.json {LOGS} {TRIALS}/*/{SERIES}"
-    command = f"cd {remote(target)} && ls -d {wanted} 2>/dev/null | tar cf - -T - 2>/dev/null; true"
+    # The small files only: what there is of them, without the series of trials here already
+    paths, kilobytes = _to_copy(host, target, _final_here(folder))
+    trials = sum(path.startswith(f"{TRIALS}/") for path in paths)
+    if say:
+        say(f"Copying back {trials:,} new trial{'' if trials == 1 else 's'} and the study ({kilobytes / 1024:,.1f} MB)…")
+    timeout = COPY_SECONDS + round(kilobytes / COPY_KB_PER_SECOND)
+    command = f"cd {remote(target)} && tar cf - -T - 2>/dev/null; true"
     try:
         result = subprocess.run(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=20", host, command], capture_output=True,
-                                timeout=600)
+                                input="".join(f"{path}\n" for path in paths).encode(), timeout=timeout)
     except subprocess.TimeoutExpired:
-        raise ClusterError(f"copying back: {host} did not answer within 600 s") from None
+        raise ClusterError(f"copying back {kilobytes / 1024:,.1f} MB: {host} did not answer within {timeout} s") from None
     if result.returncode == 255:
         raise ClusterError(f"cannot connect to {host}: {LOGIN}. ({_complaint(result.stderr.decode(errors='replace'))})")
     with tempfile.TemporaryDirectory(dir=folder) as staging:

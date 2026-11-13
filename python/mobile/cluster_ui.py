@@ -232,9 +232,12 @@ def cluster_server(input, output, session, chosen, changed):
         return ui.div(ui.p(f"The end of the log of job {job}, as of the last refresh:", class_="small mb-1"),
                       ui.tags.pre(tail, class_="small mb-0", style="max-height: 16rem; overflow: auto;"), class_="mt-2")
 
+    copying = {"text": None}  # What a refresh is copying back, set from its thread; read by cl_busy while it runs
+
     @reactive.extended_task
     async def action(kind, folder, given, cleared):
         def work():
+            copying["text"] = None
             if kind == "send":
                 return f"Sent to {given.host}:{send(folder, given, cleared)}."
             if kind == "submit":
@@ -243,7 +246,7 @@ def cluster_server(input, output, session, chosen, changed):
                 return (f"Submitted job {job}" + (f", to start when job {after} ends" if after else "") +
                         ". Refresh to see how it goes.")
             if kind == "refresh":
-                cluster = refresh(folder)
+                cluster = refresh(folder, say=lambda text: copying.update(text=text))
                 return "Refreshed: " + (", ".join(f"job {job['id']} {(job.get('state') or '?').lower()}" for job in cluster["jobs"])
                                         or "no job yet") + "."
             job = stop(folder)
@@ -364,7 +367,8 @@ def cluster_server(input, output, session, chosen, changed):
     @render.ui
     def cl_busy():
         if action.status() == "running":
-            return ui.p("Working on the cluster…", class_="small text-muted mt-2 mb-0")
+            reactive.invalidate_later(1)  # To show what a refresh copies, once it knows
+            return ui.p(copying["text"] or "Working on the cluster…", class_="small text-muted mt-2 mb-0")
         return None
 
     @reactive.effect

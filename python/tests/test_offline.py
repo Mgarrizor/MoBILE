@@ -3249,10 +3249,14 @@ echo "$@" >> "$HOME/scancel.txt"
                                qos="", time="00:10:00", cpus=2, exclusive=False, setup="# the modules and the venv here"), home
 
     def test_cluster_send_submit_refresh(self):
+        import sqlite3
+        from contextlib import closing
+
         import optuna
 
-        from mobile.calibration_engine import (CalibrationError, SERIES, create_calibration, is_running, open_study, read_calibration,
-                                               read_cluster, run_calibration, status_of, trial_comparison, trial_folder)
+        from mobile.calibration_engine import (CalibrationError, SERIES, create_calibration, forget_storage, is_running, open_study,
+                                               read_calibration, read_cluster, run_calibration, status_of, trial_comparison,
+                                               trial_folder)
         from mobile.cluster import ClusterError, last_log, observation_files, refresh, send, submit
         from mobile.sensitivity_runs import StudyState
 
@@ -3298,6 +3302,20 @@ echo "$@" >> "$HOME/scancel.txt"
         job_id, tail = last_log(folder)
         self.assertEqual(job_id, "1001")
         self.assertIn("exit 0: done", tail)
+        # Refreshed again: the series of trials ended here are not copied again; those missing, or of a trial not ended in
+        # the study here (maybe copied half-written), are
+        said = []
+        refresh(folder, say=said.append)
+        self.assertRegex(said[-1], r"^Copying back 0 new trials and the study \([\d.]+ MB\)…$")
+        shutil.rmtree(trial_folder(folder, 2) / SERIES)
+        forget_storage(folder)
+        with closing(sqlite3.connect(Path(folder) / "optuna.db")) as connection, connection:
+            connection.execute("UPDATE trials SET state = 'RUNNING' WHERE number = 1")
+        refresh(folder, say=said.append)
+        self.assertRegex(said[-1], r"^Copying back 2 new trials ")
+        self.assertTrue((trial_folder(folder, 2) / SERIES).is_dir())
+        refresh(folder, say=said.append)  # The study copied back says trial 1 ended
+        self.assertRegex(said[-1], r"^Copying back 0 new trials ")
 
     def test_cluster_jobs_and_login(self):
         from mobile.calibration_engine import create_calibration, is_running, read_calibration, read_cluster, running_where, status_of
