@@ -459,9 +459,12 @@ together (the Pareto front):
   one: its objectives (those whose observations are still where they were), what it calibrates and the ranges (its
   cells or regions found again on the setup now), the validation window, the sampler, trials, start-up trials, seeds
   (the first one in the sidebar) and threads per run, and a new name (e.g. look_2). Change what you like, then Create
-  only or Run calibration; the calibration chosen is not changed. The outputs are switched to those its objectives
-  need and the others off, so tab 2 turns amber: press Apply parameters & outputs there. It says what it could not
-  fill: another setup (apply it in tab 1), sliders that differ from its fixed parameters, another number of agents.
+  only or Run calibration; the calibration chosen is not changed. It also fills the other tabs, for you to apply:
+  its setup in the boxes of tab 1 (the dot turns amber if it differs from the setup applied: press Apply setup), its
+  fixed parameters on the sliders and the outputs its objectives need, the others off (tab 2 turns amber: press
+  Apply parameters & outputs), and HA for its number of agents (at once if its grid is that of the setup applied,
+  else when its setup is applied). Until then the box Setup applied, at the right of the Calibration tab, says to
+  apply it. The message says what it filled and what it could not (e.g. a driving file moved since).
 - The settings **kept with the calibration** (and so used wherever it runs, here or on a cluster) are labelled so;
   **Runs at the same time**, labelled **this computer**, is not kept: a job on a cluster takes those of its Cluster
   settings. With TPE, fewer start-up trials than runs at the same time are warned of: the sampler would suggest trials

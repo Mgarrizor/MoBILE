@@ -467,9 +467,9 @@ def metrics_table(values, model, data, parts=()):
 
 # ---------------------------------------------------------------- server
 
-def calibration_server(input, output, session, setup):
+def calibration_server(input, output, session, setup, setup_state):
     """The server side of the tab. setup() is the applied setup, whose results folder holds the runs and the saved
-    observations."""
+    observations; setup_state() whether the boxes of the Setup tab are applied ("applied", "changed" or "problem", text)."""
     datasets = reactive.value({})  # {name: {"path", "table" (a table to import), "raw" (Observations), "steps": [step with uid]}}
     chosen = reactive.value(None)  # The name of the data set shown
     problem = reactive.value(None)
@@ -1185,7 +1185,9 @@ def calibration_server(input, output, session, setup):
         """{step: (state, note)} of the steps of calibration_progress up to the objectives."""
         try:
             setup().validate()
-            states = {"setup": (DONE, None)}
+            state, _ = setup_state()
+            states = {"setup": (DONE, None) if state == "applied" else
+                      (DOING, "press Apply setup in tab 1") if state == "changed" else (DOING, "fix it in tab 1")}
         except ConfigError:
             states = {"setup": (DOING, "fix it in tab 1")}
         name = model_name()[0]

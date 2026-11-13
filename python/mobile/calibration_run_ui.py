@@ -44,7 +44,6 @@ from .runner import NETCDF_LOCK
 from .shapes import ShapeError, areas, outlines, read_shapes
 from .sensitivity import SampledParameter
 from .sensitivity_runs import StudyState
-from .setup import to_dict
 from .outcome import run_name_problem
 
 OPTIONAL_OUTPUTS = (("out_I_new", "the regime of each trial (epidemic or endemic) is not measured"),
@@ -503,11 +502,11 @@ def _clock(seconds):
     return f"{seconds // 3600}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
 
 
-def calibration_run_server(input, output, session, setup, objectives, overrides, selected_output, not_applied, busy, agents, ha,
-                           slider_setup):
+def calibration_run_server(input, output, session, setup, objectives, overrides, selected_output, not_applied, load_template, busy,
+                           agents, ha, slider_setup):
     """The server side of the card. objectives() are those added in the comparison card; overrides() and selected_output()
     the parameters and outputs applied, which every run of a calibration uses, and not_applied() why they cannot be used, or
-    None; busy() is true while a single run or an analysis goes on; slider_setup() the sliders, with their ranges and starts.
+    None; load_template(record) fills tabs 1 and 2 and HA from a calibration, and says what it did; busy() is true while a single run or an analysis goes on; slider_setup() the sliders, with their ranges and starts.
     Returns running() and cancel() for the rest of the app."""
     state = StudyState()
 
@@ -981,8 +980,6 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         for group in OUTPUT_FLAGS.values():
             for flag, _, _ in group:
                 ui.update_switch(output_switch_id(flag), value=flag in needed)
-        notes.append(f"outputs switched to those its objectives need ({', '.join(output_label(flag) for flag in needed) or 'none'}), "
-                     f"the others off: press Apply parameters & outputs in tab 2")
         if missing:
             notes.append(f"objectives left out, their observations are no longer where they were: {', '.join(missing)}")
         # Validation window
@@ -1040,21 +1037,8 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
                     if "cal_keep_order" in input:
                         ui.update_switch("cal_keep_order", value=bool(temperature.get("ordered", True)))
                 template_pending.set(pending)
-        # What is not set here: the setup, the sliders not calibrated, the agents
-        applied = to_dict(setup())
-        differing = [key for key in ("inputs", "region", "period", "age_structure") if record["setup"].get(key) != applied.get(key)]
-        if differing:
-            notes.append(f"it was made with another setup ({', '.join(differing)} differ): apply that setup in tab 1 for the same "
-                         "calibration")
-        fixed = {key: float(value) for key, value in {**setup().params, **overrides()}.items() if key not in calibrated}
-        changed_sliders = sorted(key for key in set(fixed) | set(record.get("params", {}))
-                                 if key not in calibrated and abs(fixed.get(key, float("nan")) - record["params"].get(key, float("nan"))) > 1e-12
-                                 or (key in fixed) != (key in record.get("params", {})))
-        if changed_sliders:
-            notes.append(f"the sliders now differ from its fixed parameters ({', '.join(changed_sliders[:5])}"
-                         f"{', …' if len(changed_sliders) > 5 else ''}): the new one takes the sliders as they are")
-        if record["setup"]["run"].get("nagent") != agents():
-            notes.append(f"it had {record['setup']['run'].get('nagent'):,} agents, the sidebar gives {agents():,}")
+        # Its setup in tab 1, its fixed parameters on the sliders, HA for its agents
+        notes += load_template(record)
         said = windows_said(taken, period_of(setup().period), window)
         ui.notification_show(ui.TagList(f"Filled from {name} for a new calibration (named {unique_name(name, set(list_names()))}): "
                                         "change what you like, then Create only or Run calibration.",

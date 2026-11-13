@@ -40,7 +40,7 @@ from .scripts import (
 from .shapes import ShapeError, areas, name_field, outlines, read_shapes
 from .setup import (
     OPTIONAL_FILES, REQUIRED_FILES, from_fields, from_manifest, create_folder, list_folder, region_from_fields, region_mode,
-    save_setup, start_folder, typed_path,
+    save_setup, start_folder, typed_path, usable_shapes,
 )
 from .setup_ui import (
     DAILY_FILES, EXAMPLE_FOLDER, PREVIEW_FILES, PREVIEW_STYLE, REGION_BOXES, REGION_LAYERS, REGION_MONTHS, SUFFIX_NAMES, available_model, example_note_box, region_values,
@@ -327,15 +327,61 @@ def create_app(config):
             lines += [ui.tags.li(f"{name}: its variable is not written by any of these outputs", class_="text-danger") for name in unknown]
             return ui.div(ui.tags.strong("For the calibration's objectives", class_="small"), ui.tags.ul(*lines, class_="small mb-1"))
 
+        @reactive.calc
+        def setup_state():
+            """("applied", "changed" or "problem", what it means) of the Setup tab: its boxes against the setup applied."""
+            new, problems = typed_setup()
+            if problems:
+                return "problem", "Problem in setup"
+            return ("applied", "Applied setup") if comparable(new) == comparable(setup()) else ("changed", "Not applied")
+
         @reactive.effect
         async def send_tab_dots():
-            new, problems = typed_setup()
-            same = new is not None and comparable(new) == comparable(setup())
-            setup_state = (["problem", "Problem in setup"] if problems else
-                           ["applied", "Applied setup"] if same else ["changed", "Not applied"])
+            setup_dot = list(setup_state())
             parameters = (["problem", "Invalid"] if parameters_problems() else
                           ["changed", "Changed set, not applied"] if parameters_changed() else ["applied", "Applied set"])
-            await session.send_custom_message("tab_dots", {"setup": setup_state, "parameters": parameters})
+            await session.send_custom_message("tab_dots", {"setup": setup_dot, "parameters": parameters})
+
+        pending_agents = reactive.value(None)  # The agents of a template, for HA once its setup is applied
+
+        def load_template(record):
+            """Fill tab 1 with the setup of a calibration, the sliders with its fixed parameters, and HA for its number of
+            agents (now if its grid is that of the setup applied, else once its setup is applied). [What it says]."""
+            notes, stored = [], record["setup"]
+            try:
+                config = from_fields(setup().mobile, stored["project"], stored["runs_dir"], stored["run"], stored["inputs"],
+                                     stored.get("region"), stored.get("period"), stored.get("age_structure"),
+                                     usable_shapes(stored.get("shapes")))
+            except ConfigError as error:
+                config = None
+                notes.append(f"its setup cannot be filled in tab 1: {'; '.join(setup_problems(error))}")
+            if config is not None:
+                show_setup_fields(config)
+                if comparable(config) != comparable(setup()):
+                    notes.append("its setup is in the boxes of tab 1: press Apply setup there")
+            calibrated = {parameter["name"] for parameter in record.get("parameters", [])}
+            pending_sliders.set({name: float(value) for name, value in record.get("params", {}).items() if name not in calibrated})
+            notes.append("its fixed parameters are on the sliders and the outputs its objectives need ticked, the others off: "
+                         "press Apply parameters & outputs in tab 2")
+            nagent = stored["run"].get("nagent")
+            pending_agents.set(None)
+            if nagent and config is not None:
+                if (config.inputs["pop_file"], config.region) == (setup().inputs["pop_file"], setup().region):
+                    ui.update_numeric("ha", value=ha_for(nagent))
+                    notes.append(f"HA set for its {nagent:,} agents")
+                else:
+                    pending_agents.set(nagent)
+                    notes.append(f"HA will be set for its {nagent:,} agents when its setup is applied")
+            return notes
+
+        @reactive.effect
+        @reactive.event(setup)
+        def take_pending_agents():
+            nagent = pending_agents()
+            if nagent:
+                pending_agents.set(None)
+                ui.update_numeric("ha", value=ha_for(nagent))
+                ui.notification_show(f"HA set for the template's {nagent:,} agents.", type="message", duration=6)
 
         analysis = sensitivity_server(
             input, output, session, setup, slider_setup, applied_overrides, applied_output, not_applied,
@@ -1246,9 +1292,9 @@ def create_app(config):
         browse_button("cal_data_file", "data")
         browse_button("cal_model_folder", "folder")
         browse_button("setup_shapes_file", "shape")
-        calibration = calibration_server(input, output, session, setup)
+        calibration = calibration_server(input, output, session, setup, setup_state)
         calibrating = calibration_run_server(
-            input, output, session, setup, calibration.objectives, applied_overrides, applied_output, not_applied,
+            input, output, session, setup, calibration.objectives, applied_overrides, applied_output, not_applied, load_template,
             lambda: run_task.status() == "running" or analysis.running(), lambda: agents(), lambda: input.ha(), slider_setup,
         )
         progress_server(input, calibration.prepared, calibrating.what, calibrating.stored, calibration.activity,
