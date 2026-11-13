@@ -331,6 +331,33 @@ output, cells and steps of the Model box, and a metric. Each trial cuts its outp
 they share before the steps, as the comparison does. If a step of the Data box combines other data sets, only the
 observations as processed now are kept, not cut again by each trial, and the objective's description says so.
 The correlation is maximised, the RMSEs minimised, the size of the bias minimised. Add several, e.g. the monthly series with the correlation (timing), then, with a climatology step in both boxes, the relative RMSE (season).
+The RMSE of the series each divided by its mean needs both means positive: after a log or an anomaly it is not defined,
+and Add as objective says so (use the correlation, or the RMSE, instead).
+
+**Recipe**, above the name and metric, fills the steps of both boxes and the metric for objectives that do not depend
+on how many of the cases are reported, which needs a model of reporting (not yet in the app). The steps that prepare the
+values are kept, in their order, at the top: aggregate, arithmetic, select and combine (e.g. monthly sums divided by
+the population). Removed: transforms (log, log10, standardise, anomaly, moving average), climatologies and frequency
+filters, so another recipe replaces the first, and a moving average or standardise of your own is removed too (add it
+back afterwards). The recipe's steps come after those kept. A note under the menu says, for each box, which steps were
+kept, which removed and which added. Prepare first (e.g. aggregate the model into months), then apply the recipe: a
+preparing step added after it lands at the end, after the log; Apply again puts it back at the top. Every step can then
+be changed.
+
+| Recipe | Steps after those kept | Metric | What it compares |
+|---|---|---|---|
+| Seasonal shape | log, climatology by month | Correlation | the timing of the season, blind to the height of its peak |
+| Decadal shape | log, low pass 5 years, anomaly | RMSE (log units) | how the level rises and falls over the years, blind to its height |
+| Decadal level | log, low pass 5 years | Bias (log units) | how high the level is, as a ratio: ln 10 = 2.30 is 10 times too many cases, −2.30 too few |
+| Decadal tendency, scale-free | low pass 5 years | Correlation | the timing of the rises and falls, blind to their size |
+
+In log space RMSE² = bias² + RMSE² of the anomalies, so the decadal shape and level split the RMSE of the low-pass series
+without counting the shape twice. The log adds an offset on both sides (that of a log already among the steps, else
+1e-5, in the units of the values: it suits cases per person; for counts, e.g. 1). Against a model far too low it
+weighs: its low values sink towards the offset and flatten, so the shape is penalised too, not only the level. On
+synthetic monthly cases per person (1980–2003, about 1e-4 to 2e-3), the decadal shape's RMSE was 0.04 for the model
+right, 0.06 for 10 times too many cases and 0.23 for 10 times too few; the seasonal shape's correlation and the decadal
+tendency's did not change with the scale (to 0.002), and fell from 1.0 to 0.01 for a season three months late.
 
 **Calibration with Optuna** runs the model many times with the setup applied, the HA and seed of the sidebar and the
 sliders, each time with other values of what is calibrated, and keeps the trials that do best on all the objectives
