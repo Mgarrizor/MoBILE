@@ -5,6 +5,7 @@ progress: the objectives trial by trial and the best trial against the data (cal
 import asyncio
 import os
 from dataclasses import replace
+from functools import lru_cache
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,7 +23,7 @@ from .calibration_engine import (
     trial_comparison,
     trial_folder, trials_table,
 )
-from .calibration_data import DataError
+from .calibration_data import DataError, read_observations
 from .calibration_model import DRIVER_PERIODS, DRIVERS, driver_panel
 from .calibration_results import FIGURES, ResultsError, figure_help, results_figure
 from .calibration_steps import STATISTICS
@@ -32,7 +33,10 @@ from .config import ConfigError
 from .cells import cell_areas
 from .driving import LAT_NAMES, LON_NAMES, climatology, first_name, open_field
 from .layout import HA_BELOW_ONE, OUTPUT_FLAGS, UNIT_LABELS, parameter_label, sections, with_tip
-from .plots import calibration_history_figure, comparison_figure, mark_windows, message_figure, regions_figure, send_figure
+from .plots import (
+    CALIBRATION_WINDOW, VALIDATION_WINDOW, calibration_history_figure, comparison_figure, mark_windows, message_figure,
+    regions_figure, send_figure,
+)
 from .region import region_ranges
 from .runner import NETCDF_LOCK
 from .shapes import ShapeError, areas, outlines, read_shapes
@@ -64,6 +68,7 @@ def calibration_run_card():
                         "to test the calibrated model on years it did not see."), value=False),
         ui.panel_conditional("input.cal_validation", ui.div(
             ui.input_date_range("cal_validation_dates", "Validation window (first and last day)", format="yyyy-mm-dd", width="22rem"),
+            ui.output_ui("cal_windows"),
             ui.tags.ul(
                 ui.tags.li(ui.tags.strong("Calibration window", style="color: #2e9e6b;"), ": the rest of the period the model and "
                            "the data share. The calibration uses only the data of these years: each trial is scored on them, and "
@@ -226,6 +231,139 @@ def paired_span(data, labels):
     shared = set(labels)
     rows = [i for i in range(len(data)) if data.label(i) in shared]
     return (str(pd.Timestamp(data.index["start"].iloc[rows[0]]).date()), str(pd.Timestamp(data.index["end"].iloc[rows[-1]]).date()))
+
+
+@lru_cache(maxsize=64)
+def _observations_at(path, _stamp):
+    return read_observations(path)
+
+
+def _loaded(path):
+    """The observations of a file, read again only when it changes."""
+    return _observations_at(str(path), Path(path).stat().st_mtime_ns)
+
+
+def _period_text(first, last):
+    """e.g. '1980-01 to 1995-12' for whole months, else '1980-01-15 to 1995-12-14'."""
+    first, last = pd.Timestamp(first), pd.Timestamp(last)
+    if first.day == 1 and last == last + pd.offsets.MonthEnd(0):
+        return f"{first:%Y-%m} to {last:%Y-%m}"
+    return f"{first.date()} to {last.date()}"
+
+
+def split_windows(data, period, validation):
+    """How a calibration splits observations as loaded (dated or yearly), as each trial does: first cut to the period
+    simulated (period: (first, last) dates, or None for all), then the validation window ((first, last), or None) taken
+    out (calibration window) or kept (validation window); a value across an end of the window is in neither.
+    {"calibration": [(first, last, values)]: one part, or two around a validation window inside; "validation":
+    (first, last, values) or None; "across": values in neither}; values counts those not missing. Raises DataError if
+    nothing is in the period simulated."""
+    from .calibration_data import select_window
+
+    shared = select_window(data, *period) if period else data
+    if shared.shape == "yearly":
+        years = shared.index["year"].to_numpy()
+        start = np.array([np.datetime64(f"{year}-01-01") for year in years])
+        end = np.array([np.datetime64(f"{year}-12-31") for year in years])
+    elif shared.shape == "dated":
+        start, end = shared.index["start"].to_numpy().astype("datetime64[D]"), shared.index["end"].to_numpy().astype("datetime64[D]")
+    else:
+        raise DataError("only dated or yearly observations have a window in time")
+    finite = np.isfinite(shared.values)
+
+    def part(mask):
+        if not mask.any():
+            return None
+        return str(pd.Timestamp(start[mask].min()).date()), str(pd.Timestamp(end[mask].max()).date()), int((mask & finite).sum())
+
+    if not validation:
+        return {"calibration": [part(np.ones(len(shared), dtype=bool))], "validation": None, "across": 0}
+    first, last = (np.datetime64(pd.Timestamp(day).date(), "D") for day in validation)
+    if shared.shape == "yearly":  # Whole years, as the trials cut them
+        first, last = (np.datetime64(f"{pd.Timestamp(day).year}-{'01-01' if k == 0 else '12-31'}") for k, day in enumerate(validation))
+    before, after, inside = end < first, start > last, (start >= first) & (end <= last)
+    return {"calibration": [p for p in (part(before), part(after)) if p], "validation": part(inside),
+            "across": int((~(before | after | inside) & finite).sum())}
+
+
+def _years(parts):
+    return sum((pd.Timestamp(last) - pd.Timestamp(first)).days + 1 for first, last, _ in parts) / 365.25
+
+
+def windows_said(objectives, period, validation):
+    """[(names, text, warnings, problems)] of how a calibration splits the observations of its objectives (those with
+    the observations as loaded): one item for all if they split alike, else one per group of objectives. names is None
+    for all; text e.g. 'Calibration: 1980-01 to 1995-12 (16 years, 192 values) · Validation: 1996-01 to 2003-12 (8
+    years, 96 values)'; warnings for the user to check; problems that stop the calibration."""
+    said = {}
+    for objective in objectives:
+        if not objective.get("data_raw"):
+            continue
+        try:
+            split = split_windows(_loaded(objective["data_raw"]), period, validation)
+            key = (tuple(split["calibration"]), split["validation"], split["across"])
+        except (DataError, OSError, ValueError) as error:
+            key = ("error", str(error))
+        said.setdefault(key, []).append(objective["name"])
+    items = []
+    for key, names in said.items():
+        who = None if len(said) == 1 else names
+        if key[0] == "error":
+            items.append((who, "", [], [f"{', '.join(names)}: {key[1]}, in the period simulated."]))
+            continue
+        calibration, window, across = key
+        warnings, problems = [], []
+        years = _years(calibration)
+        if calibration:
+            text = (f"Calibration: {' and '.join(_period_text(f, l) for f, l, _ in calibration)} ({years:.3g} years, "
+                    f"{sum(n for *_, n in calibration)} values)")
+        else:
+            text = "Calibration: none"
+            problems.append(f"{', '.join(names)}: the validation window leaves no values to calibrate on.")
+        if validation:
+            if window:
+                text += f" · Validation: {_period_text(*window[:2])} ({_years([window]):.3g} years, {window[2]} values)"
+                if _years([window]) > years > 0:
+                    warnings.append("The validation window is longer than the calibration window: is this the right way round? "
+                                    "The dates given are those of the validation window, kept out of the calibration.")
+            else:
+                text += " · Validation: none"
+                problems.append(f"{', '.join(names)}: no values within the validation window, in the period simulated.")
+        if across:
+            warnings.append(f"{across} value{'s' if across > 1 else ''} across an end of the validation window "
+                            f"{'are' if across > 1 else 'is'} in neither window.")
+        items.append((who, text, warnings, problems))
+    return items
+
+
+def windows_tags(items, empty="Add an objective to see the windows it gives."):
+    """The windows of windows_said as small lines, each named in the colour of its bar in the plots."""
+    if not items:
+        return ui.p(empty, class_="small text-muted mb-1")
+    lines = []
+    for names, text, warnings, problems in items:
+        pieces = []
+        for k, piece in enumerate(text.split(" · ") if text else []):
+            label, rest = piece.split(": ", 1)
+            colour = CALIBRATION_WINDOW if label == "Calibration" else VALIDATION_WINDOW
+            pieces += [" · "] if k else []
+            pieces.append(ui.span(ui.tags.strong(label, style=f"color: {colour};"), f": {rest}"))
+        if pieces:
+            lines.append(ui.p(*([ui.tags.em(f"{', '.join(names)}: ")] if names else []), *pieces, class_="small mb-1"))
+        lines += [ui.p(warning, class_="small text-warning-emphasis mb-1") for warning in warnings]
+        lines += [ui.p(problem, class_="small text-danger mb-1") for problem in problems]
+    return ui.div(*lines, class_="cal-windows")
+
+
+def windows_text(items):
+    """windows_said as plain text, for the pop-ups."""
+    return " ".join(f"{(', '.join(names) + ': ') if names else ''}{text}." + "".join(f" {warning}" for warning in warnings)
+                    for names, text, warnings, _ in items if text)
+
+
+def period_of(period):
+    """(first, last) dates of a setup's period ({start, end}), or None (all its driving data)."""
+    return (str(period["start"]), str(period["end"])) if period else None
 
 
 CALIBRATED_DISTRIBUTIONS = {"uniform": "Uniform", "loguniform": "Log-uniform"}
@@ -609,6 +747,7 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
                 if old:
                     found.append(f"A validation window needs the observations as loaded, which {', '.join(old)} lack: add "
                                  f"{'it' if len(old) == 1 else 'them'} again.")
+                found += [problem for *_, said in windows() for problem in said]
         except ValueError as error:
             found.append(str(error))
         parameters = chosen_parameters()
@@ -640,6 +779,28 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
             if not isinstance(input[key](), int) or input[key]() < 1:
                 found.append(f"{label} must be a positive whole number.")
         return found
+
+    @reactive.calc
+    def windows():
+        """How the calibration as the card says splits the observations of the objectives (windows_said)."""
+        return windows_said(objectives(), period_of(setup().period), validation())
+
+    @render.ui
+    def cal_windows():
+        """The calibration and validation windows as they will be used, as the dates are typed."""
+        try:
+            return windows_tags(windows())
+        except ValueError as error:  # The dates are not complete yet
+            return ui.p(str(error), class_="small text-muted mb-1")
+
+    def record_windows(folder):
+        """The windows of a stored calibration, as plain text ('' if it cannot be read)."""
+        try:
+            record = read_calibration(folder)
+            return windows_text(windows_said(resolved(folder, record)["objectives"], period_of(record["setup"].get("period")),
+                                             record.get("validation")))
+        except (OSError, ValueError, KeyError):
+            return ""
 
     @render.ui
     def cal_run_summary():
@@ -691,6 +852,7 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         folder = make_calibration()
         if folder is not None:
             start(folder)
+            ui.notification_show(f"Running {Path(folder).name}. {record_windows(folder)}", type="message", duration=15)
 
     @reactive.effect
     @reactive.event(input.cal_create)
@@ -703,7 +865,7 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         threads_ = read_calibration(folder)["setup"]["run"]["threads"]
         ui.notification_show(f"Created {Path(folder).name}, not run. It is chosen under Calibrations: press Resume here to run it on "
                              f"this computer, Send it to LEONARDO in Run on LEONARDO (CINECA), or run `mobile calibrate {folder}` ({threads_} "
-                             f"thread{'s' if threads_ > 1 else ''} per run).", type="message", duration=15)
+                             f"thread{'s' if threads_ > 1 else ''} per run). {record_windows(folder)}", type="message", duration=15)
 
     def make_calibration():
         """The folder of a new calibration as the card says, or None after saying what is wrong."""
@@ -871,10 +1033,13 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
                          f"{', …' if len(changed_sliders) > 5 else ''}): the new one takes the sliders as they are")
         if record["setup"]["run"].get("nagent") != agents():
             notes.append(f"it had {record['setup']['run'].get('nagent'):,} agents, the sidebar gives {agents():,}")
+        said = windows_said(taken, period_of(setup().period), window)
         ui.notification_show(ui.TagList(f"Filled from {name} for a new calibration (named {unique_name(name, set(list_names()))}): "
                                         "change what you like, then Create only or Run calibration.",
+                                        windows_tags(said, empty="") if said else None,
                                         ui.tags.ul(*[ui.tags.li(note) for note in notes], class_="mb-0") if notes else None),
-                             type="warning" if notes else "message", duration=None if notes else 10)
+                             type="warning" if notes or any(w or p for *_, w, p in said) else "message",
+                             duration=None if notes else 15)
 
     def list_names():
         root = calibrations_dir(setup().runs_dir)
@@ -962,7 +1127,11 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
                          f"{temperature['gap']} °C; means {', '.join(f'{m:.2f}' for m in temperature['means'])} °C")
         for parameter in record.get("parameters", []):
             lines.append(f"{parameter['name']}: {parameter['distribution']} from {parameter['low']:.4g} to {parameter['high']:.4g}")
-        if record.get("validation"):
+        said = record_windows(folder)
+        if said:
+            lines.append(said + (" The validation window is left out of the calibration; each trial is scored on it too."
+                                 if record.get("validation") else ""))
+        elif record.get("validation"):
             first, last = record["validation"]
             lines.append(f"Validation window {first} to {last}: left out of the calibration, each trial scored on it too")
         status = status_of(folder, record)
