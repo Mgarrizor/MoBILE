@@ -2,6 +2,7 @@
 in the same form as the observations (calibration_data.Observations), so that the same processing steps apply to both."""
 
 import json
+import warnings
 from dataclasses import replace
 from pathlib import Path
 
@@ -161,7 +162,7 @@ def seed_spread(members, steps, others=None, first_note=None):
     """The steps applied to each seed, then the median and the range over the seeds of each value, as in the seed bands
     of the Results tab: the spread of the processed values (e.g. of monthly sums), not of the daily ones. The values are
     the medians, the lowest and highest seeds the columns of BAND."""
-    from .calibration_steps import apply_steps
+    from .calibration_steps import EDGE, apply_steps
 
     processed = [apply_steps(member, steps, others) for member in members]
     first = processed[0]
@@ -170,8 +171,12 @@ def seed_spread(members, steps, others=None, first_note=None):
     values = np.array([member.values for member in processed])
     notes = (first_note or first.notes[0], *first.notes[1:],
              f"median over the {len(members)} seeds, each processed by the steps, with their range (lowest to highest) as a band")
-    return replace(first, values=np.nanmedian(values, axis=0), sd=None,
-                   extra={**first.extra, BAND[0]: np.nanmin(values, axis=0), BAND[1]: np.nanmax(values, axis=0)}, notes=notes)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)  # Periods missing in every seed stay missing
+        extra = {**first.extra, BAND[0]: np.nanmin(values, axis=0), BAND[1]: np.nanmax(values, axis=0)}
+        if any(EDGE in member.extra for member in processed):  # The values a filter cut at the ends: their median too
+            extra[EDGE] = np.nanmedian([member.extra.get(EDGE, np.full(len(first), np.nan)) for member in processed], axis=0)
+        return replace(first, values=np.nanmedian(values, axis=0), sd=None, extra=extra, notes=notes)
 
 
 # Possible drivers of incidence, read from the same run: {name: (label, default statistic)}

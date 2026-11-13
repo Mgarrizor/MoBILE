@@ -268,12 +268,24 @@ The **Data** box:
      mean, moving average.
    - **Frequency filter**: low, high or band pass, with the cut-off periods in days, months or years (a Butterworth filter
      of order 4, run forward and backward, so nothing shifts in time). The cut-off is gradual: half the amplitude is kept
-     at the cut-off period, so to remove the annual cycle cut at about 2 years. The filter starts up at each end: values
-     within about two of the longest periods kept from each end are less reliable, and a note says how far. Missing
+     at the cut-off period, so to remove the annual cycle cut at about 2 years. Missing
    values and missing periods do not stop it: **Interpolate short gaps** fills gaps of up to N values (3 at first) by a
    straight line only for the filter to run, and puts them back as missing after; **Filter each stretch separately**
    interpolates nothing. Either way longer gaps split the series into stretches filtered separately, stretches too
    short for the cut-off stay missing, and the notes and the step say what was done. Data are never filled in.
+
+     **Ends.** The filter starts up at each end of the series (and of each stretch), where its values are off. How far
+     is measured for each filter as set: it is run on 6 test cycles across those it keeps at 90% of their amplitude or
+     more, each at 8 phases, on a series as long, and compared with the same cycles far from the ends (times the
+     filter's gain there). The ends reach as far as the error exceeds **Error kept** (5% of a cycle's amplitude at
+     first). **Cut them** (the default): they are missing, so never compared with the model, and the plots still show
+     them, dotted, over a red band marked "cut". **Keep them**: only a note says how far they reach. Either way the
+     notes give the reach, the test cycles and the largest error. A filter that, once cut, leaves less than two of its
+     longest periods is refused, with the length it needs. As a guide, on monthly values with a 5% error: a low pass at
+     2 years cuts 1 to 2 years at each end; a high pass at 18 months, 20 months; a band of 1.5 to 3 years needs about
+     22 years of values, and a band of 3 to 8 years about 50. Steps saved before the cut keep their ends. Later steps
+     carry the cut: an aggregate period with a value cut is cut too; a transform changes the cut values with the same
+     numbers as the others (e.g. the mean of those kept).
    - **Combine** with another loaded data set of the same coordinates: sum, mean or difference. Load several files to
      combine them; **Data set shown** picks the one whose steps are edited.
 4. **Compare with**, above the plot, draws an earlier stage with the result: the values loaded, or after any step but

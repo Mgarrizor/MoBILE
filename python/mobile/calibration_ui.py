@@ -26,7 +26,7 @@ from .calibration_model import (
 from .calibration_progress import DOING, DONE, TODO, anchor, progress_column
 from .calibration_run_ui import calibration_run_card, driver_controls, paired_span
 from .calibration_steps import (
-    AGGREGATE_PERIODS, COMBINATIONS, FILTER_MISSING, FILTERS, OPERATIONS, SELECTIONS, STATISTICS, STEP_KINDS, TIME_UNITS, TRANSFORMS, apply_steps,
+    AGGREGATE_PERIODS, COMBINATIONS, EDGE, EDGE_ERROR, EDGES, FILTER_MISSING, FILTERS, OPERATIONS, SELECTIONS, STATISTICS, STEP_KINDS, TIME_UNITS, TRANSFORMS, apply_steps,
     default_step, describe,
 )
 from .config import ConfigError
@@ -286,7 +286,7 @@ def step_controls(step, number, count, before, others, prefix=DATA):
         ui.div(button("up", "↑", "Move up", number == 1), button("down", "↓", "Move down", number == count), button("remove", "×", "Remove")),
         class_="d-flex justify-content-between align-items-center mb-1",
     )
-    columns = list(before.extra) if before is not None else []
+    columns = [column for column in before.extra if column != EDGE] if before is not None else []  # Not the values cut at the ends
     if kind == "aggregate":
         body = [ui.layout_columns(
             ui.input_select(sid("period"), "Into", AGGREGATE_PERIODS, selected=step["period"]),
@@ -330,8 +330,8 @@ def step_controls(step, number, count, before, others, prefix=DATA):
         body = [ui.input_select(sid("type"), with_tip("Filter", "A Butterworth filter of order 4, run forward and backward, so "
                                 "nothing shifts in time. The cut-off is gradual: at the cut-off period half the amplitude is kept, so "
                                 "to remove the annual cycle with a low pass, cut at about 2 years. The filter starts up at each "
-                                "end: values within about two of the longest periods kept from each end are less reliable, so a "
-                                "band of several years needs a series of decades."), FILTERS, selected=step["type"]),
+                                "end of the series, where its values are less reliable: see Ends. A narrow band, or one of "
+                                "several years, needs a series of decades."), FILTERS, selected=step["type"]),
                 ui.layout_columns(
                     ui.panel_conditional(f"input.{sid('type')} !== 'low'", ui.input_numeric(sid("short"), "Shorter period", value=step["short"])),
                     ui.panel_conditional(f"input.{sid('type')} !== 'high'", ui.input_numeric(sid("long"), "Longer period", value=step["long"])),
@@ -347,6 +347,20 @@ def step_controls(step, number, count, before, others, prefix=DATA):
                                                                     "(e.g. months), bridged for the filter only and left missing after. "
                                                                     "A longer gap splits the series into stretches filtered separately."),
                                                                     value=step.get("max_gap", 3), min=1, step=1)),
+                    col_widths=(9, 3), fill=False),
+                ui.layout_columns(
+                    ui.input_select(sid("edges"), with_tip("Ends", "At each end of the series (and of each stretch between "
+                                    "longer gaps) the filter starts up, and its values are off. How far: the filter is run on test "
+                                    "cycles across those it keeps (at 90% of their amplitude or more), at several phases, on a series "
+                                    "as long, and compared with the same cycles far from the ends; the ends reach as far as the error "
+                                    "exceeds the share below of a cycle's amplitude. "
+                                    "Cut them: they are missing, so never compared with the model, and shown shaded in red in the "
+                                    "plots. Keep them: only a note says how far they reach. The notes give the numbers."),
+                                    EDGES, selected=step.get("edges", "keep"), width="100%"),
+                    when("edges", "cut", ui.input_numeric(sid("edge_error"), with_tip("Error kept (%)", "The largest start-up "
+                                                          "error kept, as a percentage of the amplitude of a cycle the filter "
+                                                          "keeps: smaller cuts more."),
+                                                          value=round(100 * float(step.get("edge_error", EDGE_ERROR)), 2), min=0.5, max=50, step=0.5)),
                     col_widths=(9, 3), fill=False)]
     else:
         body = [ui.layout_columns(
@@ -384,6 +398,7 @@ def read_step(step, value):
     elif kind == "filter":
         take("type"), take("short", lambda v: v or 0.0), take("long", lambda v: v or 0.0), take("unit")
         take("missing"), take("max_gap", lambda v: int(v) if v else 0)
+        take("edges"), take("edge_error", lambda v: float(v) / 100 if v else EDGE_ERROR)
     else:
         take("other", lambda v: None if v == NONE else v), take("how")
     return result

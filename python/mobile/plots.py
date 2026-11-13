@@ -2,6 +2,7 @@
 
 import json
 import re
+from dataclasses import replace
 
 import numpy as np
 import pandas as pd
@@ -11,6 +12,7 @@ from plotly.colors import sample_colorscale
 from plotly.subplots import make_subplots
 
 from .basemap import PADDING_DEGREES, cell_size
+from .calibration_steps import EDGE
 from .grid import mask_like
 
 
@@ -548,9 +550,48 @@ def _spread(observations, rows=None):
     return None
 
 
+CUT_FILL = "rgba(214, 40, 40, 0.10)"  # Behind the values a filter cut at its ends: shown, not compared
+CUT_TEXT = "#b42318"
+CUT_HOVER = ("Cut: here the frequency filter starts up, and its error exceeds the share<br>of a cycle's amplitude set in "
+             "the step (the notes give how far and why).<br>Shown, but not compared with the model.")
+
+
+def _edge_trace(observations, colour, label, x, labels):
+    """The values a filter cut at the ends of the series, dotted, in the colour of the series; None if there are none."""
+    ends = observations.extra.get(EDGE)
+    if ends is None or not np.isfinite(ends).any():
+        return None
+    return go.Scatter(x=x, y=ends, mode="lines+markers", line={"color": colour, "width": 1.2, "dash": "dot"},
+                      marker={"size": 3}, opacity=0.75, customdata=labels, name=f"{label}: cut at the ends", legendgroup=label,
+                      hovertemplate=f"{label}, %{{customdata}}: %{{y:.4g}} (cut: filter start-up)<extra></extra>")
+
+
+def cut_spans(observations):
+    """[(first day, day after the last)] of each run of values a filter cut at the ends (dated values only)."""
+    ends = observations.extra.get(EDGE)
+    if observations.shape != "dated" or ends is None:
+        return []
+    start, end = pd.to_datetime(observations.index["start"]), pd.to_datetime(observations.index["end"])
+    edges = np.diff(np.r_[0, np.isfinite(ends).astype(int), 0])
+    return [(start.iloc[a], end.iloc[b - 1] + pd.Timedelta(days=1)) for a, b in zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1))]
+
+
+def mark_cut(figure, *series, row=None):
+    """Shade in red, behind the traces, the periods a filter cut at the ends of any of series, each with a small 'cut'
+    at its top that says why on hover."""
+    spans = sorted({span for observations in series for span in cut_spans(observations)})
+    where = {"row": row, "col": 1} if row else {}
+    for x0, x1 in spans:
+        figure.add_vrect(x0=x0, x1=x1, fillcolor=CUT_FILL, line_width=0, layer="below", **where)
+        figure.add_annotation(x=x0 + (x1 - x0) / 2, y=1, yref=f"{'y' if not row or row == 1 else f'y{row}'} domain",
+                              xref="x" if not row or row == 1 else f"x{row}", text="cut", showarrow=False, yanchor="top",
+                              font={"size": 10, "color": CUT_TEXT}, hovertext=CUT_HOVER)
+    return figure
+
+
 def _observations_traces(observations, colour, label, faint=False):
-    """The traces of observations: a line over time for dated values, with their uncertainty as a shaded band; bars for
-    the other shapes, with error bars."""
+    """The traces of observations: a line over time for dated values, with their uncertainty as a shaded band and the
+    values a filter cut at the ends dotted; bars for the other shapes, with error bars."""
     n = len(observations)
     labels = [observations.label(i) for i in range(n)]
     if observations.shape == "dated":
@@ -559,10 +600,12 @@ def _observations_traces(observations, colour, label, faint=False):
         x = start + (end - start) / 2
         spread = None if faint else _spread(observations)
         band = _band(x, spread[0], spread[1], colour, label, spread[2]) if spread else []
-        return [*band, go.Scatter(x=x, y=observations.values, mode="lines+markers",
-                                  line={"color": colour, "width": 1 if faint else 1.5}, marker={"size": 3 if faint or n > 60 else 6},
-                                  customdata=labels, name=label, opacity=0.8 if faint else 1,
-                                  hovertemplate=f"{label}, %{{customdata}}: %{{y:.4g}}<extra></extra>")]
+        ends = None if faint else _edge_trace(observations, colour, label, x, labels)
+        return [*band, *([ends] if ends else []),
+                go.Scatter(x=x, y=observations.values, mode="lines+markers",
+                           line={"color": colour, "width": 1 if faint else 1.5}, marker={"size": 3 if faint or n > 60 else 6},
+                           customdata=labels, name=label, opacity=0.8 if faint else 1,
+                           hovertemplate=f"{label}, %{{customdata}}: %{{y:.4g}}<extra></extra>")]
     error = None if observations.sd is None or faint else {"type": "data", "array": observations.sd, "color": INTERVAL, "thickness": 1.5}
     return [go.Bar(x=labels, y=observations.values, marker={"color": colour}, error_y=error, name=label,
                    hovertemplate=f"{label}, %{{x}}: %{{y:.4g}}<extra></extra>")]
@@ -582,7 +625,7 @@ def observations_figure(observations, name, compare=None, compare_label=""):
         figure.update_layout(showlegend=False, height=ONE_PANEL, meta={"view": "observations"})
         if observations.shape != "dated":
             figure.update_xaxes(type="category")
-        return figure
+        return mark_cut(figure, observations)
     if compare.shape == observations.shape and compare.units == observations.units:
         figure = go.Figure([*_observations_traces(compare, COMPARED, compare_label, faint=True),
                             *_observations_traces(observations, OBSERVED, "After all steps")], layout=_base_layout(title=title))
@@ -593,7 +636,7 @@ def observations_figure(observations, name, compare=None, compare_label=""):
                              legend={"orientation": "h", "x": 0.5, "xanchor": "center", "y": -0.22, "yanchor": "top"})
         if observations.shape != "dated":
             figure.update_xaxes(type="category")
-        return figure
+        return mark_cut(figure, observations)
     shared = observations.shape == compare.shape == "dated"
     figure = make_subplots(rows=2, cols=1, shared_xaxes=shared, vertical_spacing=0.16 if not shared else 0.1,
                            subplot_titles=[f"After all steps: {observations.name}", f"{compare_label}: {compare.name}"])
@@ -609,7 +652,8 @@ def observations_figure(observations, name, compare=None, compare_label=""):
                             title_text=X_TITLES[data.shape] if row == 2 or not shared else None,
                             type="category" if data.shape != "dated" else None)
     figure.update_annotations(font={"size": 12})
-    return figure
+    mark_cut(figure, observations, row=1)
+    return mark_cut(figure, compare, row=2)
 
 
 MODELLED = "#e34948"  # The second categorical colour: the model, beside the observations in the first
@@ -690,6 +734,14 @@ def comparison_figure(model, data, labels, model_values, data_values, scale=Fals
                   go.Scatter(x=x, y=model_values * factor, mode="lines+markers", line={"color": MODELLED, "width": 1.5},
                              marker={"size": 4}, name=model_label, customdata=labels,
                              hovertemplate="Model, %{customdata}: %{y:.4g}<extra></extra>")]
+        # The values a filter cut at the ends, of each: dotted, not compared
+        for series, colour, label, scaled in ((data, OBSERVED, "Data", 1.0), (model, MODELLED, "Model", factor)):
+            ends = series.extra.get(EDGE)
+            if ends is not None and np.isfinite(ends).any():
+                start = pd.to_datetime(series.index["start"]).to_numpy()
+                at = start + (pd.to_datetime(series.index["end"]).to_numpy() - start) / 2
+                traces.append(_edge_trace(replace(series, extra={EDGE: ends * scaled}), colour, label, at,
+                                          [series.label(i) for i in range(len(series))]))
     else:
         traces = [go.Bar(x=labels, y=data_values, marker={"color": OBSERVED}, name=f"Data: {data.name}"),
                   go.Bar(x=labels, y=model_values * factor, marker={"color": MODELLED}, name=model_label)]
@@ -701,7 +753,7 @@ def comparison_figure(model, data, labels, model_values, data_values, scale=Fals
                              legend={"orientation": "h", "x": 0.5, "xanchor": "center", "y": -0.22, "yanchor": "top"})
         if data.shape != "dated":
             figure.update_xaxes(type="category")
-        return figure
+        return mark_cut(figure, model, data)
     rows = 1 + len(drivers)
     panels = [(name, label, _panel(observations)) for name, label, observations in drivers]
     shared = all(series.shape == data.shape for _, _, panel in panels for _, series in panel)
@@ -748,7 +800,7 @@ def comparison_figure(model, data, labels, model_values, data_values, scale=Fals
     if data.shape != "dated":
         figure.update_xaxes(type="category")
     figure.update_annotations(font={"size": 12})
-    return figure
+    return mark_cut(figure, model, data, row=1)
 
 
 def message_figure(text):
