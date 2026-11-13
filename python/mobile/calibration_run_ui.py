@@ -32,7 +32,9 @@ from .cluster_ui import cluster_section, cluster_server
 from .config import ConfigError
 from .cells import cell_areas
 from .driving import LAT_NAMES, LON_NAMES, climatology, first_name, open_field
-from .layout import HA_BELOW_ONE, OUTPUT_FLAGS, UNIT_LABELS, parameter_label, sections, with_tip
+from .layout import (
+    HA_BELOW_ONE, OUTPUT_FLAGS, UNIT_LABELS, needed_outputs, output_label, output_switch_id, parameter_label, sections, with_tip,
+)
 from .plots import (
     CALIBRATION_WINDOW, VALIDATION_WINDOW, calibration_history_figure, comparison_figure, mark_windows, message_figure,
     regions_figure, send_figure,
@@ -45,8 +47,9 @@ from .sensitivity_runs import StudyState
 from .setup import to_dict
 from .outcome import run_name_problem
 
-DRIVER_FLAGS = ("out_vect", "out_vecinfc")  # Written by every run of a calibration, for its possible drivers
-REGIME_FLAGS = ("out_I_new",)  # And the new cases, from which the regime of every trial is measured (calibration_engine.regime)
+OPTIONAL_OUTPUTS = (("out_I_new", "the regime of each trial (epidemic or endemic) is not measured"),
+                    ("out_vect", "the drivers of a trial cannot show the vector density"),
+                    ("out_vecinfc", "the drivers of a trial cannot show the infective vector density"))  # Used if written
 MAX_CELLS = 20  # Temperature offsets are calibrated for at most this many cells or regions
 MAX_SIMULATED = 5000  # And the cells of the setup, grouped in regions or not, at most this many
 REFRESH_SECONDS = 3  # How often the progress of a calibration is drawn again while it runs
@@ -500,10 +503,12 @@ def _clock(seconds):
     return f"{seconds // 3600}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
 
 
-def calibration_run_server(input, output, session, setup, objectives, overrides, selected_output, busy, agents, ha, slider_setup):
-    """The server side of the card. objectives() are those added in the comparison card; busy() is true while a single run
-    or an analysis goes on; slider_setup() the sliders, with their ranges and starts. Returns running() and cancel() for the
-    rest of the app."""
+def calibration_run_server(input, output, session, setup, objectives, overrides, selected_output, not_applied, busy, agents, ha,
+                           slider_setup):
+    """The server side of the card. objectives() are those added in the comparison card; overrides() and selected_output()
+    the parameters and outputs applied, which every run of a calibration uses, and not_applied() why they cannot be used, or
+    None; busy() is true while a single run or an analysis goes on; slider_setup() the sliders, with their ranges and starts.
+    Returns running() and cancel() for the rest of the app."""
     state = StudyState()
 
     @output(suspend_when_hidden=False)
@@ -741,6 +746,16 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         found = []
         if not objectives():
             found.append("Add at least one objective (in Model and data, above).")
+        needed, unknown = needed_outputs(objectives())
+        if unknown:
+            found.append(f"{', '.join(unknown)}: {'its variable is' if len(unknown) == 1 else 'their variables are'} not written by "
+                         f"any output of the model.")
+        missing = [output_label(flag) for flag in needed if flag not in selected_output()]
+        if missing:
+            found.append(f"The objectives need {', '.join(missing)}, not among the outputs applied: tick "
+                         f"{'it' if len(missing) == 1 else 'them'} and press Apply parameters & outputs (tab 2. Parameters & SA).")
+        elif not_applied():
+            found.append(not_applied())
         try:
             if validation() is not None:
                 old = [o["name"] for o in objectives() if not o.get("data_raw")]
@@ -823,10 +838,14 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
             few = ui.p(f"{startup} start-up trials, fewer than the {parallel} runs at the same time: the sampler would suggest "
                        f"trials while almost none have ended. Use at least {parallel}; on a cluster, at least its runs at the same "
                        "time (e.g. 16 on a LEONARDO DCGP node).", class_="small text-warning-emphasis mb-1")
+        written = [output_label(flag) for flag in selected_output()]
+        unused = [f"without {output_label(flag)}, {what}" for flag, what in OPTIONAL_OUTPUTS if flag not in selected_output()]
+        outputs = ui.p(f"Each run writes the outputs applied: {', '.join(written) or 'none'} (and rainfall and temperature)."
+                       + (f" {'; '.join(unused).capitalize()}." if unused else ""), class_="small text-muted mb-1")
         return ui.TagList(ui.p(f"{trials} trials × {seeds} seed{'s' if seeds > 1 else ''} = {trials * seeds} runs, "
                                f"{len(objectives())} objective{'s' if len(objectives()) > 1 else ''}, "
                                f"{offsets} offset{'s' if offsets != 1 else ''}, {len(chosen_parameters())} model parameter"
-                               f"{'s' if len(chosen_parameters()) != 1 else ''}.", class_="mb-1"), use, few)
+                               f"{'s' if len(chosen_parameters()) != 1 else ''}.", class_="mb-1"), outputs, use, few)
 
     @ui.bind_task_button(button_id="cal_run")
     @reactive.extended_task
@@ -881,11 +900,7 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         if found:
             ui.notification_show(" ".join(found), type="error")
             return
-        # The outputs of the Outputs card, those the objectives were made from, the vector densities for the drivers and
-        # the new cases for the regime
-        wanted = (set(selected_output()) | {flag for objective in objectives() for flag in (objective.get("output") or [])}
-                  | set(DRIVER_FLAGS) | set(REGIME_FLAGS))
-        output = tuple(flag for group in OUTPUT_FLAGS.values() for flag, _, _ in group if flag in wanted)
+        output = tuple(selected_output())  # Only the outputs applied, which include those the objectives need (problems)
         temperature = {"cells": [{"lat": u["lat"], "lon": u["lon"], **({"members": u["members"]} if "members" in u else {})}
                                  for u in chosen_cells()],
                        "first": (input.cal_dt_low(), input.cal_dt_high()), "gap": gap_range(),
@@ -957,10 +972,17 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
             if not all(Path(path).is_file() for path in files):
                 missing.append(objective["name"])
                 continue
-            taken.append({**objective, "output": record.get("output"),
+            taken.append({**objective,
                           "describe": f"{objective['metric'].replace('_', ' ')} of {objective['variable']}, "
                                       f"{len(objective.get('steps') or [])} model steps: from the template {name}"})
         objectives.set(taken)
+        # The outputs: those its objectives need, the others off, to be applied in tab 2
+        needed, _ = needed_outputs(taken)
+        for group in OUTPUT_FLAGS.values():
+            for flag, _, _ in group:
+                ui.update_switch(output_switch_id(flag), value=flag in needed)
+        notes.append(f"outputs switched to those its objectives need ({', '.join(output_label(flag) for flag in needed) or 'none'}), "
+                     f"the others off: press Apply parameters & outputs in tab 2")
         if missing:
             notes.append(f"objectives left out, their observations are no longer where they were: {', '.join(missing)}")
         # Validation window

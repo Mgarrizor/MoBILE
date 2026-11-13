@@ -473,3 +473,18 @@ function markParameters() {
 $(document).on('shiny:inputchanged', function(event) { if (event.name.startsWith('param_')) setTimeout(markParameters, 0); });
 $(document).on('shiny:value', function(event) { if (event.name === 'parameter_sliders') setTimeout(markParameters, 0); });
 """
+
+# The dot before the name of a tab: green (applied), amber (changed, not applied) or red (a problem), with what it means on
+# hover; {tab: [state, text]} from the server
+TAB_DOTS = """
+Shiny.addCustomMessageHandler('tab_dots', function(states) {
+  const colours = {applied: '#198754', changed: '#e0a100', problem: '#dc3545'};
+  for (const [tab, [state, text]] of Object.entries(states)) {
+    const dot = document.getElementById('tab_dot_' + tab);
+    if (!dot) continue;
+    dot.style.background = colours[state];
+    dot.title = text;
+    dot.setAttribute('aria-label', text);
+  }
+});
+"""

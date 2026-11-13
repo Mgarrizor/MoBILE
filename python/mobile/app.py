@@ -16,8 +16,8 @@ from .driving import climatology, field_limits, open_field
 from .cells import CellSizeError
 from .grid import extent_key, load_grid, mask_like, read_grid
 from .layout import (
-    ANALYSIS_TABS, ASSETS, GUI_OUTPUT, HA_BELOW_ONE, OUTPUT_FLAGS, funders, help_tab, no_run_yet, output_groups, output_switch_id,
-    page_header, page_title, player_controls, slider_grid, slider_tabs, with_tip,
+    ANALYSIS_TABS, ASSETS, GUI_OUTPUT, HA_BELOW_ONE, OUTPUT_FLAGS, funders, help_tab, needed_outputs, no_run_yet, output_groups,
+    output_label, output_switch_id, page_header, page_title, player_controls, slider_grid, slider_tabs, tab_title, with_tip,
 )
 from .outcome import RunState, load_outcome, run_label, run_model, run_name_problem
 from .parameters import shown_parameters, slider_start, to_model, to_shown
@@ -34,7 +34,8 @@ from .calibration_run_ui import calibration_run_server
 from .calibration_ui import calibration_server, calibration_tab
 from .sensitivity_ui import sensitivity_card, sensitivity_server
 from .scripts import (
-    BROWSER_HANDLER, CLOSED_HANDLER, DOTS_HANDLER, PARAMETER_MARKS, PARAMETER_STYLE, PLAYER, PLOT_HANDLER, SIDEBAR_FIT, SLIDER_FORMAT, THEME, PAGE_STYLE,
+    BROWSER_HANDLER, CLOSED_HANDLER, DOTS_HANDLER, PARAMETER_MARKS, PARAMETER_STYLE, PLAYER, PLOT_HANDLER, SIDEBAR_FIT, SLIDER_FORMAT, TAB_DOTS, THEME,
+    PAGE_STYLE,
 )
 from .shapes import ShapeError, areas, name_field, outlines, read_shapes
 from .setup import (
@@ -59,6 +60,16 @@ REGION_MAP_TITLES = {
     "box": "Drag a rectangle to choose the subregion",
     "point": "Click a cell to choose the point",
 }
+
+
+def selected_flags(flags):
+    """The output flags given, in the order of the Outputs card."""
+    return tuple(flag for group in OUTPUT_FLAGS.values() for flag, _, _ in group if flag in flags)
+
+
+def comparable(config):
+    """A setup without the agents and seed, which the sidebar sets for each run: to tell whether the Setup tab is applied."""
+    return replace(config, run={**config.run, "nagent": 0, "seed": 0})
 
 
 def create_app(config):
@@ -111,12 +122,13 @@ def create_app(config):
             ui.tags.script(ui.HTML(BROWSER_HANDLER)),
             ui.tags.script(ui.HTML(SIDEBAR_FIT)),
             ui.tags.script(ui.HTML(DOTS_HANDLER)),
+            ui.tags.script(ui.HTML(TAB_DOTS)),
         ),
         ui.output_ui("status"),
         ui.navset_tab(
-            ui.nav_panel("1. Setup", setup_tab(config), value="setup"),
+            ui.nav_panel(tab_title("1. Setup", "setup"), setup_tab(config), value="setup"),
             ui.nav_panel(
-                "2. Parameters & SA",
+                tab_title("2. Parameters & SA", "parameters"),
                 ui.layout_columns(
                     ui.card(
                         ui.card_header("Parameters for single runs"),
@@ -126,12 +138,19 @@ def create_app(config):
                     ),
                     ui.card(
                         ui.card_header("Outputs"),
-                        ui.p("What the next run writes. Rainfall and temperature are always written; fields by age give large files.",
-                             class_="small text-muted mb-1"),
+                        ui.p("What the next run writes: only what is ticked. Rainfall and temperature are always written; fields by "
+                             "age give large files.", class_="small text-muted mb-1"),
+                        ui.output_ui("outputs_needed"),
                         *output_groups(initial_output),
                     ),
                     col_widths=(7, 5),
                     class_="mt-3",
+                ),
+                ui.div(
+                    ui.input_action_button("apply_parameters", with_tip("Apply parameters & outputs", "Runs, sensitivity analyses "
+                                           "and calibrations use the parameters and outputs applied."), class_="btn-primary btn-lg"),
+                    ui.output_ui("parameters_state"),
+                    class_="mt-3 text-center",
                 ),
                 sensitivity_card(),
                 value="parameters",
@@ -231,8 +250,7 @@ def create_app(config):
             return page_header(setup())
 
         def selected_output():
-            flags = [flag for group in OUTPUT_FLAGS.values() for flag, _, _ in group]
-            return tuple(flag for flag in flags if input[output_switch_id(flag)]())
+            return selected_flags({flag for group in OUTPUT_FLAGS.values() for flag, _, _ in group if input[output_switch_id(flag)]()})
 
         def overrides():
             """Sliders moved from their start, in the units of the model; the others keep the compiled default."""
@@ -251,8 +269,76 @@ def create_app(config):
         def grid_key():
             return extent_key(grid()["lon"], grid()["lat"])
 
+        # The parameters and outputs applied: what runs, analyses and calibrations use (Apply parameters & outputs)
+        applied = reactive.value({"overrides": {}, "output": selected_flags(initial_output)})
+
+        def applied_overrides():
+            return applied()["overrides"]
+
+        def applied_output():
+            return applied()["output"]
+
+        @reactive.calc
+        def parameters_problems():
+            """What makes the parameters and outputs shown invalid: an output an objective needs not ticked."""
+            needed, _ = needed_outputs(calibration.objectives())
+            shown = set(selected_output())
+            return [f"Tick {output_label(flag)}: needed by {', '.join(names)}" for flag, names in needed.items() if flag not in shown]
+
+        @reactive.calc
+        def parameters_changed():
+            return overrides() != applied_overrides() or selected_output() != applied_output()
+
+        def not_applied():
+            """Why nothing can run with the parameters and outputs shown, or None."""
+            if parameters_problems() or parameters_changed():
+                return ("The parameters & outputs shown are not applied: press Apply parameters & outputs (tab 2. Parameters & SA) "
+                        "first.")
+            return None
+
+        @reactive.effect
+        @reactive.event(input.apply_parameters)
+        def apply_parameters():
+            if parameters_problems():
+                ui.notification_show(". ".join(parameters_problems()) + ".", type="error")
+                return
+            applied.set({"overrides": overrides(), "output": selected_output()})
+            ui.notification_show("Parameters & outputs applied.", type="message", duration=3)
+            ui.update_navs("tab", selected="results")
+
+        @render.ui
+        def parameters_state():
+            if parameters_problems():
+                return ui.p("Invalid: " + ". ".join(parameters_problems()) + ".", class_="small text-danger mt-1 mb-0")
+            if parameters_changed():
+                return ui.p("Changed set, not applied.", class_="small text-warning-emphasis mt-1 mb-0")
+            moved, written = len(applied_overrides()), [output_label(flag) for flag in applied_output()]
+            return ui.p(f"Applied set: {moved} parameter{'s' * (moved != 1)} changed from the default; outputs: "
+                        f"{', '.join(written) or 'none'} (and rainfall and temperature).", class_="small text-muted mt-1 mb-0")
+
+        @render.ui
+        def outputs_needed():
+            needed, unknown = needed_outputs(calibration.objectives())
+            if not needed and not unknown:
+                return None
+            shown = set(selected_output())
+            lines = [ui.tags.li(f"{output_label(flag)}: needed by {', '.join(names)}",
+                                class_="text-danger" if flag not in shown else None) for flag, names in needed.items()]
+            lines += [ui.tags.li(f"{name}: its variable is not written by any of these outputs", class_="text-danger") for name in unknown]
+            return ui.div(ui.tags.strong("For the calibration's objectives", class_="small"), ui.tags.ul(*lines, class_="small mb-1"))
+
+        @reactive.effect
+        async def send_tab_dots():
+            new, problems = typed_setup()
+            same = new is not None and comparable(new) == comparable(setup())
+            setup_state = (["problem", "Problem in setup"] if problems else
+                           ["applied", "Applied setup"] if same else ["changed", "Not applied"])
+            parameters = (["problem", "Invalid"] if parameters_problems() else
+                          ["changed", "Changed set, not applied"] if parameters_changed() else ["applied", "Applied set"])
+            await session.send_custom_message("tab_dots", {"setup": setup_state, "parameters": parameters})
+
         analysis = sensitivity_server(
-            input, output, session, setup, slider_setup, overrides, selected_output,
+            input, output, session, setup, slider_setup, applied_overrides, applied_output, not_applied,
             lambda: run_task.status() == "running" or calibrating.running(),  # calibrating is defined further down
             lambda: agents(), lambda: input.ha(),  # agents is defined further down
         )
@@ -343,11 +429,14 @@ def create_app(config):
             if input.ha() < 1:
                 ui.notification_show(HA_BELOW_ONE, type="error")
                 return
+            if not_applied():
+                ui.notification_show(not_applied(), type="error")
+                return
             if analysis.running() or calibrating.running():
                 ui.notification_show("An analysis or calibration is running: wait for it, or cancel it, before a single run.", type="warning")
                 return
             try:
-                run_config = replace(setup(), params={**setup().params, **overrides()}, output=selected_output()).with_run(nagent=nagent, seed=seed)
+                run_config = replace(setup(), params={**setup().params, **applied_overrides()}, output=applied_output()).with_run(nagent=nagent, seed=seed)
             except ConfigError as error:
                 ui.notification_show(str(error), type="error")
                 return
@@ -477,6 +566,8 @@ def create_app(config):
             for group in OUTPUT_FLAGS.values():
                 for flag, _, _ in group:
                     ui.update_switch(output_switch_id(flag), value=flag in written)
+            # Applied as the setup is: the parameters and outputs the results shown were made with
+            applied.set({"overrides": dict(outcome.overrides), "output": selected_flags(written)})
 
         @reactive.effect
         @reactive.event(input.reset)
@@ -539,22 +630,16 @@ def create_app(config):
             ui.update_switch("setup_counterfactual", value=config.inputs.get("counterfactual") == 1)
             ui.update_text("setup_shapes_file", value=(config.shapes or {}).get("file", ""))
 
-        @reactive.effect
-        @reactive.event(input.apply_setup)
-        def apply_setup():
-            if run_task.status() == "running" or analysis.running() or calibrating.running():
-                ui.notification_show("Wait for the run, analysis or calibration to finish, or cancel it, before changing the setup.",
-                                     type="warning")
-                return
+        @reactive.calc
+        def typed_setup():
+            """(the setup as the boxes of the Setup tab say, or None, and what stops it being applied)."""
             typed = typed_days()
             if typed is not None and typed[2]:
-                setup_problem.set([f"Period: {typed[2]}"])
-                return
+                return None, [f"Period: {typed[2]}"]
             # Also the whole driving data, which the configuration does not count
             spin_up = spin_up_problem(int(input.setup_spin_up()), typed and (typed[1] - typed[0]).days + 1)
             if spin_up:
-                setup_problem.set([f"Period: {spin_up}"])
-                return
+                return None, [f"Period: {spin_up}"]
             period = None
             if typed is not None and (typed[0], typed[1]) != tuple(parse_day(day) for day in driving_span()):
                 period = {"start": typed[0].isoformat(), "end": typed[1].isoformat()}
@@ -573,11 +658,22 @@ def create_app(config):
                 new = from_fields(setup().mobile, input.setup_project(), input.setup_runs_dir(), run, files, typed_region(), period,
                                   typed_age(), typed_shapes())
             except ConfigError as error:
-                setup_problem.set(setup_problems(error))
-                return
+                return None, setup_problems(error)
             problem = typed_region_grid()[2]
             if new.region is not None and problem:
-                setup_problem.set([f"Region: {problem}"])
+                return None, [f"Region: {problem}"]
+            return new, []
+
+        @reactive.effect
+        @reactive.event(input.apply_setup)
+        def apply_setup():
+            if run_task.status() == "running" or analysis.running() or calibrating.running():
+                ui.notification_show("Wait for the run, analysis or calibration to finish, or cancel it, before changing the setup.",
+                                     type="warning")
+                return
+            new, problems = typed_setup()
+            if problems:
+                setup_problem.set(problems)
                 return
             problems = driving_problems(new.inputs)
             if problems:
@@ -1152,7 +1248,7 @@ def create_app(config):
         browse_button("setup_shapes_file", "shape")
         calibration = calibration_server(input, output, session, setup)
         calibrating = calibration_run_server(
-            input, output, session, setup, calibration.objectives, overrides, selected_output,
+            input, output, session, setup, calibration.objectives, applied_overrides, applied_output, not_applied,
             lambda: run_task.status() == "running" or analysis.running(), lambda: agents(), lambda: input.ha(), slider_setup,
         )
         progress_server(input, calibration.prepared, calibrating.what, calibrating.stored, calibration.activity,
