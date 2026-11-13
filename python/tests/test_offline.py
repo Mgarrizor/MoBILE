@@ -3991,5 +3991,39 @@ class TestObjectiveRecipes(unittest.TestCase):
         values = np.log(self.cases(seed=1) + 1e-5)  # All negative
         self.assertIsNone(metrics(values, values * 1.1)["rmse_relative"])
 
+
+class TestOutputsNeeded(unittest.TestCase):
+    """The outputs a variable of the output file needs, checked against the model's own writer, and those objectives need."""
+
+    def test_against_the_model(self):
+        from mobile.layout import OUTPUT_FLAGS, flags_of
+        source = Path(__file__).resolve().parents[2] / "src" / "mo_netcdf.f90"
+        if not source.is_file():
+            self.skipTest("no model source")
+        known = {flag for flags in OUTPUT_FLAGS.values() for flag, _, _ in flags}
+        found, condition = [], set()
+        for line in source.read_text().splitlines():
+            if re.match(r"\s*(else\s+)?if\s*\(", line) and "out_" in line:
+                condition = set(re.findall(r"\b(out_\w+)\b", line))
+            elif re.match(r"\s*end\s*if\b", line):
+                condition = set()
+            name = re.search(r"nf90_def_var\(.*name\s*=\s*\"(\w+)\"", line)
+            if name and condition & known:
+                found.append((name.group(1), condition & known))
+        self.assertGreater(len(found), 20)
+        for name, flags in found:
+            self.assertEqual(set(flags_of(name) or ()), flags, name)
+        self.assertEqual(flags_of("Inew_5-14"), ("out_Ia_new",))
+        self.assertEqual(flags_of("t2m"), ())  # Always written
+        self.assertIsNone(flags_of("something_else"))
+
+    def test_objectives(self):
+        from mobile.layout import needed_outputs, output_label
+        needed, unknown = needed_outputs([{"name": "a", "variable": "Inew"}, {"name": "b", "variable": "Inew"},
+                                          {"name": "c", "variable": "Inew_bulk"}, {"name": "d", "variable": "x"}])
+        self.assertEqual(needed, {"out_I_new": ["a", "b", "c"], "out_Ia_new": ["c"]})
+        self.assertEqual(unknown, ["d"])
+        self.assertEqual((output_label("out_I_new"), output_label("out_Ia_new")), ("New symptomatic cases", "New symptomatic cases (by age)"))
+
 if __name__ == "__main__":
     unittest.main()

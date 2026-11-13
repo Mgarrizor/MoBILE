@@ -30,9 +30,8 @@ from .calibration_steps import (
     STATISTICS, STEP_KINDS, TIME_UNITS, TRANSFORMS, apply_steps, default_step, describe, recipe_steps,
 )
 from .config import ConfigError
-from .layout import OPTUNA_URL, with_tip
+from .layout import OPTUNA_URL, flags_of, output_label, output_switch_id, with_tip
 from .plots import comparison_figure, mark_windows, message_figure, observations_figure, send_figure
-from .results import read_run
 from .setup import typed_path
 
 NONE = "__none__"  # Menu entry for "no column"
@@ -73,11 +72,11 @@ def _how_to_calibrate():
     """The steps of a calibration, in the order of the tab."""
     steps = [
         ui.TagList(ui.tags.strong("Apply the setup"), " in tab 1: the driving files, region and period. The calibration runs "
-                   "the model with it, the HA and seed of the sidebar, and the parameters of the sliders."),
+                   "the model with it, the HA and seed of the sidebar, and the parameters and outputs applied in tab 2."),
         ui.TagList(ui.tags.strong("Run the model once"), " from the sidebar, with the output you want to compare ticked in the "
                    "Outputs card (e.g. New symptomatic cases). Any finished run with that output will do, also an earlier one or one "
-                   "from another folder: it is only used to build the objectives and check them, and its outputs say which "
-                   "outputs the runs of the calibration must write."),
+                   "from another folder: it is only used to build the objectives and check them. Adding an objective ticks the "
+                   "output it needs in the Outputs card; the runs of the calibration write the outputs applied there."),
         ui.TagList(ui.tags.strong("Model box"), ": choose that run and the output, and add the steps that make it comparable "
                    "(e.g. select 1990 to 2004, then sum by month)."),
         ui.TagList(ui.tags.strong("Data box"), ": load the observations, and process them likewise."),
@@ -1054,8 +1053,6 @@ def calibration_server(input, output, session, setup):
                                   f"{model_paired.mean():.3g} and of the data {data_paired.mean():.3g}: it is not defined unless both "
                                   f"are positive (not after a log or an anomaly). Use Correlation (scale-free too) or RMSE.")
             return
-        folder = model_outputs()[0]
-        manifest = read_run(folder) or {}
         # The observations as processed now, kept with the calibrations of the results folder, and as loaded with the steps of
         # the Data box, so that each trial cuts both to the period they share before the steps; not if a step combines other
         # data sets, which the calibration does not keep: then the observations as processed here, kept as they are
@@ -1077,7 +1074,7 @@ def calibration_server(input, output, session, setup):
         steps = [without_uid(step) for step in model.live()]
         objectives.set([*objectives(), {
             "name": name, "data": str(target), "variable": input[f"{MODEL}_variable"](), "space": input[f"{MODEL}_space"](),
-            "aggregation": None, "steps": steps, "metric": metric, "direction": DIRECTIONS[metric], "output": manifest.get("output"),
+            "aggregation": None, "steps": steps, "metric": metric, "direction": DIRECTIONS[metric],
             **({"data_raw": str(raw_target), "data_steps": data_steps} if keep_raw else {}),
             "describe": f"{data_values.name} ({len(data_values)} values, {SHAPES[data_values.shape].split(':')[0].lower()}) against "
                         f"{input[f'{MODEL}_variable']()}, {SPACES[input[f'{MODEL}_space']()].lower()}, then "
@@ -1087,6 +1084,13 @@ def calibration_server(input, output, session, setup):
         }])
         objective_problem.set(None)
         ui.update_text("cal_objective_name", value="")
+        # The outputs it needs, ticked in the Outputs card (tab 2), to be applied there
+        flags = flags_of(input[f"{MODEL}_variable"]()) or ()
+        for flag in flags:
+            ui.update_switch(output_switch_id(flag), value=True)
+        if flags:
+            ui.notification_show(f"{name} needs {', '.join(output_label(flag) for flag in flags)}: ticked in the Outputs card of tab 2. "
+                                 f"Press Apply parameters & outputs there before the calibration.", type="message", duration=8)
 
     @reactive.effect
     @reactive.event(input.cal_objective_remove)

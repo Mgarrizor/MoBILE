@@ -35,6 +35,13 @@ far, its Data box; the sensitivity analysis is in **2. Parameters & SA**. **Help
 guide, the documentation and the publications on VECTRI and VECTRI-ABM (listed in `mobile/publications.yaml`, where
 new ones are added). Hover over ⓘ beside a setting for an explanation.
 
+A dot before **1. Setup** and **2. Parameters & SA** says the state of the tab (hover over it for the words):
+
+| Tab | Green | Amber | Red |
+|---|---|---|---|
+| 1. Setup | Applied setup | Not applied: the boxes differ from the setup applied | Problem in setup |
+| 2. Parameters & SA | Applied set | Changed set, not applied | Invalid: an output an objective of the calibration needs is not ticked |
+
 **Light**, **System** and **Dark** at the top right set the colours of the page and of the plots. *System*
 follows the setting of the computer. The choice is kept by the browser. The colours of the data and of the map
 are the same in both.
@@ -129,8 +136,13 @@ The settings are remembered for the next session in `~/.config/mobile/last_setup
   added there too. The parameters of the cholera model and of mobility are not shown and keep their default.
   Under the mortality `mu` (Demography), **Use the fitted mortality** sets it to the γ fitted to the age structure of
   the setup: with births equal to deaths, the default, a population with mortality γ has an age structure of that slope.
-- **Outputs**: which fields the next run writes. Age-resolved fields give large files. A sensitivity analysis writes
-  the same fields, and only these can be analysed afterwards.
+- **Outputs**: which fields the next run writes, only those ticked: none at first (rainfall and temperature are always
+  written). Age-resolved fields give large files. A sensitivity analysis and a calibration write the same fields, and
+  only these can be analysed afterwards. Adding an objective, or a calibration as a template, ticks the outputs its
+  objectives need, listed above the switches with the objectives that need them (in red if not ticked).
+- **Apply parameters & outputs**, under both: runs, sensitivity analyses and calibrations use the parameters and
+  outputs applied. With a changed set not applied (amber dot on the tab) or an invalid one (red), Run, the analysis
+  and the calibration refuse to start. Applying shows the Results tab; under the button, what is applied.
 - **Sensitivity analysis (Sobol)**, below: see the next section.
 
 ### Sensitivity analysis
@@ -199,7 +211,7 @@ so analysing it again is quick. **How the indices are calculated**, under the ch
   letters, digits, `.`, `_`, `-` only; without one, it is named after the date.
 - **Run** starts the run and shows the Results tab. **Cancel** stops it, and can only be pressed during a run.
 - **Earlier runs** and **Load run**: reload a run or seed band from the results folder, and show it in the Results
-  tab. Its sliders, outputs and setup are restored.
+  tab. Its sliders, outputs and setup are restored, and applied.
 - **Close GUI**, at the bottom, stops the GUI.
 
 ### 3. Results tab
@@ -327,7 +339,8 @@ month. They are for looking only: they do not enter the metrics.
 
 **Add as objective**, under the comparison, makes it an objective of the calibration: the observations as loaded and the
 steps of the Data box (saved in `calibration/data/` of the results folder, with the observations as processed now), the
-output, cells and steps of the Model box, and a metric. Each trial cuts its output and the observations to the period
+output, cells and steps of the Model box, and a metric. The output it compares is ticked in the Outputs card of tab 2,
+to be applied there. Each trial cuts its output and the observations to the period
 they share before the steps, as the comparison does. If a step of the Data box combines other data sets, only the
 observations as processed now are kept, not cut again by each trial, and the objective's description says so.
 The correlation is maximised, the RMSEs minimised, the size of the bias minimised. Add several, e.g. the monthly series with the correlation (timing), then, with a climatology step in both boxes, the relative RMSE (season).
@@ -402,8 +415,10 @@ together (the Pareto front):
 - **Optuna**: the sampler (TPE, random or NSGA-II, with a link to its documentation), the trials and the start-up
   trials drawn at random. **Runs**: seeds per trial (the objectives then compare the median of the seeds, each
   processed), threads per run (at first those of the setup; kept with the calibration, as results depend on them),
-  runs at the same time (at first as many as fit in the cores), and a name. The runs write the outputs of the Outputs card and those the
-  objectives were made from. The model is built once, by the first run.
+  runs at the same time (at first as many as fit in the cores), and a name. The runs write the outputs applied in tab 2,
+  nothing more: the card refuses to start until those the objectives need are among them, and says what is not
+  written. Without New symptomatic cases the regime of each trial is not measured; without the vector densities, the
+  drivers of a trial cannot show them. The model is built once, by the first run.
 - **Run calibration** shows the progress; **Cancel** stops it, and **Resume here**, under Calibrations, goes on with it on this computer,
   also in a new GUI and after the GUI was closed or crashed: it is then listed as **interrupted** (recorded as running,
   but no process runs it any more). A calibration runs in one process at a time: Resume refuses one that another GUI or
@@ -444,8 +459,9 @@ together (the Pareto front):
   one: its objectives (those whose observations are still where they were), what it calibrates and the ranges (its
   cells or regions found again on the setup now), the validation window, the sampler, trials, start-up trials, seeds
   (the first one in the sidebar) and threads per run, and a new name (e.g. look_2). Change what you like, then Create
-  only or Run calibration; the calibration chosen is not changed. It says what it could not fill: another setup
-  (apply it in tab 1), sliders that differ from its fixed parameters, another number of agents.
+  only or Run calibration; the calibration chosen is not changed. The outputs are switched to those its objectives
+  need and the others off, so tab 2 turns amber: press Apply parameters & outputs there. It says what it could not
+  fill: another setup (apply it in tab 1), sliders that differ from its fixed parameters, another number of agents.
 - The settings **kept with the calibration** (and so used wherever it runs, here or on a cluster) are labelled so;
   **Runs at the same time**, labelled **this computer**, is not kept: a job on a cluster takes those of its Cluster
   settings. With TPE, fewer start-up trials than runs at the same time are warned of: the sampler would suggest trials
