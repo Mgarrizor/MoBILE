@@ -2590,6 +2590,83 @@ class TestFilterEdges(unittest.TestCase):
         self.assertNotIn("ends cut", describe({key: value for key, value in step.items() if key not in ("edges", "edge_error")}))
 
 
+class TestCalibrationWindows(unittest.TestCase):
+    """The calibration and validation windows as a calibration will use them, said as the dates are typed."""
+
+    def setUp(self):
+        from mobile.calibration_data import Observations, write_observations
+        self.folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.folder)
+        start = pd.date_range("1980-01", periods=288, freq="MS")  # 1980-01 to 2003-12, the last value missing
+        self.data = Observations(shape="dated", values=np.r_[np.arange(287.0), np.nan], units="cases", name="cases",
+                                 index=pd.DataFrame({"start": start.values.astype("datetime64[D]"),
+                                                     "end": (start + pd.offsets.MonthEnd(0)).values.astype("datetime64[D]")}))
+        write_observations(self.data, self.folder / "raw.nc")
+        self.objectives = [{"name": "Correlation", "data_raw": str(self.folder / "raw.nc")},
+                           {"name": "Low_pass", "data_raw": str(self.folder / "raw.nc")}]
+        self.period = ("1980-01-01", "2003-12-31")
+
+    def said(self, validation, period="same"):
+        from mobile.calibration_run_ui import windows_said
+        return windows_said(self.objectives, self.period if period == "same" else period, validation)
+
+    def test_the_right_way_round(self):
+        [(names, text, warnings, problems)] = self.said(("1996-01-01", "2003-12-31"))
+        self.assertIsNone(names)  # Both objectives split alike: one line
+        self.assertEqual(text, "Calibration: 1980-01 to 1995-12 (16 years, 192 values) · Validation: 1996-01 to 2003-12 (8 years, 95 values)")
+        self.assertEqual((warnings, problems), ([], []))
+
+    def test_the_wrong_way_round_warns(self):
+        [(_, text, warnings, problems)] = self.said(("1980-01-01", "1995-12-31"))
+        self.assertTrue(text.startswith("Calibration: 1996-01 to 2003-12 (8 years, 95 values) · Validation: 1980-01 to 1995-12"))
+        self.assertIn("is this the right way round?", warnings[0])
+        self.assertEqual(problems, [])
+
+    def test_inside_across_and_outside(self):
+        [(_, text, _, _)] = self.said(("1990-01-01", "1994-12-31"))
+        self.assertIn("Calibration: 1980-01 to 1989-12 and 1995-01 to 2003-12 (19 years, 227 values)", text)
+        [(_, text, warnings, _)] = self.said(("1990-01-15", "1994-12-31"))
+        self.assertIn("Validation: 1990-02 to 1994-12 (4.91 years, 59 values)", text)
+        self.assertIn("1 value across an end of the validation window is in neither window.", warnings)
+        [(_, _, _, problems)] = self.said(("2010-01-01", "2011-12-31"))
+        self.assertIn("no values within the validation window", problems[0])
+        [(_, _, _, problems)] = self.said(("1970-01-01", "2010-12-31"))
+        self.assertIn("leaves no values to calibrate on", problems[0])
+        # Without a validation window, the whole period; a shorter period simulated cuts the calibration window
+        [(_, text, _, _)] = self.said(None)
+        self.assertEqual(text, "Calibration: 1980-01 to 2003-12 (24 years, 287 values)")
+        [(_, text, _, _)] = self.said(("1996-01-01", "2003-12-31"), period=("1985-01-01", "2003-12-31"))
+        self.assertTrue(text.startswith("Calibration: 1985-01 to 1995-12 (11 years, 132 values)"))
+
+    def test_counts_match_the_trials(self):
+        """Control: the values said are those each trial scores, cut by the engine's own process_both."""
+        from mobile.calibration_data import Observations
+        from mobile.calibration_model import process_both
+        days = pd.date_range(*self.period, freq="D")
+        model = Observations(shape="dated", values=np.ones(len(days)), units="cases", name="cases",
+                             index=pd.DataFrame({"start": days.values.astype("datetime64[D]"), "end": days.values.astype("datetime64[D]")}))
+        monthly = [{"kind": "aggregate", "period": "month", "how": "sum", "complete": True, "days": 7}]
+        for validation in (("1996-01-01", "2003-12-31"), ("1990-01-15", "1994-12-31")):
+            [(_, text, _, _)] = self.said(validation)
+            said = [int(n) for n in re.findall(r"(\d+) values", text)]
+            got = [int(np.isfinite(process_both([model], monthly, self.data, [], validation=validation, part=part)[1].values).sum())
+                   for part in ("calibration", "validation")]
+            self.assertEqual(said, got, validation)
+
+    def test_objectives_that_differ_and_the_tags(self):
+        from mobile.calibration_data import write_observations
+        from mobile.calibration_run_ui import windows_tags, windows_text
+        write_observations(replace(self.data, values=self.data.values[:120], index=self.data.index.iloc[:120]), self.folder / "short.nc")
+        self.objectives.append({"name": "Short", "data_raw": str(self.folder / "short.nc")})
+        items = self.said(("1996-01-01", "2003-12-31"))
+        self.assertEqual([names for names, *_ in items], [["Correlation", "Low_pass"], ["Short"]])
+        self.assertIn("Short: Calibration: 1980-01 to 1989-12", windows_text(items))
+        html = str(windows_tags(items))
+        self.assertIn("color: #2e9e6b;", html)  # Calibration in the green of its bar in the plots
+        self.assertIn("text-danger", html)  # Short has no values in the validation window
+        self.assertIn("Add an objective", str(windows_tags([])))
+
+
 class TestSharedPeriod(unittest.TestCase):
     """Model and data are cut to the period they share before their steps, so that a climatology covers the same years."""
 

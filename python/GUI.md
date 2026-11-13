@@ -348,6 +348,16 @@ together (the Pareto front):
   calibration window only. With the switch on, the Model and data card gives the metrics of all the years and of each
   window, and marks both windows on its plot with the bars described below. It needs objectives that keep the observations as loaded (those added since the cut to the common period:
   add older ones again).
+
+  Under the dates, a line says both windows as the calibration will use them, as you type, e.g. **Calibration:**
+  1980-01 to 1995-12 (16 years, 192 values) · **Validation:** 1996-01 to 2003-12 (8 years, 96 values): the
+  observations of the objectives as loaded, cut to the period the setup simulates, then split; the values are those
+  not missing, as each trial counts them. Objectives whose observations split differently get a line each. It warns
+  when the validation window is longer than the calibration window (*is this the right way round?*: the dates given
+  are those of the validation window) and when values straddle an end of the window (they are in neither); it stops
+  Create only and Run when a window would have no values. The same line is repeated in the messages of Create only,
+  Run calibration and Use as template (with the setup now), and in the description of a calibration chosen under
+  Calibrations.
 - **Temperature offsets**, **one per cell** or **one per region**, the cells in each box of a size you give (e.g. 0.5°,
   with edges on multiples of it: the cells of a coarser grid, as when finer driving files were made from coarser ones).
   The cells of a region share its offset and keep their differences; its mean is that of its cells weighted by their
