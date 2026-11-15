@@ -54,7 +54,7 @@ from .parameters import to_model
 from .region import cut_inputs
 from .results import _md5
 from .rundir import new_run_id, period_steps
-from .runner import NETCDF_LOCK, BuildOnce, RunCancelled, Runner
+from .runner import NETCDF_LOCK, RUN_PID, BuildOnce, RunCancelled, Runner, stop_left
 from .setup import from_fields, to_dict
 
 # Raised when a change means calibrations made before cannot be resumed (e.g. 2: the first trial has no offset). They
@@ -553,6 +553,13 @@ def trial_folder(folder, number):
     return Path(folder) / TRIALS / f"trial_{number:05d}"
 
 
+def stop_runs_left(folder):
+    """Stop the model runs of a calibration still running on this computer although the process that ran it died (e.g. a
+    GUI closed or crashed): they would go on writing in the trial folders the calibration, resumed, makes again, and
+    take the cores. Called once no process runs the calibration (its lock held). Returns how many were stopped."""
+    return sum(stop_left(path.parent) for path in (Path(folder) / TRIALS).glob(f"*/*/{RUN_PID}"))
+
+
 # ---------------------------------------------------------------- running
 
 def sampler_for(record):
@@ -863,6 +870,7 @@ def _run_locked(folder, record, state, parallel, threads, deadline=None, trial_s
         config = replace(config, run={**config.run, "threads": threads})
     config.validate()
     objectives = resolved(folder, record)["objectives"]
+    stop_runs_left(folder)
     study = open_study(folder, record)
     for trial in study.get_trials(deepcopy=False, states=(optuna.trial.TrialState.RUNNING,)):
         # Left running by a process that ended without finishing it, e.g. the GUI closed or a job killed: done again, and

@@ -422,7 +422,9 @@ together (the Pareto front):
 - **Run calibration** shows the progress; **Cancel** stops it, and **Resume here**, under Calibrations, goes on with it on this computer,
   also in a new GUI and after the GUI was closed or crashed: it is then listed as **interrupted** (recorded as running,
   but no process runs it any more). A calibration runs in one process at a time: Resume refuses one that another GUI or
-  script is running. A resumed calibration keeps its threads per run, and runs as many at a time as fit in the cores
+  script is running. The model runs of a GUI that was closed or crashed go on without it, on its cores and writing in
+  their trial folders: resumed, a calibration first stops those still running on this computer (each run folder holds a
+  `run.pid` file naming its processes while they run). A resumed calibration keeps its threads per run, and runs as many at a time as fit in the cores
   with them. **Where transmission dies out**: a trial whose model series does not vary (no cases, so e.g. a correlation
   is not defined) does not fail: it completes as **infeasible**, kept out of the Pareto front and of the best, drawn as
   grey rings in the plot of the objectives. A trial is infeasible when transmission died out (no positive value of the
