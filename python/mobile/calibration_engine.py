@@ -18,7 +18,10 @@ it with the observations of the objective: the values of the metrics are the obj
 Temperature offsets (dT) shift the temperature of chosen cells, e.g. to stand for the temperature where people live
 within a coarse cell. The cells are given from the coolest to the warmest, as they must stay: the first gets an offset
 dT_1, and each next one a gap of at least 0 above the one before (in the means over the simulated period), so that
-the order of their temperatures holds in every trial without any trial being wasted.
+the order of their temperatures holds in every trial without any trial being wasted. Optionally a trend (dT_trend, °C per
+decade, the same for all the cells offset) adds a warming or cooling that grows in time, centred on the middle of the
+period so that it leaves the mean of each cell, and so the gaps and their order, as they are: it tests whether a steeper
+(or gentler) warming than that of the driving files would match the observations.
 """
 
 import datetime
@@ -48,7 +51,7 @@ from .calibration_model import SPACES, model_members, process_both, seed_spread
 from .calibration_steps import apply_steps
 from .cells import cell_areas
 from .config import MAX_PATH_LENGTH, ConfigError
-from .driving import LAT_NAMES, LON_NAMES, POP_NAMES, TEMP_NAMES, first_name
+from .driving import LAT_NAMES, LON_NAMES, POP_NAMES, TEMP_NAMES, TIME_NAMES, first_name
 from .grid import pop_coordinates
 from .parameters import to_model
 from .region import cut_inputs
@@ -132,6 +135,25 @@ def _coordinates(data):
             np.asarray(data[first_name(LON_NAMES, data.variables)][:], dtype="f8"))
 
 
+DAYS_PER_DECADE = 3652.5
+
+
+def _days(data):
+    """The days of the time axis of a file, as numpy datetime64[D]."""
+    time = data[first_name(TIME_NAMES, data.variables)]
+    dates = netCDF4.num2date(time[:], time.units, getattr(time, "calendar", "standard"), only_use_cftime_datetimes=False,
+                             only_use_python_datetimes=True)
+    return np.array([np.datetime64(date.strftime("%Y-%m-%d")) for date in np.atleast_1d(dates)], dtype="datetime64[D]")
+
+
+def trend_centre(temp_file):
+    """The middle of the period of a temperature file (that of a calibration is cut to its period), the day where a
+    trend offset is 0, as an ISO date."""
+    with netCDF4.Dataset(temp_file) as data:
+        days = _days(data)
+    return str(days[0] + (days[-1] - days[0]) // 2)
+
+
 def _cell(lat, lon, cell):
     """(i, j) of the cell of a grid whose centre is that of `cell` {lat, lon}."""
     i, j = int(np.argmin(np.abs(lat - cell["lat"]))), int(np.argmin(np.abs(lon - cell["lon"])))
@@ -161,12 +183,13 @@ def offsets_from(temperature, values):
     for each next one the gap above the one before, in their means: mean_k + dT_k = mean_(k-1) + dT_(k-1) + gap_k; without,
     each dT_k as sampled."""
     cells, means = temperature["cells"], temperature["means"]
+    trend = {"dT_trend": values["dT_trend"]} if temperature.get("trend") else {}
     if not temperature.get("ordered", True):
-        return {f"dT_{k + 1}": values[f"dT_{k + 1}"] for k in range(len(cells))}
+        return {**{f"dT_{k + 1}": values[f"dT_{k + 1}"] for k in range(len(cells))}, **trend}
     offsets = [values["dT_1"]]
     for k in range(1, len(cells)):
         offsets.append(means[k - 1] + offsets[k - 1] + values[f"gap_{k + 1}"] - means[k])
-    return {f"dT_{k + 1}": offset for k, offset in enumerate(offsets)}
+    return {**{f"dT_{k + 1}": offset for k, offset in enumerate(offsets)}, **trend}
 
 
 def baseline(temperature):
@@ -174,9 +197,13 @@ def baseline(temperature):
     outside the ranges of the calibration."""
     means = temperature["means"]
     low, high = temperature["first"]
+    trend = temperature.get("trend")
+    if trend and not trend[0] <= 0.0 <= trend[1]:
+        return None
+    no_trend = {"dT_trend": 0.0} if trend else {}
     if not temperature.get("ordered", True):
-        return {f"dT_{k + 1}": 0.0 for k in range(len(means))} if low <= 0.0 <= high else None
-    values = {"dT_1": 0.0, **{f"gap_{k + 1}": means[k] - means[k - 1] for k in range(1, len(means))}}
+        return {**{f"dT_{k + 1}": 0.0 for k in range(len(means))}, **no_trend} if low <= 0.0 <= high else None
+    values = {"dT_1": 0.0, **{f"gap_{k + 1}": means[k] - means[k - 1] for k in range(1, len(means))}, **no_trend}
     inside = low <= 0.0 <= high and all(temperature["gap"][0] <= values[f"gap_{k + 1}"] <= temperature["gap"][1] for k in range(1, len(means)))
     return values if inside else None
 
@@ -201,19 +228,26 @@ def region_mean(temp_file, pop_file, cell):
     return float(np.average(means, weights=people)) if people.sum() > 0 else float(means.mean())
 
 
-def offset_temperature(source, target, cells, offsets):
+def offset_temperature(source, target, cells, offsets, centre=None):
     """Write a copy of the temperature file with each cell, or every cell of each region, shifted by its offset (°C), the
-    others as they are."""
+    others as they are. With offsets["dT_trend"] (°C per decade) and the day it is 0 (centre, ISO date), the cells
+    offset are also shifted by the trend times the decades from that day: 0 on average over a period centred there."""
     shutil.copyfile(source, target)
     with netCDF4.Dataset(target, "a") as data:
         lat, lon = _coordinates(data)
         field = data[first_name(TEMP_NAMES, data.variables)]
+        trend = offsets.get("dT_trend") or 0.0
+        if trend and centre is None:
+            raise CalibrationError("a temperature trend needs the day where it is 0")
+        drift = (trend * (_days(data) - np.datetime64(centre, "D")).astype("f8") / DAYS_PER_DECADE) if trend else 0.0
         for k, cell in enumerate(cells):
             for member in members(cell):
                 i, j = _cell(lat, lon, member)
-                field[:, i, j] = field[:, i, j] + offsets[f"dT_{k + 1}"]
+                field[:, i, j] = field[:, i, j] + offsets[f"dT_{k + 1}"] + drift
         data.mobile_offsets = json.dumps({f"{cell['lat']},{cell['lon']}": round(offsets[f"dT_{k + 1}"], 6)
                                           for k, cell in enumerate(cells)})
+        if "dT_trend" in offsets:
+            data.mobile_trend = json.dumps({"dT_trend": round(trend, 6), "unit": "°C per decade", "zero_on": centre})
 
 
 # ---------------------------------------------------------------- creating
@@ -229,7 +263,7 @@ def create_calibration(config, objectives, parameters=(), temperature=None, seed
     temperature: {cells: [{lat, lon}, or {lat, lon, members: [{lat, lon}]} for a region whose cells share one offset] from
     the coolest to the warmest (regions by their mean weighted by people), first: (low, high) of dT_1 in °C, gap: (low,
     high) of each next gap, low at least 0, ordered: True (default) to keep their order, or False for each dT_k sampled on
-    its own within the range of dT_1}, or None.
+    its own within the range of dT_1, trend: (low, high) of dT_trend in °C per decade, or absent for none}, or None.
     validation: (first, last) dates of a validation window, or None: the objectives are calibrated on the period the model
     and the data share without it, and each trial is scored on it too, with the same metrics, kept with the trial."""
     if not objectives:
@@ -328,10 +362,16 @@ def _temperature(temperature, temp_file, pop_file):
         raise CalibrationError("the range of dT_1 needs its low below its high")
     if ordered and len(cells) > 1 and not 0 <= gap[0] < gap[1]:
         raise CalibrationError("the range of the gaps needs a low of at least 0, below its high")
+    trend = temperature.get("trend")
+    if trend:
+        trend = [float(value) for value in trend]
+        if trend[0] >= trend[1]:
+            raise CalibrationError("the range of the temperature trend needs its low below its high")
     means = [region_mean(temp_file, pop_file, cell) for cell in cells]
     size = temperature.get("size")  # Of the boxes of the regions, if any: kept for a calibration used as a template
     return {"cells": cells, "first": first, "gap": gap, "means": means, "ordered": ordered,
-            **({"size": float(size)} if size else {})}
+            **({"size": float(size)} if size else {}),
+            **({"trend": trend, "trend_centre": trend_centre(temp_file)} if trend else {})}
 
 
 def _in_folder(folder, path):
@@ -375,14 +415,19 @@ def suggest(trial, record):
     temperature = record["temperature"]
     if temperature and not temperature.get("ordered", True):
         # Each cell or region on its own, within the same range: no order kept
-        offsets = offsets_from(temperature, {f"dT_{k}": trial.suggest_float(f"dT_{k}", *temperature["first"])
-                                             for k in range(1, len(temperature["cells"]) + 1)})
+        offsets = offsets_from(temperature, {**{f"dT_{k}": trial.suggest_float(f"dT_{k}", *temperature["first"])
+                                                for k in range(1, len(temperature["cells"]) + 1)},
+                                             **_trend_sampled(trial, temperature)})
     elif temperature:
         sampled = {"dT_1": trial.suggest_float("dT_1", *temperature["first"])}
         for k in range(2, len(temperature["cells"]) + 1):
             sampled[f"gap_{k}"] = trial.suggest_float(f"gap_{k}", *temperature["gap"])
-        offsets = offsets_from(temperature, sampled)
+        offsets = offsets_from(temperature, {**sampled, **_trend_sampled(trial, temperature)})
     return values, offsets
+
+
+def _trend_sampled(trial, temperature):
+    return {"dT_trend": trial.suggest_float("dT_trend", *temperature["trend"])} if temperature.get("trend") else {}
 
 
 def objective_series(objective, run_dirs, validation=None, part=None):
@@ -957,7 +1002,8 @@ def _run_locked(folder, record, state, parallel, threads, deadline=None, trial_s
             temperature = record["temperature"]
             target_file = here / "t2m.nc"
             with NETCDF_LOCK:
-                offset_temperature(config.inputs["temp_file"], _touched(target_file), temperature["cells"], offsets)
+                offset_temperature(config.inputs["temp_file"], _touched(target_file), temperature["cells"], offsets,
+                                   temperature.get("trend_centre"))
             inputs["temp_file"] = str(target_file)
             for key, offset in offsets.items():
                 trial.set_user_attr(key, offset)
