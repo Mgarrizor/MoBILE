@@ -1413,7 +1413,7 @@ echo 'Program finished successfully'
     # Builds the model unless given one with -E, and says which, with the name of its run folder
     BUILDING = """#!/bin/bash
 prebuilt=""
-while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:i:l:M:B:T:C:O:E:" flag; do
+while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:i:l:M:B:T:C:G:O:E:" flag; do
   case $flag in E) [ "$OPTARG" != "NONE" ] && prebuilt=$OPTARG ;; esac
 done
 if [ -n "$prebuilt" ]; then
@@ -2780,7 +2780,7 @@ class TestCalibrationEngine(unittest.TestCase):
     # Builds unless given a model (-E), then runs the toy
     FAKE = """#!/bin/bash
 prebuilt=""
-while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:i:l:M:B:T:C:O:E:" flag; do
+while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:i:l:M:B:T:C:G:O:E:" flag; do
   case $flag in E) [ "$OPTARG" != "NONE" ] && prebuilt=$OPTARG ;; esac
 done
 if [ -z "$prebuilt" ]; then
