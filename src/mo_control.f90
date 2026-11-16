@@ -99,9 +99,15 @@ MODULE mo_control
                                               ! parameters). Requires at least one demographic rate file to be supplied.
                                               ! Resolved once in demog_init (mo_agents.f90) from demog_counterfactual
                                               ! plus which demographic files were actually given.
+    real :: demog_growth = 0. ! Growth mode: the target annual growth factor of the population (e.g. 1.0213 for +2.13%
+                              ! a year), from which the shape-invariant generator derives the birth and age-specific
+                              ! mortality rates that hold cumm_age.txt's shape while the population grows by it; no
+                              ! rate file needed. The spin-up stays at g = 1 (no growth). 0 = off. Set from &HUMAN;
+                              ! not with rate files or counterfactual mode.
     integer, parameter :: DEMOG_STANDARD = 0 ! scalar mu/birth_rate
     integer, parameter :: DEMOG_FACTUAL  = 1 ! supplied files drive the real run
     integer, parameter :: DEMOG_COUNTER  = 2 ! "shadow"-derived g(t) drives the real run
+    integer, parameter :: DEMOG_GROW     = 3 ! a given g (demog_growth) drives the real run
     integer :: demog_mode = DEMOG_STANDARD
     character(len=200) :: namelist_filename
     !----------------------------------------------------------
