@@ -98,7 +98,16 @@ def calibration_run_card():
             ui.input_numeric("cal_dt_low", "dT₁ from [°C]", value=-3.0, step=0.5),
             ui.input_numeric("cal_dt_high", "dT₁ to [°C]", value=3.0, step=0.5),
             ui.output_ui("cal_gap_inputs"),
-            col_widths=(3, 3, 6), fill=False), ui.output_ui("cal_order_switch"), ui.output_ui("cal_offset_equation")),
+            col_widths=(3, 3, 6), fill=False), ui.output_ui("cal_order_switch"),
+            ui.input_switch("cal_trend", with_tip("Temperature trend", "One warming rate, in °C per decade, added to the offset of every "
+                            "cell or region ticked, 0 in the middle of the period: it tilts the temperature series without changing "
+                            "their means, so the gaps and the order stay as they are. Sampled within its range like the offsets."),
+                            value=False),
+            ui.panel_conditional("input.cal_trend", ui.layout_columns(
+                ui.input_numeric("cal_trend_low", "Trend from [°C per decade]", value=-0.5, step=0.1),
+                ui.input_numeric("cal_trend_high", "Trend to [°C per decade]", value=1.5, step=0.1),
+                col_widths=(3, 3), fill=False)),
+            ui.output_ui("cal_offset_equation")),
         ui.tags.strong(with_tip("Model parameters", "Tick a parameter to calibrate it within a range, sampled uniformly or "
                                 "log-uniformly (for ranges over orders of magnitude), in the units of its slider; at first the range "
                                 "of the slider. Those not ticked keep their slider value."), class_="small d-block mt-2"),
@@ -349,6 +358,13 @@ def windows_said(objectives, period, validation):
     return items
 
 
+def trend_said(temperature):
+    """e.g. 'Temperature trend in -0.5 to 1.5 °C per decade, 0 on 1991-12-31', of a calibration's temperature record."""
+    low, high = temperature["trend"]
+    centre = temperature.get("trend_centre")
+    return f"Temperature trend in {low:g} to {high:g} °C per decade" + (f", 0 on {centre}" if centre else "")
+
+
 def results_state(status, completed, n_trials, front, refreshed=None):
     """(state, note) of the Results step: done only with a Pareto front once the calibration has finished; while it
     runs, or waits to be resumed, in progress like Run, the front said to be partial, as of the last Refresh for one
@@ -368,6 +384,7 @@ def results_state(status, completed, n_trials, front, refreshed=None):
 
 
 IDEAL = "ideal"  # Sorting the Pareto front by the distance to the ideal point
+TREND = "trend"  # Sorting it by the temperature trend of the trials (dT_trend)
 FRONT_FIRST = 10  # Trials of the Pareto front shown unless all are asked for
 
 
@@ -387,10 +404,12 @@ def ideal_distances(front, objectives):
 
 def front_columns(record):
     """The columns the Pareto front can be sorted by: trial number, distance to the ideal, each objective (o0, …) and its
-    validation score (v0, …), each temperature offset (t0, …) and each model parameter (p:name)."""
+    validation score (v0, …), each temperature offset (t0, …), the temperature trend (trend) and each model parameter
+    (p:name)."""
     count = len(record["objectives"])
     return {"number", IDEAL, *[f"o{k}" for k in range(count)], *([f"v{k}" for k in range(count)] if record.get("validation") else []),
             *[f"t{k}" for k in range(len((record.get("temperature") or {}).get("means") or []))],
+            *([TREND] if (record.get("temperature") or {}).get("trend") else []),
             *[f"p:{parameter['name']}" for parameter in record.get("parameters", [])]}
 
 
@@ -404,6 +423,8 @@ def sort_rows(front, column, descending, distances):
             return distances[row["number"]]
         if column.startswith("p:"):
             return row["params"].get(column[2:])
+        if column == TREND:
+            return row["offsets"].get("dT_trend")
         k = int(column[1:])
         if column[0] == "o":
             return row["values"][k]
@@ -751,12 +772,14 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         dT = lambda k: ui.TagList("dT", ui.tags.sub(str(k)))  # noqa: E731
         gap = lambda k: ui.TagList("gap", ui.tags.sub(str(k)))  # noqa: E731
         unit = "region" if input.cal_regions() == "boxes" else "cell"
+        trend = ui.TagList(" + ", dT("trend"), " × (decades from the middle of the period), ", dT("trend"), " sampled within its range "
+                           "and the same for all: the series tilt, their means over the period stay") if input.cal_trend() else ""
         if input.cal_regions() == "boxes":
             daily = ui.p("Each day t, every cell c of region k gets the temperature of the file plus the offset of its region: T",
-                         ui.tags.sub("c"), "(t) + ", dT("k"), ".", class_="mb-1")
+                         ui.tags.sub("c"), "(t) + ", dT("k"), trend, ".", class_="mb-1")
         else:
-            daily = ui.p("Each day t, cell k gets the temperature of the file plus its offset: T", ui.tags.sub("k"), "(t) + ", dT("k"), ".",
-                         class_="mb-1")
+            daily = ui.p("Each day t, cell k gets the temperature of the file plus its offset: T", ui.tags.sub("k"), "(t) + ", dT("k"), trend,
+                         ".", class_="mb-1")
         if len(ticked) == 1:
             return ui.div(daily, ui.p(dT(1), f" is sampled within its range: one {unit}, no order to keep.", class_="mb-0"),
                           class_="small text-muted border rounded p-2 mb-2")
@@ -862,6 +885,10 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
             gap_low, gap_high = gap_range()
             if not all(isinstance(value, (int, float)) for value in (gap_low, gap_high)) or not 0 <= gap_low < gap_high:
                 found.append("The gaps need a low of at least 0, below their high.")
+        if input.cal_trend():
+            low, high = input.cal_trend_low(), input.cal_trend_high()
+            if not all(isinstance(value, (int, float)) for value in (low, high)) or low >= high:
+                found.append("The temperature trend needs a low below its high.")
         return found + counts_problems()
 
     def counts_problems():
@@ -948,7 +975,9 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         folder = make_calibration()
         if folder is not None:
             start(folder)
-            ui.notification_show(f"Running {Path(folder).name}. {record_windows(folder)}", type="message", duration=15)
+            temperature = read_calibration(folder).get("temperature") or {}
+            ui.notification_show(f"Running {Path(folder).name}. {record_windows(folder)}"
+                                 + (f" {trend_said(temperature)}." if temperature.get("trend") else ""), type="message", duration=15)
 
     @reactive.effect
     @reactive.event(input.cal_create)
@@ -982,7 +1011,8 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
                                  for u in chosen_cells()],
                        "first": (input.cal_dt_low(), input.cal_dt_high()), "gap": gap_range(),
                        "ordered": bool(keep_order()),
-                       **({"size": input.cal_region_size()} if input.cal_regions() == "boxes" else {})} if input.cal_offsets() else None
+                       **({"size": input.cal_region_size()} if input.cal_regions() == "boxes" else {}),
+                       **({"trend": (input.cal_trend_low(), input.cal_trend_high())} if input.cal_trend() else {})} if input.cal_offsets() else None
         parameters = chosen_parameters()
         calibrated = {parameter.name for parameter in parameters}
         fixed = {key: value for key, value in {**setup().params, **overrides()}.items() if key not in calibrated}
@@ -1088,6 +1118,11 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         # Temperature offsets: on the cells or regions of the setup now
         temperature = record.get("temperature")
         ui.update_switch("cal_offsets", value=bool(temperature))
+        trend = (temperature or {}).get("trend")
+        ui.update_switch("cal_trend", value=bool(trend))
+        if trend:
+            ui.update_numeric("cal_trend_low", value=trend[0])
+            ui.update_numeric("cal_trend_high", value=trend[1])
         if temperature:
             ui.update_numeric("cal_dt_low", value=temperature["first"][0])
             ui.update_numeric("cal_dt_high", value=temperature["first"][1])
@@ -1121,6 +1156,7 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         ui.notification_show(ui.TagList(f"Filled from {name} for a new calibration (named {unique_name(name, set(list_names()))}): "
                                         "change what you like, then Create only or Run calibration.",
                                         windows_tags(said, empty="") if said else None,
+                                        ui.p(f"{trend_said(temperature)}.", class_="small mb-0") if trend else None,
                                         ui.tags.ul(*[ui.tags.li(note) for note in notes], class_="mb-0") if notes else None),
                              type="warning" if notes or any(w or p for *_, w, p in said) else "message",
                              duration=None if notes else 15)
@@ -1209,6 +1245,8 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         if temperature:
             lines.append(f"Temperature offsets of {len(temperature['cells'])} cells or regions: dT₁ in {temperature['first']} °C, gaps in "
                          f"{temperature['gap']} °C; means {', '.join(f'{m:.2f}' for m in temperature['means'])} °C")
+            if temperature.get("trend"):
+                lines.append(trend_said(temperature))
         for parameter in record.get("parameters", []):
             lines.append(f"{parameter['name']}: {parameter['distribution']} from {parameter['low']:.4g} to {parameter['high']:.4g}")
         said = record_windows(folder)
@@ -1351,6 +1389,7 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         completed = [row for row in every if row["state"] == "COMPLETE"]
         dead = sum(bool(row.get("infeasible")) for row in completed)
         means = (record.get("temperature") or {}).get("means") or []
+        trended = bool((record.get("temperature") or {}).get("trend"))
         parameters = [parameter["name"] for parameter in record.get("parameters", [])]
         checked = bool(record.get("validation"))
         distances = ideal_distances(front, record["objectives"])
@@ -1374,6 +1413,7 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
                             *[head(f"o{k}", name) for k, name in enumerate(names)],
                             *[head(f"v{k}", f"{name} (validation)", class_="text-secondary") for k, name in enumerate(names) if checked],
                             *[head(f"t{k}", f"dT{k + 1} → mean") for k in range(len(means))],
+                            *([head(TREND, "Trend [°C/decade]")] if trended else []),
                             *[head(f"p:{name}", name) for name in parameters])
         rows = [ui.tags.tr(ui.tags.td(str(row["number"])), ui.tags.td(f"{distances[row['number']]:.3f}"),
                            *[ui.tags.td(f"{value:.4g}") for value in row["values"]],
@@ -1381,6 +1421,8 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
                              for value in ((row.get("validation") or [None] * len(names)) if checked else [])],
                            *[ui.tags.td(f"{row['offsets'][f'dT_{k + 1}']:+.2f} → {means[k] + row['offsets'][f'dT_{k + 1}']:.2f} °C")
                              for k in range(len(means))],
+                           *([ui.tags.td("–" if row["offsets"].get("dT_trend") is None else f"{row['offsets']['dT_trend']:+.2f}")]
+                             if trended else []),
                            *[ui.tags.td(f"{row['params'][name]:.4g}") for name in parameters])
                 for row in shown_rows]
         return ui.div(ui.p("Click a column title to sort by it, again for the other way.", class_="small text-muted mb-1"),
@@ -1560,7 +1602,8 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         names = ""
         found = progress()
         if found is not None and found[0].get("temperature") and input.cal_figure() not in ("distributions", "timeline"):
-            names = (" Optuna's figures show what it samples: dT_1 and the gaps (gap_2, …), from which the offsets of the cells "
+            names = (" Optuna's figures show what it samples: dT_1 and the gaps (gap_2, …)"
+                     + (" and the trend (dT_trend)" if found[0]["temperature"].get("trend") else "") + ", from which the offsets of the cells "
                      "follow (the equation above).")
         return ui.p(text + names, " ", ui.a("Optuna documentation", href=link, target="_blank") if link else None,
                     class_="small text-muted mb-1")

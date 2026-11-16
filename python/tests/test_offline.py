@@ -4273,5 +4273,22 @@ class TestResultsStep(unittest.TestCase):
         self.assertEqual(results_state("finished", 3, 3, 0), (DOING, "no front: transmission died out in all"))
 
 
+class TestTrendInTheCard(unittest.TestCase):
+    """A calibration with a temperature trend: said in its description, a column of the Pareto table, sortable."""
+
+    def test_trend_column_and_text(self):
+        from mobile.calibration_run_ui import TREND, front_columns, sort_rows, trend_said
+        objectives = [{"name": "o", "direction": "minimize"}]
+        plain = {"objectives": objectives, "temperature": {"means": [14.0, 16.0], "first": [-3, 3], "gap": [0, 4]}}
+        trended = {**plain, "temperature": {**plain["temperature"], "trend": [-0.5, 1.5], "trend_centre": "1991-12-31"}}
+        self.assertNotIn(TREND, front_columns(plain))  # Control: no trend, no column
+        self.assertIn(TREND, front_columns(trended))
+        self.assertEqual(trend_said(trended["temperature"]), "Temperature trend in -0.5 to 1.5 °C per decade, 0 on 1991-12-31")
+        front = [{"number": n, "values": [v], "params": {}, "offsets": {"dT_1": 0.0, "dT_2": 1.0, "dT_trend": t}}
+                 for n, v, t in ((0, 3.0, 0.4), (1, 2.0, 1.2), (2, 1.0, -0.3))]
+        self.assertEqual([row["number"] for row in sort_rows(front, TREND, True, {})], [1, 0, 2])
+        self.assertEqual([row["number"] for row in sort_rows(front, TREND, False, {})], [2, 0, 1])
+
+
 if __name__ == "__main__":
     unittest.main()

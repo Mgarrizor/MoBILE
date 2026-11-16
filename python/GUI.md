@@ -424,7 +424,12 @@ together (the Pareto front):
   warmest. The cells ticked are shifted: with one, by dT₁ only;
   with more, the first by dT₁ and each next one by a gap of at least 0 above the one before (the gap range is asked
   for then), so the order of their temperatures is kept in every trial. Cells not ticked keep the temperatures of the
-  file. Each trial writes its own temperature file.
+  file. Each trial writes its own temperature file. **Temperature trend** (off at first): one warming rate, dT_trend
+  in °C per decade (at first −0.5 to +1.5), sampled within its range and added to the offset of every cell or region
+  ticked, times the decades from the middle of the period (where it is 0). It tilts the temperature series without
+  changing their means over the period, so the gaps and the order mean what they did; the trial at the start has none
+  (if its range holds 0). The Pareto table then has a column **Trend [°C/decade]**, and the calibration's description
+  says the range.
 - **Model parameters**, by group as on the Parameters tab: tick a parameter to calibrate it, sampled uniformly or
   log-uniformly (for ranges over orders of magnitude) within a range in the units of its slider, at first the range of
   the slider; those not ticked keep their slider value. They can be calibrated with the offsets, or alone.
@@ -522,7 +527,7 @@ together (the Pareto front):
   endemic, high when outbreak years alternate with quiet ones) and the **fade-out** share (months with no new case: 0
   when transmission never stops). Each against every calibrated value, and the trials over each pair of calibrated
   values coloured by their fade-out share; trials where transmission died out in red. They are recorded with every
-  trial, not optimised: no regime is imposed on the calibration. Optuna's figures show what it samples, dT₁ and the gaps; the offsets of the cells follow from them. Its folder, `calibration/<name>/` in the
+  trial, not optimised: no regime is imposed on the calibration. Optuna's figures show what it samples, dT₁ and the gaps (and dT_trend); the offsets of the cells follow from them. Its folder, `calibration/<name>/` in the
   results folder, holds `calibration.json`, the Optuna study (`optuna.db`, and `optuna.snapshot.db`, a copy that can be
   copied while it runs), `status.json`, the model (`bin/`) and the trials, each with the series its objectives compared
   (`series/`), from which its plots are drawn. A
