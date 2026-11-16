@@ -32,7 +32,9 @@ import sqlite3
 import subprocess
 import threading
 import time
+from contextlib import closing
 from dataclasses import replace
+from functools import lru_cache
 from pathlib import Path
 
 import netCDF4
@@ -52,7 +54,7 @@ from .parameters import to_model
 from .region import cut_inputs
 from .results import _md5
 from .rundir import new_run_id, period_steps
-from .runner import NETCDF_LOCK, BuildOnce, RunCancelled, Runner
+from .runner import NETCDF_LOCK, RUN_PID, BuildOnce, RunCancelled, Runner, stop_left
 from .setup import from_fields, to_dict
 
 # Raised when a change means calibrations made before cannot be resumed (e.g. 2: the first trial has no offset). They
@@ -551,6 +553,13 @@ def trial_folder(folder, number):
     return Path(folder) / TRIALS / f"trial_{number:05d}"
 
 
+def stop_runs_left(folder):
+    """Stop the model runs of a calibration still running on this computer although the process that ran it died (e.g. a
+    GUI closed or crashed): they would go on writing in the trial folders the calibration, resumed, makes again, and
+    take the cores. Called once no process runs the calibration (its lock held). Returns how many were stopped."""
+    return sum(stop_left(path.parent) for path in (Path(folder) / TRIALS).glob(f"*/*/{RUN_PID}"))
+
+
 # ---------------------------------------------------------------- running
 
 def sampler_for(record):
@@ -861,6 +870,7 @@ def _run_locked(folder, record, state, parallel, threads, deadline=None, trial_s
         config = replace(config, run={**config.run, "threads": threads})
     config.validate()
     objectives = resolved(folder, record)["objectives"]
+    stop_runs_left(folder)
     study = open_study(folder, record)
     for trial in study.get_trials(deepcopy=False, states=(optuna.trial.TrialState.RUNNING,)):
         # Left running by a process that ended without finishing it, e.g. the GUI closed or a job killed: done again, and
@@ -1096,9 +1106,32 @@ def status_of(folder, record):
     return "interrupted" if status == "running" and not is_running(folder) else status
 
 
+@lru_cache(maxsize=128)
+def _study_completed(path, _stamp):
+    """The completed trials in a study database (read again when it changes), or None if it cannot be read."""
+    try:
+        with closing(sqlite3.connect(f"file:{path}?mode=ro", uri=True)) as database:
+            return int(database.execute("SELECT count(*) FROM trials WHERE state = 'COMPLETE'").fetchone()[0])
+    except sqlite3.Error:
+        return None
+
+
+def completed_trials(folder, record):
+    """The completed trials of a calibration, counted in its study: the record has them only from when a run last ended,
+    so not while it runs, here or elsewhere (a cluster job, its study copied back by Refresh). The record's count if the
+    study cannot be read."""
+    path = Path(folder) / DATABASE
+    try:
+        stamp = path.stat().st_mtime_ns
+    except OSError:
+        return record.get("completed", 0)
+    found = _study_completed(str(path), stamp)
+    return record.get("completed", 0) if found is None else found
+
+
 def calibration_label(folder, record):
     """e.g. 'dz_two_cells (finished, 100 of 100 trials completed, 2 objectives)'; '..., earlier version' if it cannot be resumed."""
-    done = record.get("completed", 0)
+    done = completed_trials(folder, record)
     return (f"{Path(folder).name} ({status_of(folder, record)}, {done} of {record['n_trials']} trials completed, "
             f"{len(record['objectives'])} objective{'s' if len(record['objectives']) > 1 else ''}"
             f"{'' if resumable(record) else ', earlier version: cannot be resumed'})")

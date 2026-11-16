@@ -2,10 +2,12 @@
 
 import fcntl
 import hashlib
+import json
 import os
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -153,6 +155,72 @@ class BuildOnce:
 NETCDF_LOCK = threading.RLock()
 
 
+RUN_PID = "run.pid"  # In a run folder while its scripts and model run: {pid, host, started} of their process group
+
+
+def process_started(pid):
+    """When a process started, in seconds since the epoch (to the second), or None if no such process runs."""
+    try:
+        found = subprocess.run(["ps", "-o", "lstart=", "-p", str(int(pid))], capture_output=True, text=True, timeout=10,
+                               env={**os.environ, "LC_ALL": "C"}).stdout.split()
+        return time.mktime(time.strptime(" ".join(found), "%a %b %d %H:%M:%S %Y")) if len(found) == 5 else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def write_pid(run_dir, pid):
+    """Say in the run folder which process group runs it, so that it can be stopped if what started it dies."""
+    try:
+        (Path(run_dir) / RUN_PID).write_text(json.dumps({"pid": pid, "host": socket.gethostname(), "started": process_started(pid)}))
+    except OSError:
+        pass  # The run goes on: it only cannot be stopped this way
+
+
+def _alive(group):
+    try:
+        os.killpg(group, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def stop_left(run_dir, wait=10.0):
+    """Stop the scripts and model of a run folder if they still run on this computer although what started them died
+    (e.g. a GUI closed or crashed while a calibration ran): they go on writing in the folder otherwise. By the process
+    group in its RUN_PID file, only if it is still that one: its first process started when the file says, or is gone
+    while others of its group still run (a group number is not given again while the group lives). Terminated, killed
+    after wait / 2 seconds if need be, and waited for. Returns whether a run was stopped; the file is removed."""
+    path = Path(run_dir) / RUN_PID
+    try:
+        found = json.loads(path.read_text())
+        group, host, started = int(found["pid"]), found.get("host"), found.get("started")
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    stopped = False
+    if host == socket.gethostname() and _alive(group):
+        now = process_started(group)
+        if now is None or (started is not None and abs(now - started) <= 2):
+            for sign in (signal.SIGTERM, signal.SIGKILL):
+                try:
+                    os.killpg(group, sign)
+                except ProcessLookupError:
+                    break
+                except PermissionError:  # Not a process of this user; after the first signal, one that has ended (a zombie)
+                    if sign == signal.SIGTERM:
+                        return False
+                    break
+                until = time.time() + wait / 2
+                while _alive(group) and time.time() < until:
+                    time.sleep(0.05)
+                if not _alive(group):
+                    break
+            stopped = True
+    path.unlink(missing_ok=True)
+    return stopped
+
+
 class Runner:
     def __init__(self, config, prebuilt=None):
         """prebuilt: the path of a model already built from this MoBILE with the same setup (e.g. for the runs of
@@ -214,6 +282,7 @@ class Runner:
                 stderr=subprocess.STDOUT,
                 start_new_session=True,  # Its own process group, so that cancel reaches make and mobile.out
             )
+            write_pid(run_dir, self._process.pid)
             if self._cancelled.is_set():  # Cancelled while the run folder was made
                 os.killpg(self._process.pid, signal.SIGTERM)
             for raw in _lines(self._process.stdout):
@@ -231,6 +300,7 @@ class Runner:
                     on_progress(event)
             returncode = self._process.wait()
             self._process.stdout.close()
+            (run_dir / RUN_PID).unlink(missing_ok=True)
         wall_seconds = time.time() - started
 
         # Exit codes do not tell: a bare STOP exits 0 and the scripts do not pass the model's status on

@@ -163,8 +163,19 @@ def calibration_run_card():
         ui.output_ui("cal_previous_info"),
         cluster_section(),
         ui.div(id="cal_history_plot", style="min-height: 380px;"),
-        ui.output_ui("cal_front_sort_choice"),
-        ui.output_ui("cal_front"),
+        ui.output_ui("cal_log_choice"),
+        ui.accordion(
+            ui.accordion_panel(
+                with_tip("Pareto front", "The trials no other trial beats on every objective: the best trade-offs between the "
+                         "objectives (for one objective, the best trial), among those where transmission persisted. With a "
+                         "validation window, each trial's scores on it follow, in grey: not used to choose the trials. Click "
+                         "the title to fold or unfold the table."),
+                ui.output_ui("cal_front_options"),
+                ui.output_ui("cal_front"),
+                value="front",
+            ),
+            id="cal_front_panel", open="front", class_="mt-2",
+        ),
         ui.div(
             ui.h6(with_tip("A trial of the Pareto front", "One of the best trade-offs so far (the first of the front at first), "
                            "against the data of an objective; with the possible drivers of its run below it, to see how they "
@@ -336,6 +347,55 @@ def windows_said(objectives, period, validation):
                             f"{'are' if across > 1 else 'is'} in neither window.")
         items.append((who, text, warnings, problems))
     return items
+
+
+IDEAL = "ideal"  # Sorting the Pareto front by the distance to the ideal point
+FRONT_FIRST = 10  # Trials of the Pareto front shown unless all are asked for
+
+
+def ideal_distances(front, objectives):
+    """{trial number: distance to the ideal point} of the trials of a Pareto front: each objective scaled from its best
+    value on the front (0) to its worst (1), then the Euclidean distance over the objectives; 0 is best on all. The size
+    of the bias (direction "zero") is lower the better, as stored. An objective with one value on the front adds 0."""
+    values = np.array([row["values"] for row in front], dtype="f8").reshape(len(front), len(objectives))
+    scaled = np.zeros_like(values)
+    for k, objective in enumerate(objectives):
+        column = values[:, k]
+        best, worst = (column.max(), column.min()) if objective["direction"] == "maximize" else (column.min(), column.max())
+        if worst != best:
+            scaled[:, k] = (column - best) / (worst - best)
+    return {row["number"]: float(distance) for row, distance in zip(front, np.sqrt((scaled**2).sum(axis=1)))}
+
+
+def front_columns(record):
+    """The columns the Pareto front can be sorted by: trial number, distance to the ideal, each objective (o0, …) and its
+    validation score (v0, …), each temperature offset (t0, …) and each model parameter (p:name)."""
+    count = len(record["objectives"])
+    return {"number", IDEAL, *[f"o{k}" for k in range(count)], *([f"v{k}" for k in range(count)] if record.get("validation") else []),
+            *[f"t{k}" for k in range(len((record.get("temperature") or {}).get("means") or []))],
+            *[f"p:{parameter['name']}" for parameter in record.get("parameters", [])]}
+
+
+def sort_rows(front, column, descending, distances):
+    """The trials of a Pareto front sorted by a column (front_columns), high to low or low to high; trials without a
+    value (e.g. no validation score) last either way, and equal values by trial number."""
+    def value(row):
+        if column == "number":
+            return row["number"]
+        if column == IDEAL:
+            return distances[row["number"]]
+        if column.startswith("p:"):
+            return row["params"].get(column[2:])
+        k = int(column[1:])
+        if column[0] == "o":
+            return row["values"][k]
+        if column[0] == "v":
+            return (row.get("validation") or [None] * (k + 1))[k]
+        return row["offsets"].get(f"dT_{k + 1}")
+
+    have = [row for row in front if value(row) is not None]
+    rows = sorted(sorted(have, key=lambda row: row["number"]), key=value, reverse=descending)
+    return rows + sorted((row for row in front if value(row) is None), key=lambda row: row["number"])
 
 
 def windows_tags(items, empty="Add an objective to see the windows it gives."):
@@ -1152,9 +1212,12 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         return ui.div(ui.tags.ul(*[ui.tags.li(line) for line in lines], class_="mb-1"), ui.p(f"Folder: {folder}", class_="mb-0"),
                       class_="small text-muted")
 
+    last_read = {}  # folder -> (record, rows, front): the last that could be read, kept while a read fails
+
     @reactive.calc
     def progress():
-        """(record, rows, front) of the calibration shown, read again every few seconds while it runs."""
+        """(record, rows, front) of the calibration shown, read again every few seconds while it runs. While it cannot be
+        read (e.g. a trial or a Refresh writing its study), the last read, not nothing: the plots do not blank out."""
         folder = shown()
         if running() or (folder and is_running(folder)):  # Here, or by another process, e.g. a batch job
             reactive.invalidate_later(REFRESH_SECONDS)
@@ -1162,103 +1225,189 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         if not folder:
             return None
         try:
-            return read_calibration(folder), trials_table(folder), best_trials(folder)
+            found = read_calibration(folder), trials_table(folder), best_trials(folder)
         except (OSError, ValueError, KeyError, RuntimeError, SQLAlchemyError):
-            return None  # Not readable yet, e.g. while the first trial is written
+            return last_read.get(folder)  # Not readable now, e.g. while the first trial is written
+        last_read[folder] = found
+        return found
+
+    sent = {}  # plot -> what was drawn in it last: a figure is sent again only when what it shows changes
+
+    async def send_new(plot, key, figure):
+        """Send a figure (or a function making it) unless the plot already shows it (the same key): redrawing the same
+        figure at each refresh would undo a zoom, and could put back an older figure after a newer one."""
+        if sent.get(plot) == key:
+            return
+        sent[plot] = key
+        await send_figure(session, plot, figure() if callable(figure) else figure)
+
+    # The menus of the calibration shown, set only when their choices change: drawn again at each refresh, a menu would
+    # put back the choice it was drawn with, undoing one made in the meantime
+    menu_frame = reactive.value(None)  # (folder, objective choices), or None without a front
+    trial_menu = reactive.value({})  # {number: label} of the trials of the front
+
+    @reactive.effect
+    def update_menus():
+        found = progress()
+        frame, trials = None, {}
+        if found is not None and found[2]:
+            record, _, front = found
+            frame = (shown(), {str(k): o["name"] for k, o in enumerate(record["objectives"])})
+            trials = {str(row["number"]): f"Trial {row['number']}" for row in sorted(front, key=lambda row: row["number"])}
+        with reactive.isolate():
+            if frame != menu_frame():
+                menu_frame.set(frame)
+            if trials != trial_menu():
+                trial_menu.set(trials)
+
+    @reactive.effect
+    def update_trial_choices():
+        trials = trial_menu()
+        if not trials or "cal_best_trial" not in input:
+            return
+        with reactive.isolate():
+            current = input.cal_best_trial()
+        ui.update_select("cal_best_trial", choices=trials, selected=current if current in trials else next(iter(trials)))
+
+    log_options = reactive.value(())  # ((index, name, whether all its values are above 0), …) of the calibration shown
+
+    @reactive.effect
+    def update_log_options():
+        found = progress()
+        options = ()
+        if found is not None:
+            record, rows, _ = found
+            done = [row for row in rows if row["state"] == "COMPLETE"]
+            options = tuple((k, o["name"], bool(done) and all(row["values"][k] is not None and row["values"][k] > 0 for row in done))
+                            for k, o in enumerate(record["objectives"]))
+        with reactive.isolate():
+            if options != log_options():
+                log_options.set(options)
+
+    @render.ui
+    def cal_log_choice():
+        options = log_options()
+        if not options:
+            return None
+        able = {str(k): name for k, name, positive in options if positive}
+        unable = [name for _, name, positive in options if not positive]
+        with reactive.isolate():
+            selected = [k for k in (input.cal_log() if "cal_log" in input else []) if k in able]
+        return ui.div(
+            ui.input_checkbox_group("cal_log", with_tip("Log scale", "The values of an objective on a log scale, in its panel "
+                                    "above: for those whose values span orders of magnitude. Only objectives whose values are "
+                                    "all above 0."), able, selected=selected, inline=True) if able else None,
+            ui.p(f"Not on a log scale, with values of 0 or below: {', '.join(unable)}.", class_="small text-muted mb-0")
+            if unable else None,
+            class_="small")
+
+    def logged():
+        """The indices of the objectives drawn on a log scale: ticked, and with all their values above 0."""
+        able = {k for k, _, positive in log_options() if positive}
+        return tuple(sorted(int(k) for k in (input.cal_log() if "cal_log" in input else []) if int(k) in able))
 
     @reactive.effect
     async def draw_history():
         found = progress()
         if found is None or not any(row["state"] == "COMPLETE" for row in found[1]):
-            await send_figure(session, "cal_history_plot", message_figure("The objectives of each trial are drawn here once trials are done."))
+            text = "The objectives of each trial are drawn here once trials are done."
+            await send_new("cal_history_plot", ("message", text), lambda: message_figure(text))
             return
         record, rows, _ = found
-        await send_figure(session, "cal_history_plot", calibration_history_figure(rows, record["objectives"]))
+        log = logged()
+        await send_new("cal_history_plot", (shown(), tuple((row["number"], row["state"]) for row in rows), log),
+                       lambda: calibration_history_figure(rows, record["objectives"], log))
 
     @render.ui
     def cal_front():
         found = progress()
         if found is None:
-            return None
+            return ui.p("Choose a calibration under Calibrations to see its Pareto front.", class_="small text-muted mb-0")
         record, every, front = found
         if not front:
             dead = [row for row in every if row["state"] == "COMPLETE" and row.get("infeasible")]
-            return (ui.p(f"No Pareto front yet: in all {len(dead)} completed trials transmission died out (infeasible). "
-                         "Results › Epidemic or endemic shows where.", class_="small text-muted mt-2 mb-0")
-                    if dead else None)
+            return ui.p(f"No Pareto front yet: in all {len(dead)} completed trials transmission died out (infeasible). "
+                        "Results › Epidemic or endemic shows where." if dead else "No Pareto front yet: no trial is done.",
+                        class_="small text-muted mb-0")
         names = [o["name"] for o in record["objectives"]]
         completed = [row for row in every if row["state"] == "COMPLETE"]
         dead = sum(bool(row.get("infeasible")) for row in completed)
         means = (record.get("temperature") or {}).get("means") or []
         parameters = [parameter["name"] for parameter in record.get("parameters", [])]
         checked = bool(record.get("validation"))
-        header = ui.tags.tr(ui.tags.th("Trial"), *[ui.tags.th(name) for name in names],
-                            *[ui.tags.th(f"{name} (validation)", class_="text-secondary") for name in names if checked],
-                            *[ui.tags.th(f"dT{k + 1} → mean") for k in range(len(means))], *[ui.tags.th(name) for name in parameters])
-        rows = [ui.tags.tr(ui.tags.td(str(row["number"])), *[ui.tags.td(f"{value:.4g}") for value in row["values"]],
+        distances = ideal_distances(front, record["objectives"])
+        columns = front_columns(record)
+        key, descending = front_sort()
+        if key not in columns:
+            key, descending = IDEAL, False
+        ordered = sort_rows(front, key, descending, distances)
+        everything = "cal_front_all" in input and input.cal_front_all()
+        shown_rows = ordered if everything else ordered[:FRONT_FIRST]
+
+        def head(column, text, **attributes):
+            arrow = (" ▼" if descending else " ▲") if column == key else ""
+            click = f"Shiny.setInputValue('cal_front_sort_click', '{column}', {{priority: 'event'}})"
+            return ui.tags.th(text, ui.tags.span(arrow, class_="text-primary"), role="button", tabindex="0",
+                              title="Sort by this column; click again for the other way (▼ high to low, ▲ low to high)",
+                              onclick=click, onkeydown=f"if (event.key === 'Enter' || event.key === ' ') {{ event.preventDefault(); {click}; }}",
+                              style="cursor: pointer; white-space: nowrap;", **attributes)
+
+        header = ui.tags.tr(head("number", "Trial"), head(IDEAL, "Distance to the ideal"),
+                            *[head(f"o{k}", name) for k, name in enumerate(names)],
+                            *[head(f"v{k}", f"{name} (validation)", class_="text-secondary") for k, name in enumerate(names) if checked],
+                            *[head(f"t{k}", f"dT{k + 1} → mean") for k in range(len(means))],
+                            *[head(f"p:{name}", name) for name in parameters])
+        rows = [ui.tags.tr(ui.tags.td(str(row["number"])), ui.tags.td(f"{distances[row['number']]:.3f}"),
+                           *[ui.tags.td(f"{value:.4g}") for value in row["values"]],
                            *[ui.tags.td("–" if value is None else f"{value:.4g}", class_="text-secondary")
                              for value in ((row.get("validation") or [None] * len(names)) if checked else [])],
                            *[ui.tags.td(f"{row['offsets'][f'dT_{k + 1}']:+.2f} → {means[k] + row['offsets'][f'dT_{k + 1}']:.2f} °C")
                              for k in range(len(means))],
                            *[ui.tags.td(f"{row['params'][name]:.4g}") for name in parameters])
-                for row in sort_front(front)]
-        return ui.div(ui.tags.strong(with_tip("Pareto front", "The trials no other trial beats on every objective: the best trade-offs "
-                                              "between the objectives (for one objective, the best trial), among those where "
-                                              "transmission persisted. With a validation window, each trial's scores on it "
-                                              "follow, in grey: not used to choose the trials."),
-                                     class_="small"),
-                      ui.tags.table(ui.tags.thead(header), ui.tags.tbody(*rows), class_="table table-sm small mb-1"),
+                for row in shown_rows]
+        return ui.div(ui.p("Click a column title to sort by it, again for the other way.", class_="small text-muted mb-1"),
+                      ui.tags.div(ui.tags.table(ui.tags.thead(header), ui.tags.tbody(*rows), class_="table table-sm small mb-1"),
+                                  style="overflow-x: auto;"),
+                      ui.p(f"The first {len(shown_rows)} of the {len(front)} trials of the front, in this order: Show all for the "
+                           "others." if len(shown_rows) < len(front) else f"All {len(front)} trials of the front.",
+                           class_="small text-muted mb-1"),
                       ui.p(f"In {dead} of the {len(completed)} completed trials transmission died out (infeasible: kept out of the "
                            "front, and the sampler learns where that happens). Results › Epidemic or endemic shows them.",
-                           class_="small text-muted mb-0") if dead else None,
-                      class_="mt-2")
+                           class_="small text-muted mb-0") if dead else None)
 
-    def sort_choices(record):
-        choices = {"number": "Trial number"}
-        for k, objective in enumerate(record["objectives"]):
-            better = "high" if objective["direction"] == "maximize" else "low"
-            for order, text in (("desc", "high to low"), ("asc", "low to high")):
-                choices[f"{k}:{order}"] = f"{objective['name']}, {text}{' (best first)' if text.startswith(better) else ''}"
-                if record.get("validation"):
-                    choices[f"v{k}:{order}"] = (f"{objective['name']} (validation), {text}"
-                                                f"{' (best first)' if text.startswith(better) else ''}")
-        return choices
+    front_sort = reactive.value((IDEAL, False))  # (column, high to low) of the Pareto front: closest to the ideal first
+
+    @reactive.effect
+    @reactive.event(input.cal_front_sort_click)
+    def sort_by_column():
+        """A click on a column title: sort by it, best first for an objective; again on the same: the other way."""
+        column = input.cal_front_sort_click()
+        key, descending = front_sort()
+        if column == key:
+            front_sort.set((key, not descending))
+            return
+        found = progress()
+        objectives_ = found[0]["objectives"] if found is not None else []
+        index = column[1:] if column[:1] in ("o", "v") else ""
+        best_high = index.isdigit() and int(index) < len(objectives_) and objectives_[int(index)]["direction"] == "maximize"
+        front_sort.set((column, best_high))
 
     @render.ui
-    def cal_front_sort_choice():
-        found = progress()
-        if found is None or not found[2]:
+    def cal_front_options():
+        if menu_frame() is None:
             return None
-        choices = sort_choices(found[0])
         with reactive.isolate():
-            selected = input.cal_front_sort() if "cal_front_sort" in input and input.cal_front_sort() in choices else "number"
-        return ui.input_select("cal_front_sort", "Sort the Pareto front by", choices, selected=selected, width="22rem")
-
-    def sort_front(front):
-        """The trials of the front in the order chosen: by number, or by an objective, high to low or low to high."""
-        key = input.cal_front_sort() if "cal_front_sort" in input else "number"
-        if not key or key == "number" or ":" not in key:
-            return sorted(front, key=lambda row: row["number"])
-        index, order = key.split(":")
-        if index.startswith("v"):  # By a validation score; trials without one last
-            k = int(index[1:])
-
-            def score(row):
-                value = (row.get("validation") or [None] * (k + 1))[k]
-                return (value is not None, value if value is not None else 0.0) if order == "desc" else \
-                    (value is None, value if value is not None else 0.0)
-            return sorted(front, key=score, reverse=order == "desc")
-        return sorted(front, key=lambda row: row["values"][int(index)], reverse=order == "desc")
+            everything = bool(input.cal_front_all()) if "cal_front_all" in input else False
+        return ui.input_switch("cal_front_all", f"Show all (else the first {FRONT_FIRST})", value=everything)
 
     @render.ui
     def cal_best_choice():
-        found = progress()
-        if found is None or not found[2]:
+        frame = menu_frame()
+        if frame is None:
             return None
-        record, _, front = found
-        trials = {str(row["number"]): f"Trial {row['number']}" for row in sorted(front, key=lambda row: row["number"])}
-        objectives_ = {str(k): o["name"] for k, o in enumerate(record["objectives"])}
+        objectives_ = frame[1]
         with reactive.isolate():
+            trials = trial_menu()
             trial = input.cal_best_trial() if "cal_best_trial" in input and input.cal_best_trial() in trials else next(iter(trials))
             objective = input.cal_best_objective() if "cal_best_objective" in input and input.cal_best_objective() in objectives_ else "0"
         return ui.layout_columns(ui.input_select("cal_best_trial", "Trial of the Pareto front", trials, selected=trial),
@@ -1272,18 +1421,23 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         found = progress()
         folder = shown()
         if found is None or not found[2] or "cal_best_trial" not in input or not input.cal_best_trial():
-            await send_figure(session, "cal_best_plot", message_figure("A trial of the Pareto front, against the data, is drawn here."))
+            text = "A trial of the Pareto front, against the data, is drawn here."
+            await send_new("cal_best_plot", ("message", text), lambda: message_figure(text))
             return
         number, index = int(input.cal_best_trial()), int(input.cal_best_objective() or 0)
-        figure, problem = trial_figure(folder, found[0], number, index, driver_choices(input, "cal_best_driver"))
+        if str(number) not in trial_menu() or index >= len(found[0]["objectives"]):
+            return  # A choice of another calibration, until its menus follow
+        chosen = driver_choices(input, "cal_best_driver")
+        figure, problem = trial_figure(folder, found[0], number, index, chosen)
         best_problem.set(problem)
+        key = (folder, number, index, tuple(sorted(chosen.items())))
         if isinstance(figure, str):
-            await send_figure(session, "cal_best_plot", message_figure(figure))
+            await send_new("cal_best_plot", key, lambda: message_figure(figure))
             return
         row = next((row for row in found[2] if row["number"] == number), {})
         figure.update_layout(title=f"Trial {number}, against {found[0]['objectives'][index]['name']} (model scaled to the mean of the data)"
                                    f"{validation_scores(found[0], row)}")
-        await send_figure(session, "cal_best_plot", figure)
+        await send_new("cal_best_plot", key, figure)
 
     best_problem = reactive.value(None)
 
@@ -1345,33 +1499,39 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         found = progress()
         folder = shown()
         if found is None or not found[2] or "cal_best_objective" not in input:
-            await send_figure(session, "cal_start_plot", message_figure("Where the calibration started, against the data, is drawn here."))
+            text = "Where the calibration started, against the data, is drawn here."
+            await send_new("cal_start_plot", ("message", text), lambda: message_figure(text))
             return
         record, rows, _ = found
         start = next((row for row in rows if row["baseline"] and row["state"] == "COMPLETE"), None)
         first = next((row for row in rows if row["number"] == 0 and row["state"] == "COMPLETE"), None)
         row = start or first
         if row is None:
-            await send_figure(session, "cal_start_plot", message_figure("Where the calibration started is drawn here once its first trial is done."))
+            text = "Where the calibration started is drawn here once its first trial is done."
+            await send_new("cal_start_plot", ("message", text), lambda: message_figure(text))
             return
         index = int(input.cal_best_objective() or 0)
-        figure, problem = trial_figure(folder, record, row["number"], index, driver_choices(input, "cal_start_driver"))
+        if index >= len(record["objectives"]):
+            return  # A choice of another calibration, until its menus follow
+        chosen = driver_choices(input, "cal_start_driver")
+        figure, problem = trial_figure(folder, record, row["number"], index, chosen)
         start_problem.set(problem)
+        key = (folder, row["number"], index, tuple(sorted(chosen.items())))
         if isinstance(figure, str):
-            await send_figure(session, "cal_start_plot", message_figure(figure))
+            await send_new("cal_start_plot", key, lambda: message_figure(figure))
             return
         what = "no temperature offset" if start else "the first trial (none without offsets)"
         values = ", ".join(f"{o['name']} {value:.3g}" for o, value in zip(record["objectives"], row["values"]))
         figure.update_layout(title=f"Start: trial {row['number']}, {what} ({values}), against {record['objectives'][index]['name']}"
                                    f"{validation_scores(record, row)}")
-        await send_figure(session, "cal_start_plot", figure)
+        await send_new("cal_start_plot", key, figure)
 
     @render.ui
     def cal_figure_objective():
-        found = progress()
-        if found is None or not FIGURES[input.cal_figure()][3]:
+        frame = menu_frame()
+        if frame is None or not FIGURES[input.cal_figure()][3]:
             return None
-        choices = {str(k): objective["name"] for k, objective in enumerate(found[0]["objectives"])}
+        choices = frame[1]
         with reactive.isolate():
             selected = input.cal_figure_index() if "cal_figure_index" in input and input.cal_figure_index() in choices else "0"
         return ui.input_select("cal_figure_index", "Of the objective", choices, selected=selected)
@@ -1396,7 +1556,8 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         kind = input.cal_figure()
         index = int(input.cal_figure_index()) if FIGURES[kind][3] and "cal_figure_index" in input and input.cal_figure_index() else 0
         if found is None:
-            await send_figure(session, "cal_results_plot", message_figure("Choose a calibration under Calibrations to see its results."))
+            text = "Choose a calibration under Calibrations to see its results."
+            await send_new("cal_results_plot", ("message", text), lambda: message_figure(text))
             return
         done = sum(row["state"] == "COMPLETE" for row in found[1])
         key = (folder, done, kind, index)
@@ -1404,12 +1565,12 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
             try:
                 results[key] = results_figure(folder, kind, index)
             except ResultsError as error:
-                await send_figure(session, "cal_results_plot", message_figure(f"Not yet: {error}."))
+                await send_new("cal_results_plot", key, lambda: message_figure(f"Not yet: {error}."))
                 return
             except (ValueError, RuntimeError, KeyError, ZeroDivisionError) as error:  # From Optuna's figures, e.g. too few trials
-                await send_figure(session, "cal_results_plot", message_figure(f"{FIGURES[kind][0]} cannot be drawn: {error}."))
+                await send_new("cal_results_plot", key, lambda: message_figure(f"{FIGURES[kind][0]} cannot be drawn: {error}."))
                 return
-        await send_figure(session, "cal_results_plot", results[key])
+        await send_new("cal_results_plot", key, results[key])
 
     def what_states():
         """{"what": (state, note)} of the form: the offsets and parameters ticked for a new calibration."""
