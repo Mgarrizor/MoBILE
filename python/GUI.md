@@ -94,18 +94,19 @@ Everything a run needs that is not a parameter or an output.
 - **Population growth**, in the same card (off at first): the population grows by a rate a year, typed in **Growth (%
   a year)**, from the end of the spin-up (which does not grow), keeping the age structure: the model derives the birth
   and age-specific mortality rates from it (its growth mode, `mobile.sh -G`, the annual factor, e.g. 1.0213). Or **Fit
-  to the period** a population series, which is optional: a table (comma, tab, semicolon or spaces) with a date column
-  and a population column named N, pop, population or people, e.g. the population column of the case data; the rate
-  is that of a straight line through the log of the population within the period. A note gives the growth over the
-  period (e.g. ×1.658 for 2.13% a year over 1980–2003), the `growth_ratio_ceiling` it needs, and, after a fit, how far
-  the values are from the line and whether the population file has the series' population at the start (the growth
-  starts from the file's: set it to the start of the period). The agents need room to grow: `growth_ratio_ceiling`
-  (Parameters, Demography) at least 1.15 times the growth over the period, rounded up to 0.1 (2.0 for ×1.658); below
-  that, tab 2 is red (Invalid) and nothing runs. The spare slots are placed per cell at the start and never move, so a
-  cell can run out before the total does: with ×1.31 growth, a ceiling of 1.4 left 1.7% of the births unclaimed by the
-  last year (Senegal); 2.0 for ×1.65 left none (a 24-year test run). Not with the optional demography files or the
-  counterfactual. The run scripts pass it to the model only with a MoBILE whose `utils/run_MOBILE.sh` has the `growth=`
-  line; with an earlier one, a run with growth is refused, saying so.
+  to the period** a population series, which is optional: a table (comma, tab, semicolon or spaces) with a column
+  named `date`, written YYYY-MM-DD (e.g. 1975-01-15), and a population column named N, pop, population or people, e.g.
+  the population column of the case data; the rate is that of a straight line through the log of the population within
+  the period. A note gives the growth over the period (e.g. ×1.658 for 2.13% a year over 1980–2003), the
+  `growth_ratio_ceiling` it needs, and, after a fit, how far the values are from the line and whether the population
+  file has the series' population at the start (the growth starts from the file's: set it to the start of the period).
+  The agents need room to grow: `growth_ratio_ceiling` (Parameters, Demography) at least 1.15 times the growth over
+  the period, rounded up to 0.1 (2.0 for ×1.658); below that, tab 2 is red (Invalid) and nothing runs. The spare slots
+  are placed per cell at the start and never move, so a cell can run out before the total does: with ×1.31 growth, a
+  ceiling of 1.4 left 1.7% of the births unclaimed by the last year (Senegal); 2.0 for ×1.65 left none (a 24-year test
+  run). Not with the optional demography files or the counterfactual. The run scripts pass it to the model only with a
+  MoBILE whose `utils/run_MOBILE.sh` has the `growth=` line; with an earlier one, a run with growth is refused, saying
+  so.
 - **Apply setup**, centred above the region card, checks the settings and switches to the Parameters & SA tab. It also
   checks the driving files against each other (grid, days) and for the units of rainfall (mm/day) and temperature
   (°C); any difference opens a warning window, from which the setup can still be applied.

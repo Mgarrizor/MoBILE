@@ -4168,13 +4168,18 @@ class TestPopulationGrowth(unittest.TestCase):
         self.assertEqual(ceiling_needed(1.0213, "1980-01-01", "2003-12-31"), 2.0)  # x1.659 with 15% headroom: 1.908, up to 2.0
         self.assertEqual(ceiling_needed(0.99, "1980-01-01", "2003-12-31"), 1.0)  # A decline needs no room
         # Control: a series that does not grow fits 1, and a comma table with another population name reads too
-        flat = self.write("year_month,population\n" + "".join(f"{day.date()},{1000}\n" for day in days), "flat.csv")
+        flat = self.write("date,population\n" + "".join(f"{day.date()},{1000}\n" for day in days), "flat.csv")
         self.assertAlmostEqual(fit_growth(read_population(flat), "1980-01-01", "2003-12-31")["g"], 1.0, places=9)
 
     def test_what_cannot_be_fitted(self):
         from mobile.growth import GrowthError, fit_growth, read_population
         with self.assertRaisesRegex(GrowthError, "population column named one of"):
             read_population(self.write("date,cases\n2000-01-01,3\n2001-01-01,4\n", "cases.csv"))
+        # One date format: YYYY-MM-DD in a column named date; a month of numbers is not a date, nor is 15/01/2000
+        with self.assertRaisesRegex(GrowthError, r"needs a column named date \(YYYY-MM-DD\)"):
+            read_population(self.write("month,N\n1,100\n13,102\n25,104\n", "months.csv"))
+        with self.assertRaisesRegex(GrowthError, r"line 3: the date '15/01/2001' is not written YYYY-MM-DD"):
+            read_population(self.write("date,N\n2000-01-15,100\n15/01/2001,102\n", "other.csv"))
         series = read_population(self.write("date,N\n2000-01-01,100\n2000-06-01,101\n2010-01-01,120\n", "short.csv"))
         with self.assertRaisesRegex(GrowthError, "less than a year within the period"):
             fit_growth(series, "1980-01-01", "1999-12-31")
@@ -4200,6 +4205,25 @@ class TestPopulationGrowth(unittest.TestCase):
         self.assertEqual(growth_value(without, 0), {})  # A MoBILE from before the growth mode runs as it did
         with self.assertRaisesRegex(ConfigError, "needs a MoBILE whose utils/run_MOBILE.sh passes it"):
             growth_value(without, 1.0213)
+
+class TestResultsStep(unittest.TestCase):
+    """The calibration's Results step is final only when its Run step is: a front while it runs is partial."""
+
+    def test_in_progress_while_the_run_is(self):
+        from mobile.calibration_progress import DOING, DONE, TODO
+        from mobile.calibration_run_ui import results_state
+        for status in ("running", "queued", "stopped", "interrupted"):
+            state, note = results_state(status, 12, 112, 5)
+            self.assertEqual(state, DOING, status)
+            self.assertEqual(note, "partial: Pareto front of 5 from 12 of 112 trials")
+        state, note = results_state("running", 12, 112, 5, refreshed="2026-11-16T13:05:00+00:00")
+        self.assertRegex(note, r"^partial: .*, as of the last Refresh \(16 Nov \d\d:05\)$")
+        # Control: the same trials once the calibration has finished give the final front, with no Refresh time
+        self.assertEqual(results_state("finished", 12, 112, 5, refreshed="2026-11-16T13:05:00+00:00"),
+                         (DONE, "Pareto front of 5"))
+        self.assertEqual(results_state("running", 0, 112, 0), (TODO, None))
+        self.assertEqual(results_state("finished", 3, 3, 0), (DOING, "no front: transmission died out in all"))
+
 
 if __name__ == "__main__":
     unittest.main()

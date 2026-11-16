@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 
 POPULATION_NAMES = ("n", "pop", "population", "people", "persons", "inhabitants")  # Column names taken as population
-DATE_NAMES = ("date", "time", "day", "month")
+DATE_NAME, DATE_FORMAT = "date", "%Y-%m-%d"  # The date column: one name, one format (e.g. 1975-01-15)
 GROWTH_RANGE = (0.9, 1.1)  # Annual factors accepted: -10% to +10% a year
 # growth_ratio_ceiling at least this times the growth over the period: the spare slots are placed per cell at the start
 # and never move, so a cell can run out before the total does. Senegal (LaCie, AGEING): 1.7% of the births unclaimed in
@@ -20,18 +20,14 @@ class GrowthError(ValueError):
     """The population series cannot give a growth: says why."""
 
 
-def _dates(column):
-    return pd.to_datetime(column, errors="coerce", format="mixed")
-
-
 def read_population(path):
-    """The population by date, from a text table (comma, tab, semicolon or spaces between columns) with a date column
-    and a population column named e.g. N or population, as a Series sorted by date; a date given more than once keeps
-    its first value. Raises GrowthError saying what is missing."""
+    """The population by date, from a text table (comma, tab, semicolon or spaces between columns) with a column named
+    date, written YYYY-MM-DD, and a population column named e.g. N or population, as a Series sorted by date; a date
+    given more than once keeps its first value. Raises GrowthError saying what is missing or which line is wrong."""
     tables = []
     for separator in SEPARATORS:
         try:
-            table = pd.read_csv(path, sep=separator, engine="python")
+            table = pd.read_csv(path, sep=separator, engine="python", dtype=str)
         except (OSError, UnicodeDecodeError) as error:
             raise GrowthError(f"cannot read {path}: {error}") from None
         except (ValueError, pd.errors.ParserError):
@@ -41,13 +37,14 @@ def read_population(path):
     for table in tables:
         names = {str(column).strip().strip("\"'").lower(): column for column in table.columns}
         population = next((names[name] for name in POPULATION_NAMES if name in names), None)
-        date = next((names[name] for name in DATE_NAMES if name in names), None)
-        if date is None:  # The first column that reads as dates
-            date = next((column for column in table.columns if column != population and not pd.api.types.is_numeric_dtype(table[column])
-                         and _dates(table[column]).notna().mean() > 0.9), None)
-        if population is None or date is None:
+        if population is None or DATE_NAME not in names:
             continue
-        days = _dates(table[date])
+        text = table[names[DATE_NAME]].str.strip().str.strip("\"'")
+        days = pd.to_datetime(text, errors="coerce", format=DATE_FORMAT)
+        wrong = days.isna() & text.notna()
+        if wrong.any():
+            row = int(wrong.to_numpy().nonzero()[0][0])
+            raise GrowthError(f"{path}, line {row + 2}: the date {text.iloc[row]!r} is not written YYYY-MM-DD")
         values = pd.to_numeric(table[population], errors="coerce")
         keep = days.notna() & values.notna() & (values > 0)
         if keep.sum() < 2:
@@ -55,8 +52,8 @@ def read_population(path):
         series = pd.Series(values[keep].to_numpy(), index=pd.DatetimeIndex(days[keep]))
         return series[~series.index.duplicated(keep="first")].sort_index()
     columns = ", ".join(str(column) for column in (tables[0].columns if tables else []))
-    raise GrowthError(f"{path}: needs a date column and a population column named one of {', '.join(POPULATION_NAMES)} "
-                      f"(case does not matter){f'; it has {columns}' if columns else ''}")
+    raise GrowthError(f"{path}: needs a column named date (YYYY-MM-DD) and a population column named one of "
+                      f"{', '.join(POPULATION_NAMES)} (case does not matter){f'; it has {columns}' if columns else ''}")
 
 
 def fit_growth(series, first, last):
