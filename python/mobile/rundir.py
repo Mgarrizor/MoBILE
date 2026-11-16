@@ -40,6 +40,20 @@ def fill_template(template, values, threads, mobile):
     return f"{first_line}\n\nexport MOBILE={mobile}  # Added by the wrapper\n{rest}"
 
 
+GROWTH_LINE = re.compile(r"^[ \t]*growth=", re.M)  # In run_MOBILE.sh of a MoBILE with the growth mode (mobile.sh -G)
+
+
+def growth_value(template, growth):
+    """{"growth": value} for the line of run_MOBILE.sh that passes -G: 'NONE' for no growth; {} for a template without
+    the line (a MoBILE from before the growth mode), unless there is growth, which it cannot run: ConfigError."""
+    if GROWTH_LINE.search(template):
+        return {"growth": f"{float(growth):.6f}" if growth else "'NONE'"}
+    if growth:
+        raise ConfigError("population growth needs a MoBILE whose utils/run_MOBILE.sh passes it to the model (a line "
+                          "growth=…, with -G ${growth}): update MoBILE, or turn the growth off")
+    return {}
+
+
 def new_run_id():
     return f"{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(2)}"
 
@@ -106,6 +120,7 @@ def create_run_dir(config, name=None, prebuilt=None):
         # Only then: a MoBILE from before -E has no such line, and its runs still build as they always did
         values["prebuilt"] = f"'{prebuilt}'"
     template = (Path(config.mobile) / "utils" / "run_MOBILE.sh").read_text()
+    values.update(growth_value(template, inputs.get("growth", 0)))
     script = fill_template(template, values, config.run["threads"], config.mobile)
     (run_dir / "run_MOBILE.sh").write_text(script)
     return run_dir
