@@ -321,7 +321,7 @@ def cluster_server(input, output, session, chosen, changed):
         if error:
             return ui.TagList(ui.p(f"Login certificate: {said}.", class_="small mb-1"),
                               ui.p(f"Could not ask the cluster ({when}): {error}", class_="small text-danger mb-0"))
-        rows = info_rows(sections, settings(), record())
+        rows = info_rows(sections, settings(), record(), folder=chosen())
         rows.append(("Login certificate", said, "ssh-add here (no ssh)", said.startswith(("expired", "no certificate"))))
         body = [ui.tags.tr(ui.tags.td(what, class_="text-nowrap"),
                            ui.tags.td(value, class_="text-warning-emphasis" if warning else None),
