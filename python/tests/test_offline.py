@@ -3094,6 +3094,58 @@ sleep ${FAKE_SLEEP:-0}
         self.assertIn("(interrupted,", calibration_label(killed, record))
         self.assertEqual(run_calibration(killed, StudyState(), parallel=2)["status"], "finished")  # And it goes on
 
+    def test_resumed_stops_runs_left_running(self):
+        """A run left running by a process that died goes on writing in its trial folder: the calibration, resumed, stops
+        it before it makes the folder again (else: Directory not empty, and the calibration stops with an error)."""
+        import subprocess
+
+        from mobile.calibration_engine import create_calibration, run_calibration, trial_folder
+        from mobile.runner import RUN_PID, write_pid
+        from mobile.sensitivity_runs import StudyState
+
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=4, name="left")
+        seed_dir = trial_folder(folder, 0) / "seed_12345"
+        seed_dir.mkdir(parents=True)
+        # As a model run is left: in a process group of its own, whose parent has gone, writing all the time
+        parent = subprocess.Popen(["bash", "-c", 'while true; do touch "$0/f$RANDOM$RANDOM"; sleep 0.002; done >/dev/null 2>&1 & echo $!',
+                                   str(seed_dir)], start_new_session=True, stdout=subprocess.PIPE, text=True)
+        writer = int(parent.stdout.read().strip())
+        parent.wait()
+        write_pid(seed_dir, parent.pid)
+        self.addCleanup(lambda: subprocess.run(["kill", "-9", str(writer)], capture_output=True))
+        time.sleep(0.3)
+        self.assertTrue(any(seed_dir.iterdir()))
+        self.assertEqual(run_calibration(folder, StudyState(), parallel=2)["status"], "finished")
+        with self.assertRaises(ProcessLookupError):  # Stopped
+            os.kill(writer, 0)
+        self.assertFalse((seed_dir / RUN_PID).exists())
+
+    def test_runs_of_others_not_stopped(self):
+        """Control: a process group that is not the one the file names (its number given again) is left alone."""
+        import subprocess
+        import threading
+
+        from mobile.runner import RUN_PID, process_started, stop_left
+
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder)
+        other = subprocess.Popen(["sleep", "30"], start_new_session=True)
+        self.addCleanup(other.kill)
+        time.sleep(0.2)
+        started = process_started(other.pid)
+        self.assertIsNotNone(started)
+        (folder / RUN_PID).write_text(json.dumps({"pid": other.pid, "host": socket.gethostname(), "started": started - 100}))
+        self.assertFalse(stop_left(folder))
+        self.assertIsNone(other.poll())  # Still running
+        (folder / RUN_PID).write_text(json.dumps({"pid": other.pid, "host": "another-computer", "started": started}))
+        self.assertFalse(stop_left(folder))
+        self.assertIsNone(other.poll())
+        (folder / RUN_PID).write_text(json.dumps({"pid": other.pid, "host": socket.gethostname(), "started": started}))
+        reaper = threading.Thread(target=other.wait)  # As the system does for a run whose parent died
+        reaper.start()
+        self.assertTrue(stop_left(folder))  # The one it names: stopped
+        other.wait(5)
+
     def test_status_file_snapshot_and_kept_series(self):
         import optuna
 
