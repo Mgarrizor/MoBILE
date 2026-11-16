@@ -27,8 +27,8 @@ from pathlib import Path
 
 from .calibration_cli import RESUMABLE
 from .calibration_engine import (CLUSTER, DATABASE, SERIES, SNAPSHOT, STATUS, TRIALS, CalibrationError, _now, _write_atomic,
-                                 forget_storage, is_running, read_calibration, read_cluster, resolved, setup_config,
-                                 write_calibration)
+                                 completed_trials, forget_storage, is_running, read_calibration, read_cluster, resolved,
+                                 setup_config, write_calibration)
 from .config import MAX_PATH_LENGTH, MAX_THREADS
 from .worldpop import cache_folder, summary_name
 
@@ -553,9 +553,10 @@ def _date(stamp):
     return datetime.datetime.strptime(stamp, "%Y%m%d").strftime("%-d %b %Y")
 
 
-def info_rows(sections, settings, record=None, today=None):
+def info_rows(sections, settings, record=None, today=None, folder=None):
     """[(what, value, from, warning)] of the cluster information (cluster_info), for the settings and, if given, the record of
-    the calibration chosen (its jobs asked about). warning: the value needs attention."""
+    the calibration chosen (its jobs asked about) and its folder (its trials counted in the study copied back, which the
+    record has only once a run has ended). warning: the value needs attention."""
     today = today or datetime.date.today()
     rows = []
     # The budget of each project, as CINECA last counted it
@@ -620,7 +621,7 @@ def info_rows(sections, settings, record=None, today=None):
     jobs = [line.split("|") for line in sections.get("calibration", []) if line.split("|")[0].isdigit()]
     if record is not None and jobs:
         seconds = sum(float(job[2]) for job in jobs if len(job) >= 3 and job[2].replace(".", "").isdigit())
-        completed = record.get("completed") or 0
+        completed = (completed_trials(folder, record) if folder else record.get("completed")) or 0
         per = f"; {seconds / completed / 3600:.2f} per completed trial ({completed} completed, as of the last refresh)" if completed else ""
         rows.append(("This calibration", f"{len(jobs)} job{'s' if len(jobs) > 1 else ''}, {_hours(seconds)} core-hours{per}",
                      "sacct over its jobs", False))

@@ -3619,8 +3619,10 @@ echo "$@" >> "$HOME/scancel.txt"
             send(long, replace(settings, folder="~/" + "x" * 150), cleared=True)
 
     def test_cluster_information(self):
+        import optuna
+
         from mobile import cluster
-        from mobile.calibration_engine import create_calibration, read_calibration
+        from mobile.calibration_engine import create_calibration, open_study, read_calibration
         from mobile.cluster import ClusterSettings, certificate, cluster_info, info_rows, job_cost, wall_seconds
 
         settings, home = self.cluster()
@@ -3677,6 +3679,14 @@ echo "64200001|cal_x|PENDING|0:00|20:00|(Priority)"
         self.assertIn("a job runs at most 00:30:00, you may use at most 224 CPUs, 965 GB of memory, 2 nodes at a time, run at most 1 job at a time, "
                       "queue at most 2. The time limit set, 01:00:00, is longer", value)
         self.assertEqual(rows["This calibration"], ("2 jobs, 15.1 core-hours; 0.19 per completed trial (78 completed, as of the last refresh)", False))
+        # With its folder: the trials completed in the study, which the record has only once a run has ended (0 while it runs)
+        study = open_study(folder, read_calibration(folder))
+        for value in range(6):
+            study.add_trial(optuna.trial.create_trial(values=[float(value)] * len(record["objectives"])))
+        running = {**record, "completed": 0}
+        self.assertEqual(dict((what, value) for what, value, *_ in info_rows(sections, given, running, folder=folder))["This calibration"],
+                         "2 jobs, 15.1 core-hours; 2.52 per completed trial (6 completed, as of the last refresh)")
+        self.assertNotIn("per completed trial", dict((what, value) for what, value, *_ in info_rows(sections, given, running))["This calibration"])
         self.assertEqual(rows["Your jobs"][0], "64200001 cal_x pending 0:00 of 20:00 (Priority)")
         self.assertEqual(rows["Nodes of dcgp_usr_prod"][0], "80 idle, 408 mixed, 942 allocated, 12 other (down, drained, reserved…)")
         # Without an account, QOS or partition: those parts are not asked, and the rest still said
