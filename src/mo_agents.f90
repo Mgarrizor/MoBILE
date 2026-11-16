@@ -936,13 +936,27 @@ USE, INTRINSIC :: ISO_C_BINDING
                          (len(trim(birthrate_file)) /= 0) .or. &
                          (len(trim(mortality_time_file)) /= 0)
 
+            if (demog_growth /= 0.) then
+                if (demog_growth <= 0.) then
+                    print *, 'demog_init: demog_growth must be a positive annual growth factor (e.g. 1.02), or 0 for off --> STOP'
+                    STOP
+                end if
+                if (have_files .or. demog_counterfactual) then
+                    print *, 'demog_init: demog_growth sets the rates itself: give it without the rate files ' // &
+                             '(-M/-B/-T) and without counterfactual mode --> STOP'
+                    STOP
+                end if
+            end if
+
             if (demog_counterfactual .and. (.not. have_files)) then
                 print *, 'demog_init: counterfactual mode needs the FACTUAL rate files ' // &
                          '(-M/-B/-T) -- the shadow population has nothing to integrate --> STOP'
                 STOP
             end if
 
-            if (.not. have_files) then
+            if (demog_growth > 0.) then
+                demog_mode = DEMOG_GROW
+            else if (.not. have_files) then
                 demog_mode = DEMOG_STANDARD
             else if (demog_counterfactual) then
                 demog_mode = DEMOG_COUNTER
@@ -968,6 +982,14 @@ USE, INTRINSIC :: ISO_C_BINDING
             if (demog_mode == DEMOG_COUNTER) then
                 print *, '--> Demographics: COUNTERFACTUAL (age structure held at cumm_age.txt)'
                 call demog_shadow_init()
+            else if (demog_mode == DEMOG_GROW) then
+                print *, '--> Demographics: GROWTH (age structure held at cumm_age.txt, growing by demog_growth a year)'
+                ! The real run's rates: shape-invariant at g = demog_growth, with the birth multiplier that makes the
+                ! ABM's daily scheme realize that g (the spin-up keeps the g=1 multiplier, used for b_spin above).
+                b_calib = demog_calib_factor(demog_growth)
+                call demog_shape_rates(demog_growth, b_grow, mu_grow)
+                call demog_print_growth(demog_growth)
+                b_calib = demog_calib_factor(1.0) ! For the g=1 self-test below
             else
                 print *, '--> Demographics: FACTUAL (supplied rate files drive the real run)'
             end if
@@ -1004,6 +1026,16 @@ USE, INTRINSIC :: ISO_C_BINDING
                 ! mu_age_today(:) was set to mu_age(:) (= mu broadcast) once in
                 ! namelist_const and never changes, so only b_t needs setting.
                 b_t_today = birth_rate
+
+            case (DEMOG_GROW)
+                ! No growth in the spin-up: stationary g=1 rates, as in the file modes. Then the constant growth rates.
+                if (in_spinup) then
+                    b_t_today       = b_spin
+                    mu_age_today(:) = mu_spin(:)
+                else
+                    b_t_today       = b_grow
+                    mu_age_today(:) = mu_grow(:)
+                end if
 
             case default ! DEMOG_FACTUAL, DEMOG_COUNTER
                 if (in_spinup) then

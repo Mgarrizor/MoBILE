@@ -66,12 +66,13 @@ MODULE mo_namelist
         end subroutine namelist_inout
 
         subroutine namelist_human(pop_file,nagent,imm_file,mortality_file,birthrate_file,mortality_time_file, &
-                                  demog_counterfactual)
+                                  demog_counterfactual,demog_growth)
             implicit none
 
             character(len=200), intent(out):: pop_file, imm_file, mortality_file, birthrate_file, mortality_time_file
             integer, intent(out) :: nagent
             logical, intent(out) :: demog_counterfactual
+            real, intent(out) :: demog_growth
 
             ! Local use only
             character(len=1000) :: line
@@ -79,7 +80,7 @@ MODULE mo_namelist
 
             ! Define namelist
             namelist /HUMAN/ pop_file, nagent, imm_file, mortality_file, birthrate_file, mortality_time_file, &
-                             demog_counterfactual
+                             demog_counterfactual, demog_growth
 
             ! Does the file exist?
             inquire (file=namelist_filename, iostat=iostats)
@@ -94,6 +95,7 @@ MODULE mo_namelist
             ! set explicitly here (same reason growth_ratio_ceiling is defaulted
             ! before the &CONST read).
             demog_counterfactual = .false.
+            demog_growth = 0.
 
             ! Open and read namelist
             open (action='read', file=namelist_filename, iostat=iostats, newunit=file_unit)
