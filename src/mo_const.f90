@@ -233,6 +233,9 @@ MODULE mo_const
     ! unknown number of times and any itime-dependent rate would drift.
     real :: b_spin
     real :: mu_spin(0:79)
+    ! Growth-mode rates of the real run: shape-invariant at g_annual = demog_growth, constant, precomputed once.
+    real :: b_grow
+    real :: mu_grow(0:79)
     ! Today's rates actually handed to the birth draw / death checks.
     real :: b_t_today = 0.
     ! Today's FACTUAL rates. In counterfactual mode these drive the shadow
@@ -1046,6 +1049,26 @@ MODULE mo_const
             '-yr replica at g=1: g_eff =', g_eff, '   shape TVD =', 100.d0*tvd, ' %'
         write(*,*) '=========================='
     end subroutine demog_print_diagnostics
+
+
+    subroutine demog_print_growth(g_annual)
+    !===
+        ! Init-time check of the growth mode: the growth the ABM's daily scheme realizes with the rates of
+        ! g_annual (b_calib set for it by the caller), and how far the shape drifts from cumm_age.txt.
+        implicit none
+        real, intent(in) :: g_annual
+        double precision :: g_eff, tvd
+
+        call demog_replica(g_annual, demog_calib_years, g_eff, tvd)
+        write(*,*) '=========================='
+        write(*,'(A,F10.6,A,F8.4,A)') '  Growth mode: demog_growth =', g_annual, &
+            ' (', 100.*(g_annual - 1.), ' % a year)'
+        write(*,'(A,ES12.4,A,ES12.4,A,ES12.4,A,F10.6)') '  b_daily =', b_grow, &
+            '   mu_daily(0) =', mu_grow(0), '   mu_daily(79) =', mu_grow(79), '   b_calib =', b_calib
+        write(*,'(A,I3,A,F10.6,A,F8.4,A)') '  ', demog_calib_years, &
+            '-yr replica at demog_growth: g_eff =', g_eff, '   shape TVD =', 100.d0*tvd, ' %'
+        write(*,*) '=========================='
+    end subroutine demog_print_growth
 
 
 end MODULE mo_const

@@ -37,6 +37,7 @@ usage() { echo "Usage:              \n
                 -B: Time-varying birth-rate file (Optional; blank = scalar birth_rate) \n
                 -T: Age-AND-year mortality-rate file (Optional; blank = use -M/scalar mu; overrides -M if both given) \n
                 -C: Counterfactual mode [1: hold the age structure fixed; anything else: factual] (Optional; needs -M/-B/-T) \n
+                -G: Growth mode: annual growth factor of the population, e.g. 1.0213 (Optional; blank/NONE/0 = off; not with -M/-B/-T/-C) \n
                 -O: Output selection file, out_*=.true./.false. lines for &OUTPUT (Optional; blank/NONE = default output) \n
                 -E: Already-built model (a mobile.out) to run instead of building one (Optional; blank/NONE = build) \n
 
@@ -51,10 +52,11 @@ mortality_file=""
 birthrate_file=""
 mortality_time_file=""
 demog_counterfactual=".false."
+demog_growth="0."
 output_file=""
 prebuilt=""
 
-while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:i:l:M:B:T:C:O:E:" flag; do
+while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:i:l:M:B:T:C:G:O:E:" flag; do
  case $flag in
    h) # Handle the -h flag
    # Display script help information
@@ -137,6 +139,13 @@ while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:i:l:M:B:T:C:O:E:" flag; do
      demog_counterfactual=".true."
    else
      demog_counterfactual=".false."
+   fi
+   ;;
+   G) # Handle the -G flag (growth mode: annual growth factor; 'NONE' or blank = off)
+   if [ "$OPTARG" = "NONE" ] || [ -z "$OPTARG" ]; then
+     demog_growth="0."
+   else
+     demog_growth="$OPTARG"
    fi
    ;;
    O) # Handle the -O flag (output selection file; 'NONE' = blank = default output)
@@ -339,6 +348,7 @@ mortality_file='${mortality_file}',
 birthrate_file='${birthrate_file}',
 mortality_time_file='${mortality_time_file}',
 demog_counterfactual=${demog_counterfactual},
+demog_growth=${demog_growth},
 /
 &CONST
 ${lines}
