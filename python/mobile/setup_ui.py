@@ -78,7 +78,7 @@ def _growth_inputs(config):
             ui.input_numeric("setup_growth_percent", "Growth (% a year)", value=growth_percent(config), step=0.01, width="12rem"),
             _path_input("setup_growth_file", with_tip(
                 "Or fit it to a population series",
-                "A table (text: comma, tab, semicolon or spaces between columns) with a date column and a population column "
+                "A table (text: comma, tab, semicolon or spaces between columns) with a column named date, written YYYY-MM-DD (e.g. 1975-01-15), and a population column "
                 "named N, pop, population or people, e.g. the population column of the case data. The growth is that of a "
                 "straight line through the log of the population within the period."), "", "text"),
             ui.input_action_button("setup_growth_fit", "Fit to the period", class_="btn-sm mb-2"),

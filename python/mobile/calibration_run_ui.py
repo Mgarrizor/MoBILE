@@ -349,6 +349,24 @@ def windows_said(objectives, period, validation):
     return items
 
 
+def results_state(status, completed, n_trials, front, refreshed=None):
+    """(state, note) of the Results step: done only with a Pareto front once the calibration has finished; while it
+    runs, or waits to be resumed, in progress like Run, the front said to be partial, as of the last Refresh for one
+    on a cluster (refreshed: that time, ISO, or None)."""
+    if not completed:
+        return TODO, None
+    finished = status == "finished"
+    if completed >= 2 and front:
+        if finished:
+            return DONE, f"Pareto front of {front}"
+        note = f"partial: Pareto front of {front} from {completed} of {n_trials} trials"
+    else:
+        note = "no front: transmission died out in all" if not front else f"{completed} completed trial{'s' if completed != 1 else ''}"
+    if refreshed and not finished:
+        note += f", as of the last Refresh ({pd.Timestamp(refreshed).to_pydatetime().astimezone():%d %b %H:%M})"
+    return DOING, note
+
+
 IDEAL = "ideal"  # Sorting the Pareto front by the distance to the ideal point
 FRONT_FIRST = 10  # Trials of the Pareto front shown unless all are asked for
 
@@ -1617,10 +1635,8 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
             states["run"] = (TODO, f"sent to {cluster['host']}: submit a job" if cluster else "Resume here, or send it")
         else:
             states["run"] = (DOING, f"{status}{where}: resume or submit, {trials}")
-        states["results"] = ((DONE, f"Pareto front of {len(front_)}") if completed >= 2 and front_
-                             else (DOING, "no front: transmission died out in all") if completed and not front_
-                             else (DOING, f"{completed} completed trial{'s' if completed != 1 else ''}") if completed
-                             else (TODO, None))
+        states["results"] = results_state(status, completed, record["n_trials"], len(front_),
+                                          cluster.get("refreshed") if cluster else None)
         return name, states
 
     return SimpleNamespace(running=running, cancel=state.cancel, what=what_states, stored=calibration_states)
