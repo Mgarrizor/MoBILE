@@ -4131,5 +4131,65 @@ class TestCalibrationProgressAndFront(unittest.TestCase):
                   "parameters": [{"name": "b"}]}
         self.assertEqual(front_columns(record), {"number", IDEAL, "o0", "v0", "t0", "p:b"})
 
+
+class TestPopulationGrowth(unittest.TestCase):
+    """The growth mode's annual factor: fitted to a population series, checked in a setup, and passed to the model."""
+
+    def write(self, text, name="population.txt"):
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder)
+        (folder / name).write_text(text)
+        return folder / name
+
+    def test_fit_recovers_a_known_growth(self):
+        from mobile.growth import ceiling_needed, fit_growth, growth_over, percent, read_population
+        days = pd.date_range("1975-01-15", "2025-12-15", freq="MS") + pd.Timedelta(days=14)
+        n = 267390 * 1.0213 ** ((days - days[0]).days / 365.25)
+        # As the case data give it: quoted names, a row number, each month twice, spaces between columns
+        lines = ['"date" "PF" "N"'] + [f'"{2 * i + k}" {day.date()} 1 {value:.0f}' for i, (day, value) in enumerate(zip(days, n)) for k in (1, 2)]
+        series = read_population(self.write("\n".join(lines) + "\n"))
+        self.assertEqual(len(series), len(days))  # One value per date
+        found = fit_growth(series, "1980-01-01", "2003-12-31")
+        self.assertAlmostEqual(found["g"], 1.0213, places=5)
+        self.assertLess(found["departure"], 1e-5)
+        self.assertTrue(found["covers"])
+        self.assertEqual(percent(found["g"]), "2.13% a year")
+        self.assertAlmostEqual(growth_over(1.0213, "1980-01-01", "2003-12-31"), 1.0213 ** (8766 / 365.25))
+        self.assertEqual(ceiling_needed(1.0213, "1980-01-01", "2003-12-31"), 2.0)  # x1.659 with 15% headroom: 1.908, up to 2.0
+        self.assertEqual(ceiling_needed(0.99, "1980-01-01", "2003-12-31"), 1.0)  # A decline needs no room
+        # Control: a series that does not grow fits 1, and a comma table with another population name reads too
+        flat = self.write("year_month,population\n" + "".join(f"{day.date()},{1000}\n" for day in days), "flat.csv")
+        self.assertAlmostEqual(fit_growth(read_population(flat), "1980-01-01", "2003-12-31")["g"], 1.0, places=9)
+
+    def test_what_cannot_be_fitted(self):
+        from mobile.growth import GrowthError, fit_growth, read_population
+        with self.assertRaisesRegex(GrowthError, "population column named one of"):
+            read_population(self.write("date,cases\n2000-01-01,3\n2001-01-01,4\n", "cases.csv"))
+        series = read_population(self.write("date,N\n2000-01-01,100\n2000-06-01,101\n2010-01-01,120\n", "short.csv"))
+        with self.assertRaisesRegex(GrowthError, "less than a year within the period"):
+            fit_growth(series, "1980-01-01", "1999-12-31")
+        found = fit_growth(series, "1995-01-01", "2012-12-31")
+        self.assertFalse(found["covers"])  # Fitted on what there is, and said
+
+    def test_setup_check(self):
+        from mobile.config import growth_problems
+        self.assertEqual(growth_problems({"growth": 0}), [])
+        self.assertEqual(growth_problems({"growth": 1.0213, "mortality_file": "NONE"}), [])
+        self.assertIn("out of 0.9 to 1.1", growth_problems({"growth": 2.13})[0])  # A percent typed as a factor
+        self.assertIn("not with mortality_file", growth_problems({"growth": 1.02, "birthrate_file": "/b.txt"})[0])
+        self.assertIn("not with mortality_file", growth_problems({"growth": 1.02, "counterfactual": 1})[0])
+        self.assertIn("annual growth factor", growth_problems({"growth": "1.02"})[0])
+
+    def test_run_script_line(self):
+        from mobile.config import ConfigError
+        from mobile.rundir import growth_value
+        with_line = "            growth='NONE'\nvar_38=\"-G ${growth}\"\n"
+        self.assertEqual(growth_value(with_line, 1.0213), {"growth": "1.021300"})
+        self.assertEqual(growth_value(with_line, 0), {"growth": "'NONE'"})
+        without = "            counterfactual=0\n"
+        self.assertEqual(growth_value(without, 0), {})  # A MoBILE from before the growth mode runs as it did
+        with self.assertRaisesRegex(ConfigError, "needs a MoBILE whose utils/run_MOBILE.sh passes it"):
+            growth_value(without, 1.0213)
+
 if __name__ == "__main__":
     unittest.main()

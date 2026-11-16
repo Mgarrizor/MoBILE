@@ -42,9 +42,10 @@ from .setup import (
     OPTIONAL_FILES, REQUIRED_FILES, from_fields, from_manifest, create_folder, list_folder, region_from_fields, region_mode,
     save_setup, start_folder, typed_path, usable_shapes,
 )
+from .growth import GrowthError, ceiling_needed, fit_growth, growth_over, percent, read_population
 from .setup_ui import (
     DAILY_FILES, EXAMPLE_FOLDER, PREVIEW_FILES, PREVIEW_STYLE, REGION_BOXES, REGION_LAYERS, REGION_MONTHS, SUFFIX_NAMES, available_model, example_note_box, region_values,
-    AUTO, age_values, country_choices, period_values, setup_problems, setup_tab, setup_value, year_choices,
+    AUTO, age_values, country_choices, growth_percent, period_values, setup_problems, setup_tab, setup_value, year_choices,
 )
 from .worldpop import COUNTRIES, PRODUCTS, WorldPopError, cached_summary, describe, fitted_mortality, prepare, resolve_choice, year_label
 from .variables import (
@@ -203,6 +204,7 @@ def create_app(config):
         ),
         funders(),
         title=page_title(ui.output_ui("header")),
+        window_title="MoBILE - GUI",  # Else the browser takes it from the title above: only the theme switch has text then
     )
 
     def server(input, output, session):
@@ -280,10 +282,28 @@ def create_app(config):
 
         @reactive.calc
         def parameters_problems():
-            """What makes the parameters and outputs shown invalid: an output an objective needs not ticked."""
+            """What makes the parameters and outputs shown invalid: an output an objective needs not ticked; with population
+            growth in the setup applied, a growth_ratio_ceiling too low for it."""
             needed, _ = needed_outputs(calibration.objectives())
             shown = set(selected_output())
-            return [f"Tick {output_label(flag)}: needed by {', '.join(names)}" for flag, names in needed.items() if flag not in shown]
+            found = [f"Tick {output_label(flag)}: needed by {', '.join(names)}" for flag, names in needed.items() if flag not in shown]
+            growth = setup().inputs.get("growth") or 0
+            period = period_values(setup())
+            if growth and period is not None:
+                need, ceiling = ceiling_needed(growth, period[2], period[3]), shown_ceiling()
+                if ceiling < need:
+                    found.append(f"growth_ratio_ceiling (Demography) is {ceiling:g}: with the population growing {percent(growth)}, "
+                                 f"×{growth_over(growth, period[2], period[3]):.3f} over the period, it needs {need:g} or more "
+                                 f"(room for the agents born)")
+            return found
+
+        def shown_ceiling():
+            """growth_ratio_ceiling as the slider shows it (its compiled default if not moved), or 1 without the slider."""
+            name = "growth_ratio_ceiling"
+            if name in overrides():
+                return overrides()[name]
+            default = slider_setup()["defaults"].get(name)
+            return 1.0 if default is None else to_model(name, default)
 
         @reactive.calc
         def parameters_changed():
@@ -675,6 +695,8 @@ def create_app(config):
                 ui.update_numeric(f"setup_{key}", value=value)
             ui.update_switch("setup_counterfactual", value=config.inputs.get("counterfactual") == 1)
             ui.update_text("setup_shapes_file", value=(config.shapes or {}).get("file", ""))
+            ui.update_switch("setup_growth", value=bool(config.inputs.get("growth")))
+            ui.update_numeric("setup_growth_percent", value=growth_percent(config))
 
         @reactive.calc
         def typed_setup():
@@ -700,6 +722,7 @@ def create_app(config):
             }
             files = {key: input[f"setup_{key}"]() for key, _, _ in (*REQUIRED_FILES, *OPTIONAL_FILES)}
             files["counterfactual"] = 1 if input.setup_counterfactual() else 0
+            files["growth"] = typed_growth()
             try:
                 new = from_fields(setup().mobile, input.setup_project(), input.setup_runs_dir(), run, files, typed_region(), period,
                                   typed_age(), typed_shapes())
@@ -939,6 +962,54 @@ def create_app(config):
                 return
             ui.update_date("setup_start", value=span[0])
             ui.update_date("setup_end", value=span[1])
+
+        def typed_growth():
+            """The annual growth factor in the boxes of the Setup tab: 1 + % / 100, or 0 if off or not a number."""
+            value = input.setup_growth_percent() if input.setup_growth() else None
+            return round(1 + float(value) / 100, 8) if isinstance(value, (int, float)) else 0
+
+        growth_fit = reactive.value(None)  # The last fit to a population series: its result, or what went wrong
+
+        @reactive.effect
+        @reactive.event(input.setup_growth_fit)
+        def fit_growth_to_series():
+            typed = typed_days()
+            path = typed_path(input.setup_growth_file()) if input.setup_growth_file().strip() else None
+            if path is None or typed is None or typed[2]:
+                growth_fit.set({"problem": "Choose a population series, and a valid period above." if path is None else
+                                "The period above is not valid yet."})
+                return
+            try:
+                found = fit_growth(read_population(path), typed[0], typed[1])
+            except GrowthError as error:
+                growth_fit.set({"problem": str(error)})
+                return
+            growth_fit.set({**found, "path": str(path), "period": (typed[0], typed[1])})
+            ui.update_numeric("setup_growth_percent", value=round(100 * (found["g"] - 1), 4))
+
+        @render.ui
+        def setup_growth_note():
+            fitted = growth_fit()
+            if fitted is not None and "problem" in fitted:
+                return ui.p(fitted["problem"], class_="small text-danger mb-1")
+            growth, typed = typed_growth(), typed_days()
+            if not growth or typed is None or typed[2]:
+                return None
+            over, need = growth_over(growth, typed[0], typed[1]), ceiling_needed(growth, typed[0], typed[1])
+            lines = [f"{percent(growth)}: ×{over:.3f} over the period ({typed[0]} to {typed[1]}). growth_ratio_ceiling "
+                     f"(Parameters, Demography) must then be {need:g} or more, for the agents born."]
+            if fitted is not None and fitted.get("period") == (typed[0], typed[1]):
+                lines.append(f"Fitted to {os.path.basename(fitted['path'])}, {fitted['first']:%Y-%m} to {fitted['last']:%Y-%m}: "
+                             f"{percent(fitted['g'])}, the values within {100 * fitted['departure']:.1f}% of the line"
+                             + ("" if fitted["covers"] else "; the series does not cover the whole period") + ".")
+                grid_ = typed_region_grid()[1]
+                if grid_ is not None and grid_.get("people"):
+                    people, start = grid_["people"], fitted["start"]
+                    gap = people / start - 1
+                    lines.append(f"The population file gives {people:,.0f} people; the series {start:,.0f} at "
+                                 f"{fitted['first']:%Y-%m}" + (f" ({100 * gap:+.0f}%): set the file to the population of the "
+                                 "start of the period, which the growth starts from." if abs(gap) > 0.02 else "."))
+            return ui.div(*[ui.p(line, class_="small text-muted mb-1") for line in lines])
 
         @reactive.calc
         def typed_days():
@@ -1292,6 +1363,7 @@ def create_app(config):
         browse_button("cal_data_file", "data")
         browse_button("cal_model_folder", "folder")
         browse_button("setup_shapes_file", "shape")
+        browse_button("setup_growth_file", "text")
         calibration = calibration_server(input, output, session, setup, setup_state)
         calibrating = calibration_run_server(
             input, output, session, setup, calibration.objectives, applied_overrides, applied_output, not_applied, load_template,

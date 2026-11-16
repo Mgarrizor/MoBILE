@@ -57,6 +57,37 @@ def _shapes_inputs(config):
     )
 
 
+def growth_percent(config):
+    """The growth of a setup in % a year, for its box; 2 when it has none (the box is shown only when growth is on)."""
+    growth = config.inputs.get("growth") or 0
+    return round(100 * (growth - 1), 4) if growth else 2.0
+
+
+def _growth_inputs(config):
+    """Population growth: a rate a year, typed or fitted to a population series over the period."""
+    return ui.div(
+        ui.input_switch("setup_growth", with_tip(
+            "Population growth",
+            "The population grows by this rate a year from the end of the spin-up (which does not grow), keeping the age "
+            "structure: the model derives the birth and age-specific mortality rates from it (its growth mode). The "
+            "population file is then that of the start of the period. The agents need room to grow: growth_ratio_ceiling "
+            "(Parameters, Demography) must be above the growth over the period. Not with the optional demography files."),
+            value=bool(config.inputs.get("growth"))),
+        ui.panel_conditional(
+            "input.setup_growth",
+            ui.input_numeric("setup_growth_percent", "Growth (% a year)", value=growth_percent(config), step=0.01, width="12rem"),
+            _path_input("setup_growth_file", with_tip(
+                "Or fit it to a population series",
+                "A table (text: comma, tab, semicolon or spaces between columns) with a date column and a population column "
+                "named N, pop, population or people, e.g. the population column of the case data. The growth is that of a "
+                "straight line through the log of the population within the period."), "", "text"),
+            ui.input_action_button("setup_growth_fit", "Fit to the period", class_="btn-sm mb-2"),
+        ),
+        ui.output_ui("setup_growth_note"),
+        class_="border-top pt-2 mb-2",
+    )
+
+
 HAS_SHAPES = "input.setup_shapes_file && input.setup_shapes_file.trim() !== ''"
 
 
@@ -123,6 +154,7 @@ def setup_tab(config):
         *[_path_input(f"setup_{key}", label, setup_value(config, key), kind) for key, label, kind in REQUIRED_FILES],
         _age_inputs(config),
         _shapes_inputs(config),
+        _growth_inputs(config),
         ui.accordion(
             ui.accordion_panel(
                 ui.TagList("Optional files ", ui.tags.span("(Beta release - do not use)", class_="text-danger ms-1")),

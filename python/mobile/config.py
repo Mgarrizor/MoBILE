@@ -27,7 +27,7 @@ NO_AGE = ("inputs: age_file is no longer used: the age structure comes from Worl
           "product and year. Remove `age_file` and set e.g. `age_structure: {country: SEN}`.")
 NO_AGE_STRUCTURE = "age_structure: missing; choose a country of WorldPop, e.g. {country: SEN}, and optionally product and year"
 OPTIONAL_INPUTS = {"mortality_file", "birthrate_file", "mortality_time_file", "imm_forcing"}
-OPTIONAL_DEFAULTS = {"counterfactual": 0}
+OPTIONAL_DEFAULTS = {"counterfactual": 0, "growth": 0}  # growth: the population's annual growth factor (mobile.sh -G); 0 = off
 
 # character(len=200) in mo_control.f90; a namelist read truncates longer paths silently
 MAX_PATH_LENGTH = 200
@@ -48,6 +48,26 @@ def _shapes(raw, resolve):
     if not isinstance(raw, dict) or "file" not in raw:
         raise ConfigError("shapes: give the shapefile, e.g. shapes: {file: districts.shp, name: NAME, merge: null}")
     return {"file": str(resolve(raw["file"])), "name": raw.get("name"), "merge": raw.get("merge")}
+
+
+def growth_problems(inputs):
+    """What is wrong with the population growth of a setup's inputs: a factor out of range, or with rate files or the
+    counterfactual mode, which set the rates otherwise."""
+    from .growth import GROWTH_RANGE
+
+    growth = inputs.get("growth", 0)
+    if isinstance(growth, bool) or not isinstance(growth, (int, float)):
+        return ["inputs: growth is the annual growth factor of the population, e.g. 1.0213 for 2.13% a year (0 = off)"]
+    if not growth:
+        return []
+    found = []
+    if not GROWTH_RANGE[0] <= growth <= GROWTH_RANGE[1]:
+        found.append(f"inputs: growth {growth:g} is out of {GROWTH_RANGE[0]:g} to {GROWTH_RANGE[1]:g} (an annual factor, e.g. 1.0213)")
+    if inputs.get("counterfactual") == 1 or any(inputs.get(key, "NONE") not in ("NONE", "", None)
+                                               for key in ("mortality_file", "birthrate_file", "mortality_time_file")):
+        found.append("inputs: growth sets the birth and mortality rates itself: not with mortality_file, birthrate_file, "
+                     "mortality_time_file or counterfactual")
+    return found
 
 
 class ConfigError(ValueError):
@@ -217,6 +237,7 @@ class Config:
             for key in ("mortality_file", "birthrate_file", "mortality_time_file")
         ):
             errors.append("inputs: counterfactual needs mortality_file, birthrate_file or mortality_time_file")
+        errors += growth_problems(self.inputs)
 
         # The scripts expand these unquoted, and mobile.sh refuses to run inside the repository
         for path in [self.mobile, self.runs_dir, *self.inputs.values()]:
