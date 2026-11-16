@@ -126,6 +126,10 @@ def value_panels(record):
             key = f"dT_{k + 1}"
             panels.append((f"dT{k + 1}: {_cell(record, k)}, mean {temperature['means'][k]:.2f} °C",
                            lambda trial, key=key: trial.user_attrs.get(key, np.nan), f"dT{k + 1} [°C]", 0.0))
+        if temperature.get("trend"):
+            low, high = temperature["trend"]
+            panels.append((f"Temperature trend ({low:g} to {high:g} °C per decade, 0 on {temperature['trend_centre']})",
+                           lambda trial: trial.user_attrs.get("dT_trend", np.nan), "dT_trend [°C per decade]", 0.0))
     for parameter in record.get("parameters", []):
         name, log = parameter["name"], parameter["distribution"] == "loguniform"
         panels.append((f"{name} ({'log-uniform' if log else 'uniform'}, {parameter['low']:.4g} to {parameter['high']:.4g})",

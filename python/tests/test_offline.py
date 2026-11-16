@@ -3799,6 +3799,54 @@ echo "64200001|cal_x|PENDING|0:00|20:00|(Priority)"
         # The order can change: the east, warmer by 1.5 °C, cooler than the west in some trials
         self.assertTrue(any(means[1] + row["offsets"]["dT_2"] < means[0] + row["offsets"]["dT_1"] for row in rows))
 
+    def test_temperature_trend(self):
+        from mobile.calibration_engine import (CalibrationError, baseline, create_calibration, offset_temperature, read_calibration,
+                                               run_calibration, trial_folder, trials_table)
+        from mobile.calibration_results import value_panels
+        from mobile.sensitivity_runs import StudyState
+
+        # The file shifted by each offset plus the trend times the decades from the centre: 0 there, the mean barely moved
+        days = np.arange(self.t2m.shape[0])  # 2001-01-01 to 2002-12-31: the centre is day 364, 2001-12-31
+        offset_temperature(self.root / "temperature.nc", self.root / "trend.nc", self.cells, {"dT_1": 1.0, "dT_2": -0.5, "dT_trend": 2.0},
+                           "2001-12-31")
+        with netCDF4.Dataset(self.root / "trend.nc") as data:
+            shift = data["temperature"][:] - self.t2m
+            self.assertEqual(json.loads(data.mobile_trend), {"dT_trend": 2.0, "unit": "°C per decade", "zero_on": "2001-12-31"})
+        drift = 2.0 * (days - 364) / 3652.5
+        np.testing.assert_allclose(shift[:, 0, 0], 1.0 + drift, atol=1e-5)
+        np.testing.assert_allclose(shift[:, 0, 1], -0.5 + drift, atol=1e-5)
+        self.assertAlmostEqual(float(shift[:, 0, 0].mean()), 1.0, delta=1e-3)  # Centred: the cell's mean is its offset
+        with self.assertRaisesRegex(CalibrationError, "the day where it is 0"):
+            offset_temperature(self.root / "temperature.nc", self.root / "x.nc", self.cells, {"dT_1": 0.0, "dT_2": 0.0, "dT_trend": 1.0})
+        # The record keeps the range and the centre of the calibration's period; the start trial has no trend
+        with self.assertRaisesRegex(CalibrationError, "trend needs its low below its high"):
+            create_calibration(self.config, self.objectives(), temperature={**self.temperature(), "trend": (1.0, 1.0)}, name="flat")
+        folder = create_calibration(self.config, self.objectives(), temperature={**self.temperature(), "trend": (-1.0, 3.0)}, n_trials=6,
+                                    name="trend")
+        temperature = read_calibration(folder)["temperature"]
+        self.assertEqual((temperature["trend"], temperature["trend_centre"]), ([-1.0, 3.0], "2001-12-31"))
+        self.assertEqual(baseline(temperature)["dT_trend"], 0.0)
+        self.assertIsNone(baseline({**temperature, "trend": [0.5, 3.0]}))  # No trend is outside the range
+        self.assertIn("Temperature trend (-1 to 3 °C per decade, 0 on 2001-12-31)", [panel[0] for panel in value_panels(read_calibration(folder))])
+        # Run: each trial samples it within the range, and its temperature file carries it
+        self.assertEqual(run_calibration(folder, StudyState(), parallel=2)["status"], "finished")
+        rows = trials_table(folder)
+        self.assertEqual(next(row for row in rows if row["baseline"])["offsets"]["dT_trend"], 0.0)
+        for row in rows:
+            self.assertTrue(-1.0 <= row["params"]["dT_trend"] <= 3.0)
+            self.assertEqual(row["offsets"]["dT_trend"], row["params"]["dT_trend"])
+        row = next(row for row in rows if not row["baseline"])
+        with netCDF4.Dataset(trial_folder(folder, row["number"]) / "t2m.nc") as data:
+            trend = json.loads(data.mobile_trend)["dT_trend"]
+            west = data["temperature"][:, 0, 0] - self.t2m[:, 0, 0]
+        self.assertAlmostEqual(trend, row["offsets"]["dT_trend"], places=5)
+        self.assertAlmostEqual(float(west[-1] - west[0]), trend * days[-1] / 3652.5, places=4)  # Its rise over the two years
+        # Without a trend, as before: nothing sampled for it, nothing in the file
+        plain = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=2, name="plain")
+        self.assertNotIn("trend", read_calibration(plain)["temperature"])
+        self.assertEqual(run_calibration(plain, StudyState())["status"], "finished")
+        self.assertTrue(all("dT_trend" not in row["params"] for row in trials_table(plain)))
+
     def test_earlier_versions_are_not_resumed(self):
         from mobile.calibration_engine import (CalibrationError, calibration_label, create_calibration, read_calibration, run_calibration,
                                                write_calibration)
