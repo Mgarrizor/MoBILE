@@ -84,6 +84,8 @@ fi
             mortality_time_file='NONE'
 #           -C Counterfactual mode (1: hold the age structure fixed; 0: factual) (Optional; 1 needs -M/-B/-T)
             counterfactual=0
+#           -G Growth mode: annual growth factor of the population, e.g. 1.0213 (Optional; blank/NONE/0 = off; not with -M/-B/-T/-C)
+            growth='NONE'
 #           -c Constants/parameters file (example in params.txt)
             const='params.txt'
 #           -O Output selection file (Optional; blank/NONE = default output; example in output.txt)
@@ -157,6 +159,7 @@ var_34="-M ${mortality_file}"
 var_35="-B ${birthrate_file}"
 var_36="-T ${mortality_time_file}"
 var_37="-C ${counterfactual}"
+var_38="-G ${growth}"
 
 # CONST
 var_40="-c ${const}"
@@ -189,6 +192,7 @@ $var_34
 $var_35
 $var_36
 $var_37
+$var_38
 
 $var_40
 $var_41
