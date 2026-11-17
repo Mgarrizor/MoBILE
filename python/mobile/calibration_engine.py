@@ -7,7 +7,8 @@
   inputs/           the driving files cut to the region and period of the setup, once for all the trials
   bin/mobile.out    the model, built by the first run and run as it is by all the others (mobile.sh -E)
   trials/trial_<n>/ one folder per trial: its temperature file, if offset, a run folder per seed, and series/: the
-                    model and the observations of each objective as compared, kept to be drawn without the output
+                    model and the observations of each objective as compared, and of each view (a comparison pinned
+                    to be drawn, never optimised), kept to be drawn without the output
 
 Paths in calibration.json may be relative to its folder (a calibration sent to a cluster), and the MoBILE clone is that
 of the record if it exists, else $MOBILE.
@@ -73,6 +74,7 @@ STATUS = "status.json"
 SNAPSHOT = "optuna.snapshot.db"
 CLUSTER = "cluster.json"  # In a calibration sent to a cluster (cluster.py): where, its jobs, and what the last refresh saw
 SERIES = "series"
+OBJECTIVE, VIEW = "objective", "view"  # The kinds of comparison kept in series/: optimised, or only drawn
 HEARTBEAT_SECONDS = 60  # The status is written this often while a calibration runs, and after every trial
 STALE_SECONDS = 300  # A status not written for this long, on another computer without Slurm to ask, is of a process gone
 SNAPSHOT_SECONDS = 30  # The snapshot of the study is written at most this often, and at the end
@@ -253,7 +255,7 @@ def offset_temperature(source, target, cells, offsets, centre=None):
 # ---------------------------------------------------------------- creating
 
 def create_calibration(config, objectives, parameters=(), temperature=None, seeds=(12345,), n_trials=100,
-                       sampler="tpe", startup_trials=10, sampler_seed=1, name=None, validation=None):
+                       sampler="tpe", startup_trials=10, sampler_seed=1, name=None, validation=None, views=()):
     """Write the folder of a new calibration and return it.
 
     config: the setup, with the parameters not calibrated and the outputs the objectives need.
@@ -265,7 +267,9 @@ def create_calibration(config, objectives, parameters=(), temperature=None, seed
     high) of each next gap, low at least 0, ordered: True (default) to keep their order, or False for each dT_k sampled on
     its own within the range of dT_1, trend: (low, high) of dT_trend in °C per decade, or absent for none}, or None.
     validation: (first, last) dates of a validation window, or None: the objectives are calibrated on the period the model
-    and the data share without it, and each trial is scored on it too, with the same metrics, kept with the trial."""
+    and the data share without it, and each trial is scored on it too, with the same metrics, kept with the trial.
+    views: comparisons pinned to be drawn for each trial and never optimised, as the objectives but without a metric
+    ({name, data, variable, space, aggregation, steps, data_raw, data_steps}): their series are kept with each trial."""
     if not objectives:
         raise CalibrationError("give at least one objective")
     if not parameters and not temperature:
@@ -278,6 +282,14 @@ def create_calibration(config, objectives, parameters=(), temperature=None, seed
         read_observations(objective["data"])  # Raises DataError if it cannot be read
         if objective.get("data_raw"):
             read_observations(objective["data_raw"])
+    for view in views:
+        if view.get("space", "people") not in SPACES:
+            raise CalibrationError(f"view {view.get('name')}: unknown space {view['space']!r}: one of {', '.join(SPACES)}")
+        for key in ("data", "data_raw"):
+            if view.get(key):
+                read_observations(view[key])  # Raises DataError if it cannot be read
+        if not (view.get("data") or view.get("data_raw")):
+            raise CalibrationError(f"view {view.get('name')}: give its observations")
     if validation is not None:
         validation = _validation(validation, objectives)
     for parameter in parameters:
@@ -318,6 +330,9 @@ def create_calibration(config, objectives, parameters=(), temperature=None, seed
         "objectives": [{"space": "people", "aggregation": None, "steps": [], **objective, "data": str(Path(objective["data"]).resolve()),
                         **({"data_raw": str(Path(objective["data_raw"]).resolve())} if objective.get("data_raw") else {}),
                         "direction": DIRECTIONS[objective["metric"]]} for objective in objectives],
+        "views": [{"space": "people", "aggregation": None, "steps": [],
+                   **{key: value for key, value in view.items() if key not in ("metric", "direction")},
+                   **{key: str(Path(view[key]).resolve()) for key in ("data", "data_raw") if view.get(key)}} for view in views],
         "seeds": [int(seed) for seed in seeds],
         "n_trials": int(n_trials),
         "sampler": {"name": sampler, "startup_trials": int(startup_trials), "seed": sampler_seed},
@@ -383,9 +398,11 @@ def _in_folder(folder, path):
 
 
 def resolved(folder, record):
-    """The record with the paths of its observations within its folder when they are relative (calibration sent to a cluster)."""
-    return {**record, "objectives": [{**objective, **{key: _in_folder(folder, objective[key]) for key in ("data", "data_raw")
-                                                      if objective.get(key)}} for objective in record["objectives"]]}
+    """The record with the paths of the observations of its objectives and views within its folder when they are relative
+    (calibration sent to a cluster)."""
+    def inside(items):
+        return [{**item, **{key: _in_folder(folder, item[key]) for key in ("data", "data_raw") if item.get(key)}} for item in items]
+    return {**record, "objectives": inside(record["objectives"]), "views": inside(record.get("views") or [])}
 
 
 def setup_config(folder, record, mobile=None):
@@ -447,9 +464,10 @@ def objective_series(objective, run_dirs, validation=None, part=None):
     return model, read_observations(objective["data"])
 
 
-def _series_files(folder, index, part):
-    """(model, observations) files of objective `index` and a part of the period (None for the whole) kept in a folder."""
-    name = f"objective_{index}_{part or 'whole'}"
+def _series_files(folder, index, part, kind=OBJECTIVE):
+    """(model, observations) files of objective (or view: kind VIEW) `index` and a part of the period (None for the whole)
+    kept in a folder."""
+    name = f"{kind}_{index}_{part or 'whole'}"
     return Path(folder) / f"{name}_model.nc", Path(folder) / f"{name}_data.nc"
 
 
@@ -460,9 +478,9 @@ def _touched(path):
     return path
 
 
-def _keep(folder, index, part, model, data):
+def _keep(folder, index, part, model, data, kind=OBJECTIVE):
     Path(folder).mkdir(parents=True, exist_ok=True)
-    for series, path in zip((model, data), _series_files(folder, index, part)):
+    for series, path in zip((model, data), _series_files(folder, index, part, kind)):
         write_observations(series, _touched(path))
 
 
@@ -474,6 +492,18 @@ def keep_series(objectives, run_dirs, folder, validation=None, part=None):
             _keep(folder, index, part, *objective_series(objective, run_dirs, validation, part))
         except DataError:
             continue
+
+
+def keep_views(views, run_dirs, folder, validation=None):
+    """Keep in a folder the model and the observations of each view (a comparison pinned to be drawn, never optimised): for
+    the whole period, and with a validation window for each of its parts. One that cannot be had is left out: a view
+    never fails a trial."""
+    for part in (("calibration", "validation", None) if validation else (None,)):
+        for index, view in enumerate(views):
+            try:
+                _keep(folder, index, part, *objective_series(view, run_dirs, validation, part), kind=VIEW)
+            except (DataError, ValueError, KeyError, OSError):
+                continue
 
 
 def flat_value(metric, data_values):
@@ -915,6 +945,7 @@ def _run_locked(folder, record, state, parallel, threads, deadline=None, trial_s
         config = replace(config, run={**config.run, "threads": threads})
     config.validate()
     objectives = resolved(folder, record)["objectives"]
+    views = resolved(folder, record)["views"]
     stop_runs_left(folder)
     study = open_study(folder, record)
     for trial in study.get_trials(deepcopy=False, states=(optuna.trial.TrialState.RUNNING,)):
@@ -1020,6 +1051,7 @@ def _run_locked(folder, record, state, parallel, threads, deadline=None, trial_s
                 if window:  # Scored on the validation window too, kept with the trial; not optimised
                     trial.set_user_attr("validation", evaluate(objectives, run_dirs, window, "validation", strict=False, keep=kept))
                     keep_series(objectives, run_dirs, kept, window, None)  # The whole period too, for the plots
+                keep_views(views, run_dirs, kept, window)
                 lasted = persistence(objectives, run_dirs, flat)
                 measured = regime(run_dirs)
             if measured is not None:
@@ -1119,15 +1151,16 @@ def trials_table(folder):
     return rows
 
 
-def trial_comparison(folder, number, index=0, part=None):
-    """(model, data, model values, data values, labels) of objective `index` for a completed trial: its runs processed
-    as the objective says, and the observations, paired as for the metrics. With a validation window, part "calibration"
-    or "validation" for one part of the period, None for the whole period the model and the data share."""
+def trial_comparison(folder, number, index=0, part=None, kind=OBJECTIVE):
+    """(model, data, model values, data values, labels) of objective `index` (or view, kind VIEW) for a completed trial:
+    its runs processed as the objective says, and the observations, paired as for the metrics. With a validation window,
+    part "calibration" or "validation" for one part of the period, None for the whole period the model and the data
+    share."""
     record = read_calibration(folder)
-    objective = resolved(folder, record)["objectives"][index]
+    objective = resolved(folder, record)["objectives" if kind == OBJECTIVE else "views"][index]
     here = trial_folder(folder, number)
     run_dirs = [here / f"seed_{seed}" for seed in record["seeds"]]
-    files = _series_files(here / SERIES, index, part if record.get("validation") else None)
+    files = _series_files(here / SERIES, index, part if record.get("validation") else None, kind)
     with NETCDF_LOCK:
         if all(path.is_file() for path in files):  # Kept with the trial: drawn without its output
             model, data = (read_observations(path) for path in files)
