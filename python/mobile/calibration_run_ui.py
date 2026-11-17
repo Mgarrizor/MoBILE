@@ -4,6 +4,7 @@ progress: the objectives trial by trial and the best trial against the data (cal
 
 import asyncio
 import itertools
+import math
 import os
 from dataclasses import replace
 from functools import lru_cache
@@ -20,13 +21,15 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from .calibration_engine import (
     OBJECTIVE, OLD_CALIBRATION, SAMPLER_LINKS, SAMPLERS, VIEW, CalibrationError, best_trials, calibration_label, calibrations_dir, create_calibration,
-    is_running, list_calibrations, read_calibration, read_cluster, resolved, resumable, run_calibration, running_where, status_of,
+    is_running, list_calibrations, log_base, read_calibration, read_cluster, resolved, resumable, run_calibration, running_where,
+    status_of,
     trial_comparison,
     trial_folder, trials_table,
 )
 from .calibration_data import DataError, read_observations
+from .calibration_metrics import DIRECTIONS
 from .calibration_model import DRIVER_PERIODS, DRIVERS, driver_panel, validation_parts, validation_windows
-from .calibration_results import FIGURES, ResultsError, figure_help, results_figure
+from .calibration_results import FIGURES, ResultsError, beyond_limits, died_out, figure_help, results_figure
 from .calibration_steps import STATISTICS
 from .calibration_progress import DOING, DONE, TODO, anchor
 from .cluster_ui import cluster_section, cluster_server
@@ -438,6 +441,105 @@ def windows_said(objectives, period, validation):
     return items
 
 
+LIMIT_LABELS = {  # The words of an objective's limit, by limit_kind
+    "factor": "within ×", "typical_factor": "within ×", "at_least": "at least", "at_most": "within",
+    "abs_at_most": "|bias| at most",
+}
+LIMIT_HELP = {
+    "factor": "a trial whose model is off by more than this factor on average (the bias of the logs, either way) is kept "
+              "off the front: e.g. 2 or 3",
+    "typical_factor": "a trial whose model is off by more than this factor in root mean square (the RMSE of the logs: some "
+                      "points may be further off) is kept off the front: e.g. 1.5 or 2",
+    "at_least": "a trial below this is kept off the front: e.g. 0.5",
+    "at_most": "a trial whose RMSE is above this is kept off the front, in the units of the metric",
+    "abs_at_most": "a trial whose bias is beyond this either way is kept off the front, in the units of the data",
+}
+
+
+def limit_kind(objective):
+    """How the limit of an objective ({metric, steps}) is given: as a factor for a bias or an RMSE after a log ("factor",
+    "typical_factor": the engine's log_base), else as the metric's own number: "at_least" for one maximised (a
+    correlation), "abs_at_most" for a bias, "at_most" for the others."""
+    if log_base(objective) is not None:
+        return "factor" if objective["metric"] == "bias" else "typical_factor"
+    if DIRECTIONS[objective["metric"]] == "maximize":
+        return "at_least"
+    return "abs_at_most" if objective["metric"] == "bias" else "at_most"
+
+
+def limit_stored(objective, typed):
+    """(the limit to store in an objective, as the engine reads it: in the metric's units, a factor f as its log in the
+    base of the objective's log; None for no limit, a problem or None) of what is typed in the Limit field (None or ''
+    for none)."""
+    if typed is None or typed == "":
+        return None, None
+    if isinstance(typed, bool) or not isinstance(typed, (int, float)) or not math.isfinite(typed):
+        return None, "The limit must be a number, or empty for none."
+    kind = limit_kind(objective)
+    if kind in ("factor", "typical_factor"):
+        if typed <= 1:
+            return None, "The limit is a factor above 1 (e.g. 2 for within ×2), or empty for none."
+        return math.log(typed) / math.log(log_base(objective)), None
+    if kind == "at_least":
+        if not -1 < typed <= 1:
+            return None, "A correlation's limit lies between -1 and 1 (e.g. 0.5), or is empty for none."
+        return float(typed), None
+    if typed <= 0:
+        return None, "The limit must be above 0, or empty for none."
+    return float(typed), None
+
+
+def limit_shown(objective):
+    """What to show in the Limit field for an objective's stored limit: the factor for one in log units, else the number."""
+    limit = objective.get("limit")
+    if limit is None:
+        return None
+    base = log_base(objective)
+    return round(base ** limit, 4) if base is not None else limit
+
+
+def limit_text(objective):
+    """An objective's limit in words, e.g. 'within ×3', 'at least 0.5'; None without one."""
+    if objective.get("limit") is None:
+        return None
+    return f"{LIMIT_LABELS[limit_kind(objective)]}{'' if '×' in LIMIT_LABELS[limit_kind(objective)] else ' '}{limit_shown(objective):g}"
+
+
+def limits_said(objectives):
+    """'Limits: Decadal_level within ×3; Correlation at least 0.5.' of the objectives with a limit, '' without."""
+    said = [f"{o['name']} {limit_text(o)}" for o in objectives if o.get("limit") is not None]
+    return f"Limits (beyond them a trial is kept off the front): {'; '.join(said)}." if said else ""
+
+
+def infeasible_counts(record, rows):
+    """(completed, died: those where transmission died out, {objective: trials beyond its limit} in the order of the
+    objectives) of the trials of a calibration (rows of trials_table)."""
+    completed = [row for row in rows if row["state"] == "COMPLETE"]
+    died = sum(died_out(row.get("violation"), row.get("persistence"), row.get("limits")) for row in completed)
+    beyond = {o["name"]: 0 for o in record["objectives"] if o.get("limit") is not None}
+    for row in completed:
+        for name in beyond_limits(row.get("limits")):
+            beyond[name] = beyond.get(name, 0) + 1
+    return len(completed), died, {name: count for name, count in beyond.items() if count}
+
+
+def infeasible_notes(record, rows):
+    """The notes under the Pareto table: the trials where transmission died out, and those beyond a limit, each kept off
+    the front."""
+    completed, died, beyond = infeasible_counts(record, rows)
+    notes = []
+    if died:
+        notes.append(f"In {died} of the {completed} completed trials transmission died out (infeasible: kept out of the front, "
+                     "and the sampler learns where that happens). Results › Epidemic or endemic shows them.")
+    if beyond:
+        by_name = {o["name"]: o for o in record["objectives"]}
+        notes.append(f"{sum(1 for row in rows if row['state'] == 'COMPLETE' and beyond_limits(row.get('limits')))} of the "
+                     f"{completed} completed trials are beyond a limit (infeasible: kept out of the front): "
+                     + "; ".join(f"{name} ({limit_text(by_name[name]) if name in by_name else 'its limit'}) {count}"
+                                 for name, count in beyond.items()) + ".")
+    return notes
+
+
 def trend_said(temperature):
     """e.g. 'Temperature trend in -0.5 to 1.5 °C per decade, 0 on 1991-12-31', of a calibration's temperature record."""
     low, high = temperature["trend"]
@@ -445,7 +547,7 @@ def trend_said(temperature):
     return f"Temperature trend in {low:g} to {high:g} °C per decade" + (f", 0 on {centre}" if centre else "")
 
 
-def results_state(status, completed, n_trials, front, refreshed=None):
+def results_state(status, completed, n_trials, front, refreshed=None, limited=False):
     """(state, note) of the Results step: done only with a Pareto front once the calibration has finished; while it
     runs, or waits to be resumed, in progress like Run, the front said to be partial, as of the last Refresh for one
     on a cluster (refreshed: that time, ISO, or None)."""
@@ -457,7 +559,8 @@ def results_state(status, completed, n_trials, front, refreshed=None):
             return DONE, f"Pareto front of {front}"
         note = f"partial: Pareto front of {front} from {completed} of {n_trials} trials"
     else:
-        note = "no front: transmission died out in all" if not front else f"{completed} completed trial{'s' if completed != 1 else ''}"
+        note = ("no front: every trial infeasible (transmission died out, or beyond a limit)" if limited else
+                "no front: transmission died out in all") if not front else f"{completed} completed trial{'s' if completed != 1 else ''}"
     if refreshed and not finished:
         note += f", as of the last Refresh ({pd.Timestamp(refreshed).to_pydatetime().astimezone():%d %b %H:%M})"
     return DOING, note
@@ -1150,7 +1253,8 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
             start(folder)
             temperature = read_calibration(folder).get("temperature") or {}
             ui.notification_show(f"Running {Path(folder).name}. {record_windows(folder)}"
-                                 + (f" {trend_said(temperature)}." if temperature.get("trend") else ""), type="message", duration=15)
+                                 + (f" {trend_said(temperature)}." if temperature.get("trend") else "")
+                                 + f" {limits_said(read_calibration(folder)['objectives'])}", type="message", duration=15)
 
     @reactive.effect
     @reactive.event(input.cal_create)
@@ -1163,7 +1267,8 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         threads_ = read_calibration(folder)["setup"]["run"]["threads"]
         ui.notification_show(f"Created {Path(folder).name}, not run. It is chosen under Calibrations: press Resume here to run it on "
                              f"this computer, Send it to LEONARDO in Run on LEONARDO (CINECA), or run `mobile calibrate {folder}` ({threads_} "
-                             f"thread{'s' if threads_ > 1 else ''} per run). {record_windows(folder)}", type="message", duration=15)
+                             f"thread{'s' if threads_ > 1 else ''} per run). {record_windows(folder)} "
+                             f"{limits_said(read_calibration(folder)['objectives'])}", type="message", duration=15)
 
     def make_calibration():
         """The folder of a new calibration as the card says, or None after saying what is wrong."""
@@ -1255,7 +1360,9 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
                 continue
             taken.append({**objective,
                           "describe": f"{objective['metric'].replace('_', ' ')} of {objective['variable']}, "
-                                      f"{len(objective.get('steps') or [])} model steps: from the template {name}"})
+                                      f"{len(objective.get('steps') or [])} model steps"
+                                      + (f", limit {limit_text(objective)}" if objective.get("limit") is not None else "")
+                                      + f": from the template {name}"})
         objectives.set(taken)
         pinned = []  # Its views, the same way
         for view in resolved(folder, record)["views"]:
@@ -1424,7 +1531,9 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
             record = read_calibration(folder)
         except (OSError, ValueError):
             return None
-        lines = [f"{o['name']}: {o['metric'].replace('_', ' ')} of {o['variable']}" for o in record["objectives"]]
+        lines = [f"{o['name']}: {o['metric'].replace('_', ' ')} of {o['variable']}"
+                 + (f", limit: {limit_text(o)} (beyond it a trial is kept off the front)" if o.get("limit") is not None else "")
+                 for o in record["objectives"]]
         temperature = record.get("temperature")
         if temperature:
             lines.append(f"Temperature offsets of {len(temperature['cells'])} cells or regions: dT₁ in {temperature['first']} °C, gaps in "
@@ -1582,13 +1691,12 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
             return ui.p("Choose a calibration under Calibrations to see its Pareto front.", class_="small text-muted mb-0")
         record, every, front = found
         if not front:
-            dead = [row for row in every if row["state"] == "COMPLETE" and row.get("infeasible")]
-            return ui.p(f"No Pareto front yet: in all {len(dead)} completed trials transmission died out (infeasible). "
-                        "Results › Epidemic or endemic shows where." if dead else "No Pareto front yet: no trial is done.",
-                        class_="small text-muted mb-0")
+            completed = infeasible_counts(record, every)[0]
+            if not completed:
+                return ui.p("No Pareto front yet: no trial is done.", class_="small text-muted mb-0")
+            return ui.div(ui.p(f"No Pareto front yet: all {completed} completed trials are infeasible.", class_="small text-muted mb-1"),
+                          *[ui.p(note, class_="small text-muted mb-1") for note in infeasible_notes(record, every)])
         names = [o["name"] for o in record["objectives"]]
-        completed = [row for row in every if row["state"] == "COMPLETE"]
-        dead = sum(bool(row.get("infeasible")) for row in completed)
         means = (record.get("temperature") or {}).get("means") or []
         trended = bool((record.get("temperature") or {}).get("trend"))
         parameters = [parameter["name"] for parameter in record.get("parameters", [])]
@@ -1633,9 +1741,7 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
                       ui.p(f"The first {len(shown_rows)} of the {len(front)} trials of the front, in this order: Show all for the "
                            "others." if len(shown_rows) < len(front) else f"All {len(front)} trials of the front.",
                            class_="small text-muted mb-1"),
-                      ui.p(f"In {dead} of the {len(completed)} completed trials transmission died out (infeasible: kept out of the "
-                           "front, and the sampler learns where that happens). Results › Epidemic or endemic shows them.",
-                           class_="small text-muted mb-0") if dead else None)
+                      *[ui.p(note, class_="small text-muted mb-1") for note in infeasible_notes(record, every)])
 
     front_sort = reactive.value((IDEAL, False))  # (column, high to low) of the Pareto front: closest to the ideal first
 
@@ -1883,7 +1989,8 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         else:
             states["run"] = (DOING, f"{status}{where}: resume or submit, {trials}")
         states["results"] = results_state(status, completed, record["n_trials"], len(front_),
-                                          cluster.get("refreshed") if cluster else None)
+                                          cluster.get("refreshed") if cluster else None,
+                                          any(o.get("limit") is not None for o in record["objectives"]))
         return name, states
 
     return SimpleNamespace(running=running, cancel=state.cancel, what=what_states, stored=calibration_states)

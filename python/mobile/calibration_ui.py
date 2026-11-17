@@ -18,13 +18,17 @@ from .calibration_data import (
     AGGREGATIONS, PERIODS, SEASONS, SHAPES, DataError, import_table, read_observations, read_table, select_window,
     write_observations,
 )
+from .calibration_engine import log_base
 from .calibration_metrics import DIRECTIONS, METRICS, metrics, pair
 from .calibration_model import (
     DRIVERS, SEED_MEAN, SPACES, chosen_seeds, default_aggregation, driver_panel, members_mean, model_members, process_both, run_choices,
     run_elsewhere, run_seeds, run_variables, seed_spread, shared_span, validation_parts, validation_windows,
 )
 from .calibration_progress import DOING, DONE, TODO, anchor, progress_column
-from .calibration_run_ui import calibration_run_card, driver_controls, paired_span, typed_validation
+from .calibration_run_ui import (
+    LIMIT_HELP, LIMIT_LABELS, calibration_run_card, driver_controls, limit_kind, limit_stored, limit_text, paired_span,
+    typed_validation,
+)
 from .calibration_steps import (
     AGGREGATE_PERIODS, COMBINATIONS, EDGE, EDGE_ERROR, EDGES, FILTER_MISSING, FILTERS, OPERATIONS, PREPARING, RECIPES, SELECTIONS,
     STATISTICS, STEP_KINDS, TIME_UNITS, TRANSFORMS, apply_steps, default_step, describe, recipe_steps,
@@ -190,6 +194,7 @@ def _comparison_card():
                        class_="pt-4 d-flex flex-wrap gap-1"),
                 col_widths=(5, 3, 4), fill=False,
             ),
+            ui.output_ui("cal_objective_limit_box"),
             ui.output_ui("cal_objective_problem"),
             class_="border-top pt-2 mt-2",
         ),
@@ -1072,6 +1077,13 @@ def calibration_server(input, output, session, setup, setup_state):
             objective_problem.set(f"There is an objective or a view named {name} already.")
             return
         _, data_values, model_paired, data_paired, _, values, span = result
+        limit = None
+        if not view:  # Its limit, if one is typed: in the metric's units, a factor as its log
+            limit, problem = limit_stored({"metric": input.cal_objective_metric(), "steps": [without_uid(step) for step in model.live()]},
+                                          input.cal_objective_limit() if "cal_objective_limit" in input else None)
+            if problem:
+                objective_problem.set(problem)
+                return
         if not view and input.cal_objective_metric() == "rmse_relative" and values["rmse_relative"] is None:
             objective_problem.set(f"RMSE relative divides each series by its mean, and after these steps the mean of the model is "
                                   f"{model_paired.mean():.3g} and of the data {data_paired.mean():.3g}: it is not defined unless both "
@@ -1099,6 +1111,7 @@ def calibration_server(input, output, session, setup, setup_state):
         kept.set([*kept(), {
             "name": name, "data": str(target), "variable": input[f"{MODEL}_variable"](), "space": input[f"{MODEL}_space"](),
             "aggregation": None, "steps": steps, **({} if view else {"metric": metric, "direction": DIRECTIONS[metric]}),
+            **({"limit": limit} if limit is not None else {}),
             **({"data_raw": str(raw_target), "data_steps": data_steps} if keep_raw else {}),
             "describe": f"{data_values.name} ({len(data_values)} values, {SHAPES[data_values.shape].split(':')[0].lower()}) against "
                         f"{input[f'{MODEL}_variable']()}, {SPACES[input[f'{MODEL}_space']()].lower()}, then "
@@ -1170,6 +1183,28 @@ def calibration_server(input, output, session, setup, setup_state):
         text, wrong = recipe_note()
         return ui.p(text, class_=f"small mb-1 {'text-danger' if wrong else 'text-muted'}")
 
+    limit_drawn = [None]  # (kind, objectives) the Limit field was drawn for: a value typed is kept while they stay
+
+    @render.ui
+    def cal_objective_limit_box():
+        """The optional limit of the objective to add, in the words its metric and steps give it (limit_kind), with the value
+        of the comparison now in the same words."""
+        candidate = {"metric": input.cal_objective_metric(), "steps": [without_uid(step) for step in model.live()]}
+        kind, count = limit_kind(candidate), len(objectives())
+        with reactive.isolate():
+            value = input.cal_objective_limit() if "cal_objective_limit" in input and limit_drawn[0] == (kind, count) else None
+        limit_drawn[0] = (kind, count)
+        result = paired()
+        now = None if isinstance(result, str) else result[5].get(candidate["metric"])
+        if now is not None and kind in ("factor", "typical_factor"):
+            now = f"this comparison now: ×{log_base(candidate) ** abs(now):.3g} off"
+        elif now is not None:
+            now = f"this comparison now: {abs(now) if kind == 'abs_at_most' else now:.3g}"
+        return ui.layout_columns(
+            ui.input_numeric("cal_objective_limit", f"Limit (optional): {LIMIT_LABELS[kind]}", value=value, width="100%"),
+            ui.p(f"Empty for none. If given, {LIMIT_HELP[kind]}" + (f"; {now}" if now else "") + ".", class_="small text-muted pt-4 mb-1"),
+            col_widths=(5, 7), fill=False)
+
     @render.ui
     def cal_objective_problem():
         return ui.p(objective_problem(), class_="small text-danger mb-0") if objective_problem() else None
@@ -1190,7 +1225,8 @@ def calibration_server(input, output, session, setup, setup_state):
                           ui.tags.table(ui.tags.tbody(*pinned), class_="table table-sm small mb-1") if pinned else None)
         rows = [ui.tags.tr(
             ui.tags.td(objective["name"]),
-            ui.tags.td(METRICS[objective["metric"]].split(":")[0], f" ({'higher' if objective['direction'] == 'maximize' else 'lower'} is better)"),
+            ui.tags.td(METRICS[objective["metric"]].split(":")[0], f" ({'higher' if objective['direction'] == 'maximize' else 'lower'} is better)",
+                       *([ui.br(), f"Limit: {limit_text(objective)}"] if objective.get("limit") is not None else [])),
             ui.tags.td(objective["describe"], class_="text-muted"),
             ui.tags.td(ui.tags.button("Remove", class_="btn btn-sm btn-outline-secondary py-0", onclick=OBJECTIVE_REMOVE.format(index=i))),
         ) for i, objective in enumerate(found)]

@@ -4699,6 +4699,90 @@ class TestTrendInTheCard(unittest.TestCase):
         self.assertEqual([row["number"] for row in sort_rows(front, TREND, False, {})], [2, 0, 1])
 
 
+class TestObjectiveLimitsInTheGui(unittest.TestCase):
+    """The Limit field of an objective: its words by metric and steps, the value stored as the engine reads it, and the
+    trials beyond a limit told apart from those where transmission died out."""
+
+    LOG = [{"kind": "transform", "transform": "log", "offset": 1e-5}]
+    LOG10 = [{"kind": "transform", "transform": "log10", "offset": 1e-5}]
+
+    def objective(self, metric, steps=(), limit=None, name="Decadal_level"):
+        from mobile.calibration_metrics import DIRECTIONS
+        return {"name": name, "metric": metric, "direction": DIRECTIONS[metric], "steps": list(steps),
+                **({"limit": limit} if limit is not None else {})}
+
+    def test_words_and_values(self):
+        from mobile.calibration_run_ui import limit_kind, limit_stored, limit_text
+        kinds = [limit_kind(self.objective(metric, steps)) for metric, steps in
+                 (("bias", self.LOG), ("rmse", self.LOG10), ("correlation", self.LOG), ("bias", ()), ("rmse", ()), ("rmse_relative", ()))]
+        self.assertEqual(kinds, ["factor", "typical_factor", "at_least", "abs_at_most", "at_most", "at_most"])
+        # A factor stored as its log in the base of the objective's log; read back as the factor typed
+        stored, problem = limit_stored(self.objective("bias", self.LOG), 3)
+        self.assertIsNone(problem)
+        self.assertAlmostEqual(stored, math.log(3))
+        self.assertAlmostEqual(limit_stored(self.objective("bias", self.LOG10), 3)[0], math.log10(3))
+        self.assertEqual(limit_text(self.objective("bias", self.LOG, stored)), "within ×3")
+        self.assertEqual(limit_text(self.objective("rmse", self.LOG10, limit_stored(self.objective("rmse", self.LOG10), 1.5)[0])),
+                         "within ×1.5")
+        self.assertEqual(limit_text(self.objective("correlation", (), 0.5)), "at least 0.5")
+        self.assertEqual(limit_text(self.objective("bias", (), 2.5)), "|bias| at most 2.5")
+        self.assertEqual(limit_text(self.objective("rmse", (), 40)), "within 40")
+        self.assertEqual(limit_text(self.objective("rmse_relative", (), 0.3)), "within 0.3")
+        # Empty: no limit; refusals
+        self.assertEqual(limit_stored(self.objective("bias", self.LOG), None), (None, None))
+        self.assertEqual(limit_stored(self.objective("bias", self.LOG), ""), (None, None))
+        self.assertIsNone(limit_text(self.objective("bias", self.LOG)))
+        for metric, steps, typed in (("bias", self.LOG, 1), ("bias", self.LOG, 0.5), ("correlation", (), 1.5), ("correlation", (), -1),
+                                     ("rmse", (), 0), ("bias", (), -2), ("rmse", (), True), ("rmse", (), float("nan"))):
+            stored, problem = limit_stored(self.objective(metric, steps), typed)
+            self.assertIsNone(stored, (metric, typed))
+            self.assertTrue(problem, (metric, typed))
+
+    def test_the_engine_reads_it_as_typed(self):
+        """Control: the engine's own words for a trial beyond the stored limit give back the factor typed."""
+        from mobile.calibration_engine import limit_said, limits_said
+        from mobile.calibration_run_ui import limit_stored
+        objective = self.objective("bias", self.LOG)
+        objective["limit"] = limit_stored(objective, 3)[0]
+        self.assertEqual(limit_said(objective, math.log(3.63), objective["limit"]), "Decadal_level ×3.63 off, beyond ×3")
+        [(_, _, _, excess)] = limits_said([objective], [math.log(2.9)])
+        self.assertLess(excess, 0)  # Within ×3
+        [(_, _, _, excess)] = limits_said([objective], [math.log(3.1)])
+        self.assertGreater(excess, 0)
+
+    def test_died_out_or_beyond_a_limit(self):
+        from mobile.calibration_run_ui import infeasible_counts, infeasible_notes, limits_said, results_state
+        from mobile.calibration_results import died_out
+        record = {"objectives": [self.objective("bias", self.LOG, math.log(3)), self.objective("correlation", (), 0.5, "Timing")]}
+        alive, dead = {"died_out": 0, "last": [900, 900, 900], "flat": []}, {"died_out": 2, "last": [10, 20, 900], "flat": []}
+
+        def row(number, violation, persistence, limits=None, state="COMPLETE"):
+            return {"number": number, "state": state, "violation": violation, "persistence": persistence, "limits": limits}
+        rows = [row(0, -1.0, alive, {"Decadal_level": -0.2, "Timing": -0.1}),  # Feasible
+                row(1, 0.5, dead, {"Decadal_level": -0.2}),  # Died out only
+                row(2, 0.3, alive, {"Decadal_level": 0.3, "Timing": -0.1}),  # Beyond one limit only
+                row(3, 0.6, dead, {"Decadal_level": 0.1, "Timing": 0.2}),  # Both
+                row(4, None, None, state="RUNNING")]
+        self.assertEqual([died_out(r["violation"], r["persistence"], r["limits"]) for r in rows], [False, True, False, True, False])
+        self.assertEqual(infeasible_counts(record, rows), (4, 2, {"Decadal_level": 2, "Timing": 1}))
+        notes = infeasible_notes(record, rows)
+        self.assertIn("In 2 of the 4 completed trials transmission died out", notes[0])
+        self.assertEqual(notes[1], "2 of the 4 completed trials are beyond a limit (infeasible: kept out of the front): "
+                                   "Decadal_level (within ×3) 2; Timing (at least 0.5) 1.")
+        self.assertEqual(limits_said(record["objectives"]),
+                         "Limits (beyond them a trial is kept off the front): Decadal_level within ×3; Timing at least 0.5.")
+        self.assertIn("beyond a limit", results_state("finished", 4, 4, 0, limited=True)[1])
+        # Controls: without limits, as before - an infeasible trial is one where transmission died out, with the same note
+        plain = {"objectives": [self.objective("bias", self.LOG)]}
+        old = [row(0, 0.4, None), row(1, -1.0, None)]  # Trials from before persistence was kept
+        self.assertEqual(infeasible_counts(plain, old), (2, 1, {}))
+        self.assertEqual(infeasible_notes(plain, old), ["In 1 of the 2 completed trials transmission died out (infeasible: kept out of "
+                                                        "the front, and the sampler learns where that happens). Results › Epidemic or "
+                                                        "endemic shows them."])
+        self.assertEqual(limits_said(plain["objectives"]), "")
+        self.assertEqual(results_state("finished", 4, 4, 0)[1], "no front: transmission died out in all")
+
+
 class TestFrontTableAndViews(unittest.TestCase):
     """The Pareto table is sent again only when what it shows changes; a trial is drawn against an objective or a view."""
 

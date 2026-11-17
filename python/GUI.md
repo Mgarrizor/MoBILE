@@ -363,6 +363,17 @@ The correlation is maximised, the RMSEs minimised, the size of the bias minimise
 The RMSE of the series each divided by its mean needs both means positive: after a log or an anomaly it is not defined,
 and Add as objective says so (use the correlation, or the RMSE, instead).
 
+**Limit (optional)**, under the name and metric, keeps off the Pareto front any trial worse than it on this objective
+(empty: none). Its words follow the metric and the steps: for a bias after a log, **within ×** a factor (e.g. 3: the model
+off by at most 3 times on average, either way); for an RMSE after a log, also **within ×** (e.g. 1.5: off by at most
+1.5 times in root mean square, some points may be further off); for a
+correlation **at least** (e.g. 0.5); for an RMSE without a log, **within** a number in its units (the relative RMSE
+has none); for a bias otherwise **|bias| at most**, in the units of the data. Beside it, the value of the comparison shown, in the same words. A factor is stored as its log, as the
+engine compares it. A trial beyond a limit completes as **infeasible**, like one where transmission died out: kept out
+of the front, graded by how far beyond for the sampler, and said why. The limits are listed with the objectives, in the
+calibration's description and in the messages of Run calibration and Create only; Use as template restores them; under
+the Pareto table a line counts the trials beyond each limit, apart from those where transmission died out.
+
 **Pin as a view**, beside it, keeps the comparison with the calibration without optimising it: the same observations,
 steps and output as an objective, no metric. Each trial keeps its series, and "A trial of the front" can be drawn
 against it, e.g. the plain monthly series of model and data next to objectives that filter or summarise them. Views are
