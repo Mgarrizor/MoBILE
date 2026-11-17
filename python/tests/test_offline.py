@@ -2898,6 +2898,87 @@ class TestCalibrationProgress(unittest.TestCase):
             self.assertIn(f">{word}<", box)  # Not by colour alone
 
 
+class TestObservationModel(unittest.TestCase):
+    """The observational model (observation.py) on its own: reported cases drawn from a model's, negative binomial."""
+
+    def series(self, years=24):
+        from mobile.calibration_data import Observations
+
+        months = pd.date_range("1980-01-01", periods=12 * years, freq="MS")
+        t = np.arange(len(months)) / 12
+        cases = 2000 * np.exp(0.1 * t) * (1.3 + np.sin(2 * np.pi * t))  # Monthly cases: a trend and a season
+        index = pd.DataFrame({"start": months.values.astype("datetime64[D]"),
+                              "end": (months + pd.offsets.MonthEnd(0)).values.astype("datetime64[D]")})
+        population = np.full(len(months), 300000.0)
+        model = Observations(shape="dated", values=cases / population, index=index, aggregation="sum", units="cases per person",
+                             name="model", extra={})
+        return model, cases, population
+
+    def test_draws_and_scores(self):
+        from mobile.observation import band, coverage, crps, draw
+
+        cases = np.array([0.0, 10.0, 1000.0])
+        drawn = draw(cases, rho=0.3, k=4.0, draws=20000, seed=1)
+        mean = 0.3 * cases
+        np.testing.assert_allclose(drawn.mean(axis=0), mean, rtol=0.03, atol=0.05)
+        np.testing.assert_allclose(drawn.var(axis=0), mean + mean ** 2 / 4.0, rtol=0.06, atol=0.1)  # NB: mu + mu^2 / k
+        self.assertTrue((drawn[:, 0] == 0).all())  # No cases, none reported
+        # CRPS: the absolute error for draws all equal; lower for a band around the value than for one away from it
+        np.testing.assert_allclose(crps(np.full((10, 2), 3.0), np.array([1.0, 3.0])), [2.0, 0.0])
+        around = np.random.default_rng(2).normal(0.0, 1.0, (4000, 1))
+        self.assertLess(crps(around, [0.0])[0], crps(around + 2.0, [0.0])[0])
+        self.assertAlmostEqual(crps(around, [0.0])[0], 0.2337, delta=0.02)  # Of N(0, 1) at 0: (sqrt(2) - 1) / sqrt(pi)
+        low, middle, high = band(around)
+        self.assertAlmostEqual(float(low[0]), -1.96, delta=0.1)
+        self.assertEqual(coverage([0.0, 0.0], [1.0, 1.0], [0.5, 2.0]), 0.5)
+        for bad in ({"rho": 0.0, "k": 1.0}, {"rho": 1.5, "k": 1.0}, {"rho": 0.5, "k": 0.0}):
+            with self.assertRaises(Exception):
+                draw(cases, **bad)
+
+    def test_draws_through_the_steps(self):
+        """The draws go through an objective's steps as one matrix where they can, and the result is the steps themselves,
+        draw by draw (filter first, then the windows, as for the data); with the true reporting the data lie within the
+        band about as often as its width says, and the CRPS is lowest there."""
+        from mobile.calibration_steps import EDGE_ERROR, apply_steps
+        from mobile.observation import _through, band, coverage, crps, draw, median_of, process_draws
+
+        model, cases, population = self.series()
+        log = {"kind": "transform", "transform": "log", "offset": 1e-5}
+        low = {"kind": "filter", "type": "low", "short": 1.0, "long": 5.0, "unit": "years", "missing": "interpolate",
+               "max_gap": 3, "edges": "cut", "edge_error": EDGE_ERROR}
+        recipes = {"season": [log, {"kind": "climatology", "by": "month"}], "decadal shape": [log, low, {"kind": "transform", "transform": "anomaly"}],
+                   "decadal level": [log, low]}
+        matrix = draw(cases, 0.3, 5.0, draws=40, seed=3) / population
+        for name, steps in recipes.items():
+            batch, shape = _through(matrix, replace(model, values=matrix[0].copy()), steps)
+            one_by_one = np.vstack([apply_steps(replace(model, values=row.copy()), steps).values for row in matrix])
+            np.testing.assert_allclose(batch, one_by_one, rtol=1e-9, atol=1e-12, equal_nan=True, err_msg=name)
+            self.assertEqual(len(shape.values), batch.shape[1])
+        # Filter first, then the windows: the draws' calibration part is the whole series' filtered draws, cut
+        windows = [["1989-01-01", "1993-12-31"], ["1998-01-01", "2003-12-31"]]
+        part, shape = process_draws(replace(model, values=matrix[0].copy()), matrix, [log, low], windows, "calibration")
+        whole, whole_shape = process_draws(replace(model, values=matrix[0].copy()), matrix, [log, low])
+        kept = pd.to_datetime(shape.index["start"]).isin(pd.to_datetime(whole_shape.index["start"]))
+        self.assertTrue(kept.all())
+        self.assertFalse(pd.DatetimeIndex(shape.index["start"]).year.isin(range(1989, 1994)).any())
+        # Coverage and CRPS: data reported with the true rho and k, against draws with the true and a wrong rho
+        observed = draw(cases, 0.3, 5.0, draws=1, seed=99)[0] / population
+        data = replace(model, values=observed)
+        steps = recipes["decadal level"]
+        observed_series = np.asarray(apply_steps(data, steps).values, float)
+        scored = {}
+        for rho in (0.3, 0.03):
+            processed, shape = process_draws(replace(model, values=matrix[0].copy()), draw(cases, rho, 5.0, draws=400, seed=4) / population,
+                                             [log])
+            low_, _, high_ = band(processed)
+            month = np.asarray(apply_steps(data, [log]).values, float)
+            scored[rho] = (coverage(low_, high_, month), float(np.nanmean(crps(processed, month))))
+        self.assertGreater(scored[0.3][0], 0.85)  # About 95 % of the months within the true band
+        self.assertLess(scored[0.03][0], 0.05)  # Almost none within a band ten times too low
+        self.assertLess(scored[0.3][1], scored[0.03][1])
+        self.assertEqual(len(median_of(processed, shape).values), processed.shape[1])
+
+
 class TestCalibrationEngine(unittest.TestCase):
     """A calibration with Optuna, on a toy model: new cases grow with the temperature above 18 °C. Observations made
     from it at known temperature offsets of two cells must be found again."""
@@ -4226,6 +4307,45 @@ echo "64200001|cal_x|PENDING|0:00|20:00|(Priority)"
         plain = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=1, name="no_limit")
         run_calibration(plain, StudyState())
         self.assertIsNone(trials_table(plain)[0]["limits"])
+
+    def test_calibration_with_the_observational_model(self):
+        """A calibration with the observational model: each trial samples rho and k, its metrics compare the median of the
+        reported series drawn from its runs, CRPS their band; the band and its coverage of the data are kept with it."""
+        from mobile.calibration_data import read_observations, write_observations
+        from mobile.calibration_engine import (CalibrationError, SERIES, create_calibration, read_calibration, run_calibration,
+                                               trial_band, trial_folder, trials_table)
+        from mobile.sensitivity_runs import StudyState
+
+        data = read_observations(self.data)  # Monthly cases per person; as reported counts with their population N
+        population = np.full(len(data.values), 1e5)
+        raw = self.root / "cases_counts.nc"
+        write_observations(replace(data, values=np.asarray(data.values) * population, units="cases", extra={"N": population}), raw)
+        per_person = [{"kind": "arithmetic", "operation": "divide", "operand": "column", "column": "N", "number": 1, "units": ""}]
+        objectives = [{"name": "timing", "data": str(raw), "data_raw": str(raw), "variable": "Inew", "steps": self.MONTHLY,
+                       "data_steps": per_person, "metric": "correlation"},
+                      {"name": "band", "data": str(raw), "data_raw": str(raw), "variable": "Inew", "steps": self.MONTHLY,
+                       "data_steps": per_person, "metric": "crps"}]
+        with self.assertRaisesRegex(CalibrationError, "needs the observational model"):
+            create_calibration(self.config, objectives, temperature=self.temperature(), name="no_obs")
+        with self.assertRaisesRegex(CalibrationError, "rho needs a range"):
+            create_calibration(self.config, objectives, temperature=self.temperature(), name="bad_obs",
+                               observation={"rho": [0.5, 0.2], "k": [1, 50]})
+        observation = {"rho": [0.1, 1.0], "k": [1.0, 50.0], "draws": 60}
+        folder = create_calibration(self.config, objectives, temperature=self.temperature(), n_trials=3, name="observed",
+                                    observation=observation)
+        self.assertEqual(read_calibration(folder)["observation"], {"model": "negbin", "rho": [0.1, 1.0], "k": [1.0, 50.0], "draws": 60})
+        self.assertEqual(run_calibration(folder, StudyState(), parallel=2)["status"], "finished")
+        for row in trials_table(folder):
+            self.assertTrue(0.1 <= row["params"]["obs_rho"] <= 1.0 and 1.0 <= row["params"]["obs_k"] <= 50.0)
+            self.assertEqual(row["reporting"], {"rho": row["params"]["obs_rho"], "k": row["params"]["obs_k"]})
+            self.assertEqual(sorted(row["coverage"]), ["whole"])
+            self.assertTrue(all(0.0 <= share <= 1.0 for share in row["coverage"]["whole"]))
+            self.assertGreaterEqual(row["values"][1], 0.0)  # The CRPS
+            low, middle, high = trial_band(folder, row["number"], 0)
+            self.assertTrue(np.all(low[np.isfinite(low)] <= high[np.isfinite(low)]) and len(middle) == 24)
+        # A trial's draws are the same for every objective and part (the trial's seed): rerunning one gives the same band
+        row = trials_table(folder)[1]
+        self.assertTrue((trial_folder(folder, row["number"]) / SERIES / "objective_1_whole_band.nc").is_file())
 
     def test_views_are_kept_and_never_fail_a_trial(self):
         from mobile.calibration_engine import (SERIES, VIEW, create_calibration, read_calibration, run_calibration, trial_comparison,
