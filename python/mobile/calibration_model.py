@@ -251,6 +251,50 @@ def validation_parts(validation):
     return ["validation"] if len(windows) == 1 else [f"validation_{k}" for k in range(1, len(windows) + 1)]
 
 
+def process_observed(members, model_steps, data, data_steps, observation, others=None, model_note=None, validation=None,
+                     part=None):
+    """(model, data, span, draws) with the observational model (observation.py): the model's cases for each month (its
+    steps up to the first that is not a preparing one, e.g. the monthly sums, per person; the mean of the runs if
+    several) times the observations' population N of each month are the mean counts reported cases are drawn around,
+    Y ~ negative binomial(mean rho * cases, dispersion k), `observation` {rho, k, draws, seed}; each draw, per person
+    again, goes through the rest of the model's steps as process_both takes the model's series (the filter first, then
+    the windows). model: the median of the processed draws (the series the metrics compare); draws: the processed draws
+    (draws x values of model); data as process_both gives it."""
+    from .calibration_data import select_window
+    from .calibration_steps import PREPARING, apply_steps
+    from .observation import DRAWS, draw, median_of, process_draws
+
+    _, data_out, span = process_both(members, model_steps, data, data_steps, others, model_note, validation, part)
+    first = next((i for i, step in enumerate(model_steps) if step.get("kind") not in PREPARING), len(model_steps))
+    prepare, rest = model_steps[:first], model_steps[first:]
+    if span is not None:
+        members = [select_window(member, *span) for member in members]
+        data = select_window(data, *span)
+    monthly = [apply_steps(member, prepare) for member in members]
+    if any(not other.index.equals(monthly[0].index) for other in monthly[1:]):
+        raise DataError("the runs do not give the same periods after the steps")
+    mean = np.nanmean(np.array([np.asarray(m.values, dtype="f8") for m in monthly]), axis=0)
+    base = replace(monthly[0], values=mean)
+    population = _population(base, data)
+    counts = draw(mean * population, observation["rho"], observation["k"], observation.get("draws", DRAWS), observation.get("seed"))
+    matrix = counts / population
+    processed, shape = process_draws(base, matrix, rest, validation, part, others)
+    return median_of(processed, shape), data_out, span, processed
+
+
+def _population(model, data):
+    """The observations' population N for each value of the model's series (dated, as the model's), by its start."""
+    if "N" not in data.extra or data.shape != "dated" or model.shape != "dated":
+        raise DataError("the observational model needs the observations' population (a column N) for each month")
+    known = pd.Series(np.asarray(data.extra["N"], dtype="f8"), index=pd.to_datetime(data.index["start"]))
+    known = known[~known.index.duplicated()].sort_index()
+    starts = pd.to_datetime(model.index["start"])
+    found = known.reindex(starts, method="nearest", tolerance=pd.Timedelta(days=16)).to_numpy()
+    if np.isnan(found).any() or np.any(found <= 0):
+        raise DataError("the observations' population N is missing for some months of the model")
+    return found
+
+
 def _split_at_filter(steps):
     """(steps up to and including the last time filter, the steps after it), or None without a filter."""
     last = max((i for i, step in enumerate(steps) if step.get("kind") == "filter"), default=None)

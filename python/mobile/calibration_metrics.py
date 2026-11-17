@@ -15,8 +15,11 @@ METRICS = {
     "rmse_relative": "RMSE of the series each divided by its mean: scale-free, compares timing and the size of the swings",
     "correlation": "Correlation (Pearson): 1 for the same timing, 0 for none, −1 for the opposite: scale-free",
     "bias": "Bias: mean of model − data, in the units of the data",
+    "crps": "CRPS: how far the model's band of reported series (observational model) is from the data, in the units of "
+            "the data; the absolute error for a band of no width (needs the observational model)",
 }
-DIRECTIONS = {"rmse": "minimize", "rmse_relative": "minimize", "correlation": "maximize", "bias": "zero"}
+DIRECTIONS = {"rmse": "minimize", "rmse_relative": "minimize", "correlation": "maximize", "bias": "zero", "crps": "minimize"}
+ENSEMBLE = ("crps",)  # Metrics of the band of reported series drawn by the observational model, not of one series
 KEYS = {"dated": ("start", "end"), "climatology": ("month",), "season": ("season",), "yearly": ("year",),
         "age": ("age_lower", "age_upper"), "single": ()}
 

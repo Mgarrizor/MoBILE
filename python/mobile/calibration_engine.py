@@ -47,8 +47,9 @@ import optuna
 import pandas as pd
 
 from .calibration_data import DataError, drop_window, read_observations, select_window, write_observations
-from .calibration_metrics import DIRECTIONS, pair, metrics
-from .calibration_model import SPACES, model_members, process_both, seed_spread, validation_parts, validation_windows
+from .calibration_metrics import DIRECTIONS, ENSEMBLE, pair, metrics
+from .observation import band as _band, coverage as coverage_of, crps
+from .calibration_model import SPACES, model_members, process_both, process_observed, seed_spread, validation_parts, validation_windows
 from .calibration_steps import apply_steps
 from .cells import cell_areas
 from .config import MAX_PATH_LENGTH, ConfigError
@@ -82,6 +83,9 @@ CRASH_RATE = 0.1  # The calibration stops when more trials fail than this share 
 EXPECTED_FROM = 10  # The time a trial takes is the 95th percentile of the completed trials once there are this many
 CONSTRAINT = "constraint"  # Trial attribute: (violation,), <= 0 feasible (persistence); also given to Optuna
 PERSISTENCE = "persistence"  # Trial attribute: how long transmission lasted in each seed (persistence)
+OBSERVATION = "observation"  # Record: the observational model, {model, rho: [low, high], k: [low, high], draws}, or None
+REPORTING = "reporting"  # Trial attribute: {rho, k} of the observational model, as sampled
+COVERAGE = "coverage"  # Trial attribute: {part: [share of the data within the band of each objective, or None]}
 LIMITS = "limits"  # Trial attribute: {objective: how far beyond its limit (> 0) or within it (<= 0)}, of those with a limit
 INFEASIBLE = "infeasible"  # Trial attribute: why the trial is infeasible, for the user
 DIED_OUT_DAYS = 365  # A seed whose output has no positive value in this many last days (or all, if shorter) died out
@@ -256,7 +260,7 @@ def offset_temperature(source, target, cells, offsets, centre=None):
 # ---------------------------------------------------------------- creating
 
 def create_calibration(config, objectives, parameters=(), temperature=None, seeds=(12345,), n_trials=100,
-                       sampler="tpe", startup_trials=10, sampler_seed=1, name=None, validation=None, views=()):
+                       sampler="tpe", startup_trials=10, sampler_seed=1, name=None, validation=None, views=(), observation=None):
     """Write the folder of a new calibration and return it.
 
     config: the setup, with the parameters not calibrated and the outputs the objectives need.
@@ -273,6 +277,10 @@ def create_calibration(config, objectives, parameters=(), temperature=None, seed
     calibration should not be pressed to fit, and the last years), or None: the objectives are calibrated on the period
     the model and the data share without any of them, and each trial is scored on each window too, with the same
     metrics, kept with the trial.
+    observation: the observational model (observation.py), or None: {"rho": (low, high), "k": (low, high), "draws": 500}:
+    each trial samples a reporting fraction rho and a dispersion k (both log-uniform) and draws as many reported series
+    (negative binomial) from its runs; each objective's metric then compares the median of them, processed as the data,
+    and the band of them is kept with the trial, with its coverage of the data; the metric "crps" scores the band itself.
     views: comparisons pinned to be drawn for each trial and never optimised, as the objectives but without a metric
     ({name, data, variable, space, aggregation, steps, data_raw, data_steps}): their series are kept with each trial."""
     if not objectives:
@@ -300,6 +308,7 @@ def create_calibration(config, objectives, parameters=(), temperature=None, seed
                 read_observations(view[key])  # Raises DataError if it cannot be read
         if not (view.get("data") or view.get("data_raw")):
             raise CalibrationError(f"view {view.get('name')}: give its observations")
+    observation = _observation(observation, objectives)
     if validation is not None:
         validation = _validation(validation, objectives)
     for parameter in parameters:
@@ -337,6 +346,7 @@ def create_calibration(config, objectives, parameters=(), temperature=None, seed
         "parameters": [{"name": p.name, "distribution": p.distribution, "low": p.low, "high": p.high} for p in parameters],
         "temperature": temperature,
         "validation": validation,
+        OBSERVATION: observation,
         "objectives": [{"space": "people", "aggregation": None, "steps": [], **objective, "data": str(Path(objective["data"]).resolve()),
                         **({"data_raw": str(Path(objective["data_raw"]).resolve())} if objective.get("data_raw") else {}),
                         "direction": DIRECTIONS[objective["metric"]]} for objective in objectives],
@@ -410,6 +420,35 @@ def _temperature(temperature, temp_file, pop_file):
             **({"trend": trend, "trend_centre": trend_centre(temp_file)} if trend else {})}
 
 
+def _observation(observation, objectives):
+    """The observational model of a calibration, checked: the ranges of rho (in (0, 1]) and k (above 0), the draws; None
+    if none (then no objective may use a metric of the band, CRPS)."""
+    if not observation:
+        for objective in objectives:
+            if objective["metric"] in ENSEMBLE:
+                raise CalibrationError(f"{objective['name']}: {objective['metric']} needs the observational model")
+        return None
+    try:
+        rho = [float(value) for value in observation["rho"]]
+        k = [float(value) for value in observation["k"]]
+        draws = int(observation.get("draws", 500))
+    except (KeyError, TypeError, ValueError):
+        raise CalibrationError(f"the observational model needs a range of rho, a range of k and the draws: {observation!r}") from None
+    if not 0 < rho[0] < rho[1] <= 1:
+        raise CalibrationError("the reporting fraction rho needs a range above 0 and at most 1, its low below its high")
+    if not 0 < k[0] < k[1]:
+        raise CalibrationError("the dispersion k needs a range above 0, its low below its high")
+    if draws < 20:
+        raise CalibrationError("the observational model needs at least 20 draws (500 by default)")
+    for objective in objectives:
+        if not objective.get("data_raw"):
+            raise CalibrationError(f"{objective['name']}: the observational model needs the observations as loaded: add the "
+                                   "objective again")
+        if "N" not in read_observations(objective["data_raw"]).extra:
+            raise CalibrationError(f"{objective['name']}: the observational model needs the observations' population (a column N)")
+    return {"model": "negbin", "rho": rho, "k": k, "draws": draws}
+
+
 def _in_folder(folder, path):
     """A path of the record: as it is if absolute, else within the folder of the calibration. Other values (no file: "",
     "NONE", a number) as they are."""
@@ -461,11 +500,37 @@ def suggest(trial, record):
         for k in range(2, len(temperature["cells"]) + 1):
             sampled[f"gap_{k}"] = trial.suggest_float(f"gap_{k}", *temperature["gap"])
         offsets = offsets_from(temperature, {**sampled, **_trend_sampled(trial, temperature)})
+    if record.get(OBSERVATION):  # Of the reporting, not of the model: in the trial's params, not in its run
+        trial.suggest_float("obs_rho", *record[OBSERVATION]["rho"], log=True)
+        trial.suggest_float("obs_k", *record[OBSERVATION]["k"], log=True)
     return values, offsets
+
+
+def trial_observation(record, trial):
+    """The observational model of a trial, {rho, k, draws, seed} (its sampled rho and k; the draws' seed of the trial, so
+    that every objective and part sees the same reported series), or None without one."""
+    if not record.get(OBSERVATION):
+        return None
+    return {"rho": trial.params["obs_rho"], "k": trial.params["obs_k"], "draws": record[OBSERVATION]["draws"],
+            "seed": int(record["sampler"]["seed"]) * 100003 + trial.number}
 
 
 def _trend_sampled(trial, temperature):
     return {"dT_trend": trial.suggest_float("dT_trend", *temperature["trend"])} if temperature.get("trend") else {}
+
+
+def observed_series(objective, run_dirs, validation=None, part=None, observation=None):
+    """(model, data, draws) of an objective: as objective_series, and with the observational model (`observation`, as
+    trial_observation gives it; objectives with the raw observations) the model is the median of the reported series
+    drawn from the runs, processed as the data, and draws are those processed series (draws x values of model); None
+    without."""
+    if observation and objective.get("data_raw"):
+        members = [member for run_dir in run_dirs
+                   for member in model_members(run_dir, objective["variable"], objective["space"], None, objective["aggregation"])]
+        model, data, _, draws = process_observed(members, objective["steps"], read_observations(objective["data_raw"]),
+                                                 objective.get("data_steps", []), observation, validation=validation, part=part)
+        return model, data, draws
+    return (*objective_series(objective, run_dirs, validation, part), None)
 
 
 def objective_series(objective, run_dirs, validation=None, part=None):
@@ -499,30 +564,59 @@ def _touched(path):
     return path
 
 
-def _keep(folder, index, part, model, data, kind=OBJECTIVE):
+def _keep(folder, index, part, model, data, kind=OBJECTIVE, draws=None):
     Path(folder).mkdir(parents=True, exist_ok=True)
     for series, path in zip((model, data), _series_files(folder, index, part, kind)):
         write_observations(series, _touched(path))
+    if draws is not None:  # The band of the reported series (observational model): its median, low and high ends
+        low, middle, high = band_of(draws)
+        write_observations(replace(model, values=middle, sd=None, extra={"low": low, "high": high}),
+                           _touched(_band_file(folder, index, part, kind)))
 
 
-def keep_series(objectives, run_dirs, folder, validation=None, part=None):
+def band_of(draws):
+    """(low, median, high) of the band of processed draws (observation.LEVELS)."""
+    low, middle, high = _band(draws)
+    return low, middle, high
+
+
+def _band_file(folder, index, part, kind=OBJECTIVE):
+    return Path(folder) / f"{kind}_{index}_{part or 'whole'}_band.nc"
+
+
+def trial_band(folder, number, index=0, part=None, kind=OBJECTIVE):
+    """(low, median, high) of the band of reported series of an objective (or view) for a trial, kept with it, on the
+    values of its model series; None if it has none (no observational model)."""
+    record = read_calibration(folder)
+    path = _band_file(trial_folder(folder, number) / SERIES, index, part if record.get("validation") else None, kind)
+    if not path.is_file():
+        return None
+    with NETCDF_LOCK:
+        kept = read_observations(path)
+    return np.asarray(kept.extra["low"]), np.asarray(kept.values), np.asarray(kept.extra["high"])
+
+
+def keep_series(objectives, run_dirs, folder, validation=None, part=None, observation=None):
     """Keep in a folder the model and the observations of each objective as compared, for a part of the period (None for
-    the whole), for the plots of a trial without its output. One that cannot be had is left out."""
+    the whole), for the plots of a trial without its output (with the observational model, the band too). One that
+    cannot be had is left out."""
     for index, objective in enumerate(objectives):
         try:
-            _keep(folder, index, part, *objective_series(objective, run_dirs, validation, part))
+            model, data, draws = observed_series(objective, run_dirs, validation, part, observation)
+            _keep(folder, index, part, model, data, draws=draws)
         except DataError:
             continue
 
 
-def keep_views(views, run_dirs, folder, validation=None):
+def keep_views(views, run_dirs, folder, validation=None, observation=None):
     """Keep in a folder the model and the observations of each view (a comparison pinned to be drawn, never optimised): for
     the whole period, and with a validation window for each of its parts. One that cannot be had is left out: a view
     never fails a trial."""
     for part in (("calibration", *validation_parts(validation), None) if validation else (None,)):
         for index, view in enumerate(views):
             try:
-                _keep(folder, index, part, *objective_series(view, run_dirs, validation, part), kind=VIEW)
+                model, data, draws = observed_series(view, run_dirs, validation, part, observation)
+                _keep(folder, index, part, model, data, kind=VIEW, draws=draws)
             except (DataError, ValueError, KeyError, OSError):
                 continue
 
@@ -538,21 +632,37 @@ def flat_value(metric, data_values):
     return None
 
 
-def evaluate(objectives, run_dirs, validation=None, part=None, strict=True, keep=None, flat=None):
+def evaluate(objectives, run_dirs, validation=None, part=None, strict=True, keep=None, flat=None, observation=None,
+             coverage=None):
     """[value of each objective] of the runs of a trial (one per seed): the output and the observations as
     objective_series gives them (with a validation window: the part of the period, "calibration" or "validation"), paired
     and compared by the metric of the objective. Not strict, None for a value that cannot be had instead of an error.
     keep: a folder to keep the series compared in (keep_series). flat: a list to which the index of each objective whose
     model series does not vary is added, scored then as flat_value says, instead of an error (the trial is then
-    infeasible, see persistence)."""
+    infeasible, see persistence). observation: the observational model of the trial (trial_observation): the metrics
+    compare the median of the reported series drawn, "crps" their band; coverage: a list to which the share of the data
+    within the band of each objective is added (None without the observational model)."""
     results = []
     for index, objective in enumerate(objectives):
         try:
-            model, data = objective_series(objective, run_dirs, validation, part)
+            model, data, draws = observed_series(objective, run_dirs, validation, part, observation)
             if keep is not None:
-                _keep(keep, index, part, model, data)
+                _keep(keep, index, part, model, data, draws=draws)
             model_values, data_values, _ = pair(model, data)
-            value = metrics(model_values, data_values)[objective["metric"]]
+            if draws is not None:  # The draws on the same pairs as the median and the data
+                columns = pair(replace(model, values=np.where(np.isfinite(model.values), np.arange(len(model.values), dtype="f8"),
+                                                              np.nan)), data)[0].astype(int)
+                low, _, high = band_of(draws[:, columns])
+                if coverage is not None:
+                    coverage.append(coverage_of(low, high, data_values))
+            elif coverage is not None:
+                coverage.append(None)
+            if objective["metric"] in ENSEMBLE:
+                if draws is None:
+                    raise DataError(f"{objective['name']}: {objective['metric']} needs the observational model")
+                value = float(np.nanmean(crps(draws[:, columns], data_values)))
+            else:
+                value = metrics(model_values, data_values)[objective["metric"]]
             if value is None and flat is not None and np.ptp(model_values) == 0:
                 value = flat_value(objective["metric"], data_values)
                 if value is not None:
@@ -1112,15 +1222,22 @@ def _run_locked(folder, record, state, parallel, threads, deadline=None, trial_s
                 window = record.get("validation")
                 kept = here / SERIES
                 flat = []
-                results = evaluate(objectives, run_dirs, window, "calibration" if window else None, keep=kept, flat=flat)
+                observed = trial_observation(record, trial)
+                covered = {}
+                results = evaluate(objectives, run_dirs, window, "calibration" if window else None, keep=kept, flat=flat,
+                                   observation=observed, coverage=covered.setdefault("calibration" if window else "whole", []))
                 if window:  # Scored on each validation window too, kept with the trial; not optimised
                     scored = [{"window": list(span), "part": part,
-                               "values": evaluate(objectives, run_dirs, window, part, strict=False, keep=kept)}
+                               "values": evaluate(objectives, run_dirs, window, part, strict=False, keep=kept,
+                                                  observation=observed, coverage=covered.setdefault(part, []))}
                               for span, part in zip(validation_windows(window), validation_parts(window))]
                     trial.set_user_attr("validation", scored[0]["values"])  # The first window, as the views read it
                     trial.set_user_attr("validation_windows", scored)  # Every window: [{window, part, values}]
-                    keep_series(objectives, run_dirs, kept, window, None)  # The whole period too, for the plots
-                keep_views(views, run_dirs, kept, window)
+                    keep_series(objectives, run_dirs, kept, window, None, observation=observed)  # The whole period too
+                keep_views(views, run_dirs, kept, window, observation=observed)
+                if observed is not None:
+                    trial.set_user_attr(REPORTING, {"rho": observed["rho"], "k": observed["k"]})
+                    trial.set_user_attr(COVERAGE, covered)
                 lasted = persistence(objectives, run_dirs, flat)
                 measured = regime(run_dirs)
             if measured is not None:
@@ -1228,7 +1345,8 @@ def trials_table(folder):
                      "validation_windows": trial.user_attrs.get("validation_windows"),
                      "infeasible": trial.user_attrs.get(INFEASIBLE), "persistence": trial.user_attrs.get(PERSISTENCE),
                      "violation": trial.user_attrs.get(CONSTRAINT, (None,))[0], "regime": trial.user_attrs.get(REGIME),
-                     "limits": trial.user_attrs.get(LIMITS)})
+                     "limits": trial.user_attrs.get(LIMITS), "reporting": trial.user_attrs.get(REPORTING),
+                     "coverage": trial.user_attrs.get(COVERAGE)})
     return rows
 
 
