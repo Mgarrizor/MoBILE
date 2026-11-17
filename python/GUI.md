@@ -406,6 +406,12 @@ together (the Pareto front):
   - the **calibration window**, the rest of the period. The calibration uses only the data of these years: each trial
     is scored on them, and Optuna chooses the next trials from those scores.
 
+  **Add a validation window**, under the dates, adds one more window at a time (at first the five years before the
+  earliest), each with **Remove**: to hold out more than one stretch, e.g. an episode the calibration should not be
+  pressed to fit and the last years. The calibration window is then the period without any of them, and each trial is
+  scored on each window on its own; the windows may not overlap, and are numbered in date order (**Validation 1**,
+  **Validation 2**, …) wherever they are said or shown.
+
   Both are cut before the steps of the Model and Data boxes, so e.g. a climatology objective is that of the
   calibration window only. With the switch on, the Model and data card gives the metrics of all the years and of each
   window, and marks both windows on its plot with the bars described below. It needs objectives that keep the observations as loaded (those added since the cut to the common period:
@@ -414,7 +420,8 @@ together (the Pareto front):
   Under the dates, a line says both windows as the calibration will use them, as you type, e.g. **Calibration:**
   1980-01 to 1995-12 (16 years, 192 values) · **Validation:** 1996-01 to 2003-12 (8 years, 96 values): the
   observations of the objectives as loaded, cut to the period the setup simulates, then split; the values are those
-  not missing, as each trial counts them. Objectives whose observations split differently get a line each. It warns
+  not missing, as each trial counts them; with several windows, one **Validation k** for each. Objectives whose
+  observations split differently get a line each. It warns
   when the validation window is longer than the calibration window (*is this the right way round?*: the dates given
   are those of the validation window) and when values straddle an end of the window (they are in neither); it stops
   Create only and Run when a window would have no values. The same line is repeated in the messages of Create only,
@@ -474,7 +481,7 @@ together (the Pareto front):
   The calibration running, or the one chosen, is drawn below: each objective trial by trial with the best so far
   (**Log scale** under it puts an objective's panel on a log scale, offered for those whose values are all above 0), the
   Pareto front, in a panel that folds (click its title), with the offsets and parameters of each trial and the mean
-  temperatures they give, and with a validation window its scores on it, in grey. Click a column title to sort by it,
+  temperatures they give, and with validation windows its scores on each (a column per objective and window), in grey. Click a column title to sort by it,
   again for the other way (▼ high to low, ▲ low to high; an objective sorts best first at the first click; trials
   without a value last). It is sorted at first by the distance to the ideal point, closest first (each objective
   scaled from its best value on the front, 0, to its worst, 1; then the distance over all of them: 0 is a trial best
@@ -489,13 +496,13 @@ together (the Pareto front):
   only when what it shows changes, and the menus keep the choice made: a zoom or a choice is not undone by the next
   reading. The number of trials completed, in the list of calibrations, is counted in its study, so it follows a job
   on a cluster at each Refresh. With a validation window, semi-transparent bars along the top of these plots mark the calibration window
-  (green) and the validation window (purple), and their titles give the trial's validation scores; an objective that
+  (green) and each validation window (purple), and their titles give the trial's validation scores on each; an objective that
   is not a dated series, e.g. a climatology, is drawn for the calibration window only, as scored.
 - **Create only** makes the calibration without running it, and chooses it under Calibrations: run it here with
   **Resume here**, send it to a cluster (below), or run it with `mobile calibrate`.
 - **Use as template**, under Calibrations, fills the card and the objectives from the calibration chosen, for a new
   one: its objectives (those whose observations are still where they were), what it calibrates and the ranges (its
-  cells or regions found again on the setup now), the validation window, the sampler, trials, start-up trials, seeds
+  cells or regions found again on the setup now), the validation windows, the sampler, trials, start-up trials, seeds
   (the first one in the sidebar) and threads per run, and a new name (e.g. look_2). Change what you like, then Create
   only or Run calibration; the calibration chosen is not changed. It also fills the other tabs, for you to apply:
   its setup in the boxes of tab 1 (the dot turns amber if it differs from the setup applied: press Apply setup), its

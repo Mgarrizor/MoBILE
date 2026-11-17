@@ -2673,6 +2673,126 @@ class TestCalibrationWindows(unittest.TestCase):
         self.assertIn("Add an objective", str(windows_tags([])))
 
 
+class TestSeveralValidationWindows(TestCalibrationWindows):
+    """Several validation windows in the card: each said, scored and shown on its own, numbered in date order; one window
+    as before (the tests of TestCalibrationWindows, inherited, run again here as the control)."""
+
+    HUMP, LAST = ("1989-01-01", "1993-12-31"), ("1998-01-01", "2003-12-31")
+
+    def test_two_windows_said(self):
+        [(names, text, warnings, problems)] = self.said([self.LAST, self.HUMP])  # Given out of order: said in date order
+        self.assertIsNone(names)
+        # By hand: 1980-88 (108 months) and 1994-97 (48); 1989-93 (60); 1998-2003 (72, the last missing)
+        self.assertEqual(text, "Calibration: 1980-01 to 1988-12 and 1994-01 to 1997-12 (13 years, 156 values) · Validation 1: "
+                               "1989-01 to 1993-12 (5 years, 60 values) · Validation 2: 1998-01 to 2003-12 (6 years, 71 values)")
+        self.assertEqual((warnings, problems), ([], []))
+        # Together longer than the calibration: warned; a window outside the period: a problem named by its number
+        [(_, _, warnings, _)] = self.said([("1982-01-01", "1993-12-31"), self.LAST])
+        self.assertIn("together are longer", warnings[0])
+        [(_, _, _, problems)] = self.said([self.HUMP, ("2010-01-01", "2011-12-31")])
+        self.assertIn("no values within the validation window 2", problems[0])
+        [(_, _, warnings, _)] = self.said([("1989-01-15", "1993-12-31"), self.LAST])
+        self.assertIn("1 value across an end of a validation window is in no window.", warnings)
+
+    def test_counts_match_the_engine(self):
+        """Control: the values said for each part are those the engine's process_both cuts for validation_1, validation_2."""
+        from mobile.calibration_data import Observations
+        from mobile.calibration_model import process_both, validation_parts
+        days = pd.date_range(*self.period, freq="D")
+        model = Observations(shape="dated", values=np.ones(len(days)), units="cases", name="cases",
+                             index=pd.DataFrame({"start": days.values.astype("datetime64[D]"), "end": days.values.astype("datetime64[D]")}))
+        monthly = [{"kind": "aggregate", "period": "month", "how": "sum", "complete": True, "days": 7}]
+        validation = [list(self.HUMP), list(self.LAST)]
+        [(_, text, _, _)] = self.said(validation)
+        said = [int(n) for n in re.findall(r"(\d+) values", text)]
+        got = [int(np.isfinite(process_both([model], monthly, self.data, [], validation=validation, part=part)[1].values).sum())
+               for part in ("calibration", *validation_parts(validation))]
+        self.assertEqual(said, got)
+
+    def test_typed_in_the_card(self):
+        from mobile.calibration_run_ui import next_window, typed_validation
+
+        class Typed(dict):  # The inputs of the card, as Shiny gives them
+            def __getattr__(self, name):
+                return self[name]
+
+            def __getitem__(self, name):
+                value = dict.__getitem__(self, name)
+                return value if callable(value) else (lambda: value)
+
+        day = lambda text: pd.Timestamp(text).date()
+        typed = Typed(cal_validation=True, cal_validation_dates=(day("1998-01-01"), day("2003-12-31")))
+        self.assertEqual(typed_validation(typed, []), ("1998-01-01", "2003-12-31"))  # Control: one window, as before
+        typed["cal_validation_dates_2"] = (day("1989-01-01"), day("1993-12-31"))
+        self.assertEqual(typed_validation(typed, [(2, None)]), [list(self.HUMP), list(self.LAST)])  # In date order
+        self.assertEqual(typed_validation(typed, [(3, (day("1989-01-01"), day("1993-12-31")))]),  # Not drawn yet: its start
+                         [list(self.HUMP), list(self.LAST)])
+        typed["cal_validation_dates_2"] = (day("1993-01-01"), day("1998-06-30"))
+        with self.assertRaisesRegex(ValueError, "overlap"):
+            typed_validation(typed, [(2, None)])
+        typed["cal_validation_dates_2"] = (day("1993-01-01"), None)
+        with self.assertRaisesRegex(ValueError, "Each validation window needs"):
+            typed_validation(typed, [(2, None)])
+        typed["cal_validation_dates_2"] = (day("1993-01-01"), day("1990-01-01"))
+        with self.assertRaisesRegex(ValueError, "1993-01-01 to 1990-01-01 must start"):
+            typed_validation(typed, [(2, None)])
+        typed["cal_validation"] = False
+        self.assertIsNone(typed_validation(typed, [(2, None)]))
+        # A window added: the five years before the earliest, within the period shared; the first year if no room
+        self.assertEqual(next_window([(day("1999-01-01"), day("2003-12-31"))], self.period), (day("1994-01-01"), day("1998-12-31")))
+        self.assertEqual(next_window([(day("1982-01-01"), day("2003-12-31"))], self.period), (day("1980-01-01"), day("1981-12-31")))
+        self.assertEqual(next_window([(day("1980-01-01"), day("2003-12-31"))], self.period), (day("1980-01-01"), day("1980-12-31")))
+        self.assertIsNone(next_window([], None))
+
+    def test_pareto_table(self):
+        from mobile.calibration_run_ui import (
+            IDEAL, front_columns, front_key, sort_rows, window_columns, window_scores,
+        )
+        objectives = [{"name": "Correlation", "direction": "maximize"}, {"name": "RMSE", "direction": "minimize"}]
+        record = {"objectives": objectives, "validation": [list(self.HUMP), list(self.LAST)]}
+
+        def row(number, hump, last):
+            return {"number": number, "state": "COMPLETE", "values": [0.5, 1.0], "params": {}, "offsets": {},
+                    "validation": hump, "validation_windows": [{"window": list(self.HUMP), "part": "validation_1", "values": hump},
+                                                               {"window": list(self.LAST), "part": "validation_2", "values": last}]}
+        front = [row(0, [0.1, 3.0], [0.9, 1.0]), row(1, [0.7, 2.0], None), row(2, [0.4, 1.0], [0.2, 4.0])]
+        self.assertEqual(window_columns(record), [(["w1_0", "w1_1"], "validation 1"), (["w2_0", "w2_1"], "validation 2")])
+        self.assertEqual(window_scores(record, front[2]), [[0.4, 1.0], [0.2, 4.0]])
+        self.assertTrue({"w1_0", "w1_1", "w2_0", "w2_1"} <= front_columns(record))
+        self.assertNotIn("v0", front_columns(record))
+        numbers = lambda column, descending: [r["number"] for r in sort_rows(front, column, descending, {}, record)]
+        self.assertEqual(numbers("w1_0", True), [1, 2, 0])
+        self.assertEqual(numbers("w2_0", True), [0, 2, 1])  # Trial 1 has no score on window 2: last either way
+        self.assertEqual(numbers("w2_0", False), [2, 0, 1])
+        # A score that changes on window 2 only draws the table again
+        changed = [*front[:2], row(2, [0.4, 1.0], [0.3, 4.0])]
+        self.assertNotEqual(front_key((record, front, front)), front_key((record, changed, changed)))
+        # Control: one window keeps its columns v0, v1 and the scores user_attrs validation
+        one = {"objectives": objectives, "validation": list(self.LAST)}
+        self.assertEqual(window_columns(one), [(["v0", "v1"], "validation")])
+        self.assertEqual(window_scores(one, front[0]), [[0.1, 3.0]])
+        self.assertEqual([r["number"] for r in sort_rows(front, "v0", True, {}, one)], [1, 2, 0])
+        self.assertEqual(window_columns({"objectives": objectives}), [])  # No window: no column
+        self.assertEqual(front_columns({"objectives": objectives}), {"number", IDEAL, "o0", "o1"})
+
+    def test_window_bars(self):
+        import plotly.graph_objects as go
+
+        from mobile.plots import CALIBRATION_WINDOW, VALIDATION_WINDOW, mark_windows
+
+        figure = mark_windows(go.Figure(go.Scatter(x=["1980-01-15", "2003-12-15"], y=[0, 1])), self.period, [self.HUMP, self.LAST])
+        self.assertEqual([shape.fillcolor for shape in figure.layout.shapes],
+                         [CALIBRATION_WINDOW, VALIDATION_WINDOW, CALIBRATION_WINDOW, VALIDATION_WINDOW])
+        self.assertEqual([(str(shape.x0)[:10], str(shape.x1)[:10]) for shape in figure.layout.shapes],
+                         [("1980-01-01", "1988-12-31"), ("1989-01-01", "1993-12-31"), ("1994-01-01", "1997-12-31"),
+                          ("1998-01-01", "2003-12-31")])
+        self.assertEqual([a.text for a in figure.layout.annotations],
+                         ["Calibration window", "Validation window 1", "Calibration window", "Validation window 2"])
+        # Control: one window is named as before
+        figure = mark_windows(go.Figure(go.Scatter(x=["1980-01-15", "2003-12-15"], y=[0, 1])), self.period, self.LAST)
+        self.assertEqual([a.text for a in figure.layout.annotations], ["Calibration window", "Validation window"])
+
+
 class TestSharedPeriod(unittest.TestCase):
     """Model and data are cut to the period they share before their steps, so that a climatology covers the same years."""
 

@@ -1368,7 +1368,7 @@ def create_app(config):
         calibrating = calibration_run_server(
             input, output, session, setup, calibration.objectives, applied_overrides, applied_output, not_applied, load_template,
             lambda: run_task.status() == "running" or analysis.running(), lambda: agents(), lambda: input.ha(), slider_setup,
-            calibration.views,
+            calibration.views, calibration.extra_windows, calibration.span,
         )
         progress_server(input, calibration.prepared, calibrating.what, calibrating.stored, calibration.activity,
                         lambda: input.cal_previous())
