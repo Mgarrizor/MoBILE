@@ -161,7 +161,9 @@ class TestConfig(unittest.TestCase):
         parameters = all_parameters()
         # Every parameter of &CONST, and only those: one added to the model must be added here too
         self.assertEqual(set(parameters), namelist_names(MOBILE, "CONST"))
-        self.assertEqual(sum(spec["curated"] for spec in parameters.values()), 12)
+        self.assertEqual(sum(spec["curated"] for spec in parameters.values()), 13)
+        # Set by hand, wide enough to calibrate: down to below VECTRI's original 0.2 (the default 1.0 is Senegal's)
+        self.assertEqual((parameters["wpond_max"]["min"], parameters["wpond_max"]["max"]), (0.1, 1.0))
         for name, spec in parameters.items():
             self.assertIn(spec["group"], (*PARAMETER_GROUPS, "Cholera", "Mobility"), name)
             self.assertLess(spec["min"], spec["max"], name)
