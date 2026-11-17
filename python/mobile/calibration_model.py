@@ -234,6 +234,12 @@ def shared_span(model, data):
     return str(first.date()), str(last.date())
 
 
+def _split_at_filter(steps):
+    """(steps up to and including the last time filter, the steps after it), or None without a filter."""
+    last = max((i for i, step in enumerate(steps) if step.get("kind") == "filter"), default=None)
+    return None if last is None else (steps[:last + 1], steps[last + 1:])
+
+
 def process_both(members, model_steps, data, data_steps, others=None, model_note=None, validation=None, part=None):
     """(model, data, span): the model (each run taken, e.g. the seeds of a band) and the observations, both first cut to
     the period they share, then each processed by its own steps, so that the statistics of both, such as a climatology,
@@ -241,7 +247,12 @@ def process_both(members, model_steps, data, data_steps, others=None, model_note
     (first, last) dates cut to, or None if they could not be cut (not dated).
 
     validation: (first, last) dates of a validation window, with part "calibration" for the shared period without it,
-    "validation" for the window only (both before the steps), or None for the whole shared period."""
+    "validation" for the window only, or None for the whole shared period. A side whose steps have a time filter is
+    filtered over the whole shared period, up to and including its last filter, and only then cut to the part, the rest
+    of its steps (e.g. an anomaly) applied to the part: the filter's unreliable ends are then only those of the whole
+    period, and each part compares all its months the filter keeps, as a plot of the whole period shows them. Steps
+    without a filter (e.g. a climatology) are applied to the part only, so that a statistic over the years does not mix
+    the windows."""
     from .calibration_data import drop_window, select_window
     from .calibration_steps import apply_steps
 
@@ -249,11 +260,22 @@ def process_both(members, model_steps, data, data_steps, others=None, model_note
     if span is not None:
         members = [select_window(member, *span) for member in members]
         data = select_window(data, *span)
-    if validation is not None and part is not None:
-        if span is None:
-            raise DataError("a validation window needs dated observations")
-        cut = drop_window if part == "calibration" else select_window
-        members = [cut(member, *validation) for member in members]
-        data = cut(data, *validation)
-    model = apply_steps(members[0], model_steps) if len(members) == 1 else seed_spread(members, model_steps, None, model_note)
-    return model, apply_steps(data, data_steps, others), span
+    if validation is None or part is None:
+        model = apply_steps(members[0], model_steps) if len(members) == 1 else seed_spread(members, model_steps, None, model_note)
+        return model, apply_steps(data, data_steps, others), span
+    if span is None:
+        raise DataError("a validation window needs dated observations")
+    cut = drop_window if part == "calibration" else select_window
+    model_split, data_split = _split_at_filter(model_steps), _split_at_filter(data_steps)
+    if model_split is None:
+        members, after = [cut(member, *validation) for member in members], model_steps
+    else:
+        before, after = model_split
+        members = [cut(apply_steps(member, before), *validation) for member in members]
+    model = apply_steps(members[0], after) if len(members) == 1 else seed_spread(members, after, None, model_note)
+    if data_split is None:
+        data = apply_steps(cut(data, *validation), data_steps, others)
+    else:
+        before, after = data_split
+        data = apply_steps(cut(apply_steps(data, before, others), *validation), after, others)
+    return model, data, span

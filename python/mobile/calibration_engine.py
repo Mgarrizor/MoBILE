@@ -61,9 +61,9 @@ from .rundir import new_run_id, period_steps
 from .runner import NETCDF_LOCK, RUN_PID, BuildOnce, RunCancelled, Runner, stop_left
 from .setup import from_fields, to_dict
 
-# Raised when a change means calibrations made before cannot be resumed (e.g. 2: the first trial has no offset). They
-# can still be looked at.
-VERSION = 2
+# Raised when a change means calibrations made before cannot be resumed (e.g. 2: the first trial has no offset; 3: a
+# filtered objective is filtered over the whole period and only then cut to each window). They can still be looked at.
+VERSION = 3
 OLD_CALIBRATION = ("This calibration was made by an earlier version of the calibration engine: it can be looked at, but not "
                    "resumed. Start a new calibration.")
 FOLDER = "calibration"

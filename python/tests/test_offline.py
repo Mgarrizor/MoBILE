@@ -3852,6 +3852,46 @@ echo "64200001|cal_x|PENDING|0:00|20:00|(Priority)"
         self.assertEqual(run_calibration(plain, StudyState())["status"], "finished")
         self.assertTrue(all("dT_trend" not in row["params"] for row in trials_table(plain)))
 
+    def test_filters_run_over_the_whole_period_then_the_windows_are_cut(self):
+        from mobile.calibration_data import DataError, Observations
+        from mobile.calibration_model import process_both
+        from mobile.calibration_steps import EDGE_ERROR, apply_steps
+
+        days = pd.date_range("1990-01-01", "2003-12-31", freq="D")
+        t = np.arange(len(days)) / 365.25
+        values = np.exp(0.15 * t + 0.5 * np.sin(2 * np.pi * t / 4.0)) * (1.2 + np.sin(2 * np.pi * t))
+        daily = Observations(shape="dated", values=values, index=pd.DataFrame({"start": days.values.astype("datetime64[D]"),
+                             "end": days.values.astype("datetime64[D]")}), aggregation="sum", units="fraction", name="cases")
+        month = {"kind": "aggregate", "period": "month", "how": "sum", "complete": True, "days": 1}
+        low = {"kind": "filter", "type": "low", "short": 1.0, "long": 3.0, "unit": "years", "missing": "interpolate",
+               "max_gap": 3, "edges": "cut", "edge_error": EDGE_ERROR}
+        window = ("2000-01-01", "2003-12-31")
+
+        def series(observations):
+            return pd.Series(np.asarray(observations.values, float), index=pd.to_datetime(observations.index["start"])).dropna()
+
+        whole = series(apply_steps(daily, [month, low]))  # As the plot of a trial draws it: cut only at its outer ends
+        for part, first, last in (("calibration", "1992-07-01", "1999-12-01"), ("validation", "2000-01-01", "2002-02-01")):
+            model, data, _ = process_both([daily], [month, low], daily, [month, low], validation=window, part=part)
+            kept = series(model)
+            self.assertEqual((str(kept.index[0].date()), str(kept.index[-1].date())), (first, last))  # Up to the boundary
+            np.testing.assert_allclose(kept.values, whole[kept.index].values)  # The whole series, cut to the part
+            np.testing.assert_allclose(series(data).values, kept.values)
+        # Steps after the filter (an anomaly) apply to the part: its mean is 0 over the months it compares
+        model, _, _ = process_both([daily], [month, low, {"kind": "transform", "transform": "anomaly"}], daily, [month, low],
+                                   validation=window, part="calibration")
+        self.assertAlmostEqual(float(series(model).mean()), 0.0, places=9)
+        # Cut first, then filtered (as before): each part too short for this filter
+        with self.assertRaisesRegex(DataError, "too short for this filter"):
+            apply_steps(Observations(shape="dated", values=values[days < "2000-01-01"], index=daily.index[days < "2000-01-01"].reset_index(drop=True),
+                                     aggregation="sum", units="fraction", name="cases"), [month, low])
+        # Without a filter (a climatology): the part only, so the validation years do not enter the calibration season
+        climatology = [month, {"kind": "climatology", "by": "month"}]
+        part, _, _ = process_both([daily], climatology, daily, climatology, validation=window, part="calibration")
+        before = Observations(shape="dated", values=values[days < "2000-01-01"], index=daily.index[days < "2000-01-01"].reset_index(drop=True),
+                              aggregation="sum", units="fraction", name="cases")
+        np.testing.assert_allclose(part.values, apply_steps(before, climatology).values)
+
     def test_views_are_kept_and_never_fail_a_trial(self):
         from mobile.calibration_engine import (SERIES, VIEW, create_calibration, read_calibration, run_calibration, trial_comparison,
                                                trial_folder, trials_table)
