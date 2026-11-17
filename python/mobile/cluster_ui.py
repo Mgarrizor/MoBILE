@@ -9,8 +9,9 @@ from pathlib import Path
 from shiny import reactive, render, ui
 
 from .calibration_engine import CalibrationError, _clock, _seconds_since, read_calibration, read_cluster
-from .cluster import (ClusterError, ClusterSettings, certificate, cluster_info, info_rows, job_cost, last_log, load_settings,
-                      observation_files, refresh, remote_folder, runs_at_once, save_settings, send, stop, submit, wall_seconds)
+from .cluster import (ClusterError, ClusterSettings, certificate, choices, cluster_info, info_rows, job_cost, last_log,
+                      load_settings, observation_files, refresh, remote_folder, runs_at_once, save_settings, send, stop, submit,
+                      time_limit, wall_seconds)
 from .config import MAX_THREADS
 from .layout import with_tip
 
@@ -27,6 +28,15 @@ def cluster_label():
                    style="font-size: 0.68rem; background: #e7f1ff; color: #0a4b8c; border: 1px solid #6ea8fe;",
                    title="Used by the jobs on the cluster. Kept on this computer for every calibration sent from it, not "
                          "with the calibration.")
+
+
+CHOOSE = "Check (above) to choose from the cluster's list; or type it."
+
+
+def choice(name, label, saved):
+    """A setting chosen from what a Check found (choices), or typed: the value saved, until then."""
+    return ui.input_selectize(name, label, choices={saved: saved} if saved else {}, selected=saved or None, width="100%",
+                              options={"create": True, "createOnBlur": True, "persist": False, "placeholder": "Check, or type"})
 
 
 def _box(control, advice=None):
@@ -56,12 +66,14 @@ def cluster_section():
                      "On LEONARDO: unset PYTHONPATH after loading the python module, or it hides the packages of the venv."),
             ),
             ui.div(
-                _box(text("cl_account", with_tip("Account", "The project the job is billed to (#SBATCH --account). "
-                                                 "`saldo -b` there lists yours and what is left."), value=saved.account)),
-                _box(text("cl_partition", with_tip("Partition", "The nodes the job runs on (#SBATCH --partition)."),
-                          value=saved.partition), "dcgp_usr_prod: LEONARDO's CPU nodes, 112 cores each."),
-                _box(text("cl_qos", with_tip("QOS", "The quality of service (#SBATCH --qos): its time limit and priority."),
-                          value=saved.qos)),
+                _box(choice("cl_account", with_tip("Account", "The project the job is billed to (#SBATCH --account). "
+                                                   "Check (Cluster information, above) lists yours, with what is left."),
+                            saved.account), CHOOSE),
+                _box(choice("cl_partition", with_tip("Partition", "The nodes the job runs on (#SBATCH --partition). Check "
+                                                     "lists them with their limits."), saved.partition),
+                     "dcgp_usr_prod: LEONARDO's CPU nodes, 112 cores each."),
+                _box(choice("cl_qos", with_tip("QOS", "The quality of service (#SBATCH --qos): its time limit and priority. "
+                                               "Check lists those of the account chosen, with their limits."), saved.qos), CHOOSE),
                 _box(text("cl_time", with_tip("Time limit (h:mm:ss)", "Of each job (#SBATCH --time). The calibration starts no "
                                               "trial that would not end 2 minutes before it, and stops there; submit again to "
                                               "go on."), value=saved.time),
@@ -95,17 +107,18 @@ def cluster_section():
                      "Calibrations, Send it there, Submit a job; close the GUI if you like; later, Refresh to see how far it is. "
                      "Only what is drawn here is copied back, never the model output. While it runs there, the copy here only "
                      "shows it.", class_="small text-muted"),
-                ui.accordion(
-                    ui.accordion_panel(ui.TagList("Cluster settings", cluster_label()), settings, value="cl_settings"),
+                ui.accordion(  # Check first, then choose the account, partition and QOS from what it found
                     ui.accordion_panel(
                         "Cluster information",
                         ui.div(ui.input_action_button("cl_info", "Check", class_="btn-sm"),
-                               ui.span("Budgets, projects, the QOS chosen, your jobs, how busy the nodes are: read-only "
-                                       "commands, in one ssh call. About a minute: the budget and the project's usage are slow to ask.",
+                               ui.span("Budgets, projects, the QOS and partitions with their limits, your jobs, how busy the "
+                                       "nodes are: read-only commands, in one ssh call. About a minute: the budget and the "
+                                       "project's usage are slow to ask. Then choose from them in the settings below.",
                                        class_="small text-muted"),
                                class_="d-flex gap-2 align-items-center mb-2"),
                         ui.output_ui("cl_info_table"),
                         value="cl_information"),
+                    ui.accordion_panel(ui.TagList("Cluster settings", cluster_label()), settings, value="cl_settings"),
                     open=False, multiple=True),
                 ui.output_ui("cl_chosen"),
                 ui.div(
@@ -309,6 +322,20 @@ def cluster_server(input, output, session, chosen, changed):
             with reactive.isolate():
                 asked.set(info_task.result() if info_task.status() == "success" else (_clock_now(), {}, "see the terminal"))
 
+    @reactive.effect
+    def offer_choices():
+        """After a Check, the account, partition and QOS chosen from what the cluster said; the QOS of the account chosen."""
+        found = asked()
+        if not found or found[2]:
+            return
+        account, partition, qos = input.cl_account() or "", input.cl_partition() or "", input.cl_qos() or ""
+        offered = choices(found[1], account or None, partition or None)
+        for name, current in (("cl_account", account), ("cl_partition", partition), ("cl_qos", qos)):
+            options = dict(offered[name[3:]])
+            if current and current not in options:
+                options[current] = f"{current} (not in what the cluster listed)"
+            ui.update_selectize(name, choices=options, selected=current or None)
+
     @render.ui
     def cl_info_table():
         if info_task.status() == "running":
@@ -346,10 +373,10 @@ def cluster_server(input, output, session, chosen, changed):
                  + (" (a whole node is billed with --exclusive)" if given.exclusive else "") + "."]
         warn = False
         found = asked()
-        for line in (found[1].get("qos", [])[:1] if found else []):
-            name, maxwall = (line.split("|") + [""])[:2]
-            if wall_seconds(maxwall) is not None and (wall_seconds(given.time) or 0) > wall_seconds(maxwall) and name == given.qos:
-                lines.append(f"Longer than the {maxwall} that QOS {name} allows: sbatch would refuse it.")
+        if found and not found[2]:
+            seconds, said = time_limit(found[1], given.qos, given.partition)
+            if seconds is not None and (wall_seconds(given.time) or 0) > seconds:
+                lines.append(f"Longer than QOS {given.qos} allows on {given.partition}, {said}: sbatch would refuse it.")
                 warn = True
         return ui.p(" ".join(lines), class_="small mt-2 mb-0 " + ("text-warning-emphasis" if warn else "text-muted"))
 

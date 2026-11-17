@@ -3645,8 +3645,14 @@ true
             "sacctmgr": """#!/bin/bash
 case "$*" in
   *assoc*) echo "try26_garrido||normal,dcgp_qos_dbg"; echo "try26_garrido|dcgp_usr_prod|dcgp_qos_lprod,dcgp_qos_bprod";;
-  *qos*) echo "dcgp_qos_dbg|00:30:00|cpu=224,mem=988000M,node=2|1|2";;
+  *qos*) printf "dcgp_qos_bprod||node=128||\ndcgp_qos_dbg|00:30:00|cpu=224,mem=988000M,node=2|2|2\n"  # LEONARDO, 17 Nov 2026
+         printf "dcgp_qos_lprod|4-00:00:00|cpu=336,mem=1482000M,node=3||\nnormal||||\n";;
 esac
+""",
+            "scontrol": """#!/bin/bash
+echo "PartitionName=boost_usr_prod DefaultTime=00:30:00 MaxNodes=64 MaxTime=1-00:00:00 State=UP TotalCPUs=105120 TotalNodes=3285"
+echo "PartitionName=dcgp_usr_prod DefaultTime=00:30:00 MaxNodes=16 MaxTime=1-00:00:00 State=UP TotalCPUs=167104 TotalNodes=1492"
+echo "PartitionName=lrd_all_serial DefaultTime=00:30:00 MaxNodes=UNLIMITED MaxTime=04:00:00 State=UP TotalCPUs=256 TotalNodes=2"
 """,
             "sacct": """#!/bin/bash
 case " $* " in
@@ -3681,8 +3687,35 @@ echo "64200001|cal_x|PENDING|0:00|20:00|(Priority)"
         self.assertEqual(rows["Your projects and QOS"][0], "try26_garrido: dcgp_qos_bprod, dcgp_qos_dbg, dcgp_qos_lprod, normal")
         value, warning = rows["QOS dcgp_qos_dbg"]
         self.assertTrue(warning)
-        self.assertIn("a job runs at most 00:30:00, you may use at most 224 CPUs, 965 GB of memory, 2 nodes at a time, run at most 1 job at a time, "
-                      "queue at most 2. The time limit set, 01:00:00, is longer", value)
+        self.assertIn("a job runs at most 30 min (its own), you may use at most 224 CPUs, 965 GB of memory, 2 nodes at a time, run at most 2 "
+                      "jobs at a time, queue at most 2. The time limit set, 01:00:00, is longer", value)
+        self.assertEqual(rows["Partition dcgp_usr_prod"], ("up to 1 day a job, at most 16 nodes a job, 1,492 nodes of 112 CPUs", False))
+        # A QOS without a time limit of its own: the partition's applies (normal on dcgp_usr_prod: 1 day), in the row and the check
+        for time, longer in (("30:00:00", True), ("12:00:00", False)):
+            value, warning = {what: (value, warning) for what, value, _, warning in info_rows(sections, replace(given, qos="normal", time=time))}["QOS normal"]
+            self.assertTrue(value.startswith("a job runs at most 1 day (partition dcgp_usr_prod's; none of its own)"), value)
+            self.assertEqual((warning, "is longer" in value), (longer, longer))
+        # The choices offered after a Check: the projects with their budget, the partitions and the QOS of the account, with
+        # their limits and what those make them for
+        offered = cluster.choices(sections, "try26_garrido", "dcgp_usr_prod")
+        self.assertEqual(offered["account"], [("try26_garrido", "try26_garrido: 6,945 of 7,500 core-hours left, ends 25 Nov 2026")])
+        self.assertEqual([name for name, _ in offered["partition"]], ["boost_usr_prod", "dcgp_usr_prod", "lrd_all_serial"])
+        labels = dict(offered["qos"])
+        self.assertEqual(sorted(labels), ["dcgp_qos_bprod", "dcgp_qos_dbg", "dcgp_qos_lprod", "normal"])
+        self.assertTrue(labels["dcgp_qos_dbg"].endswith("— for short tests"))
+        self.assertIn("up to 4 days (its own)", labels["dcgp_qos_lprod"])
+        self.assertTrue(labels["dcgp_qos_lprod"].endswith("— for long jobs"))
+        self.assertTrue(labels["dcgp_qos_bprod"].endswith("at most 128 nodes at a time — for large jobs"))
+        self.assertEqual(labels["normal"], "normal: up to 1 day (partition dcgp_usr_prod's; none of its own)")
+        self.assertEqual(cluster.choices({}, None, None), {"account": [], "partition": [], "qos": []})  # Before a Check: nothing offered
+        # The panel: Check first (Cluster information), then the settings chosen from it; Account, Partition and QOS lists that
+        # also take what is typed
+        from mobile.cluster_ui import cluster_section
+        html = str(cluster_section())
+        self.assertLess(html.index("Cluster information"), html.index("Cluster settings"))
+        for name in ("cl_account", "cl_partition", "cl_qos"):
+            self.assertIn(f'<select class="shiny-input-select" id="{name}">', html)
+        self.assertIn('"create": true', html)
         self.assertEqual(rows["This calibration"], ("2 jobs, 15.1 core-hours; 0.19 per completed trial (78 completed, as of the last refresh)", False))
         # With its folder: the trials completed in the study, which the record has only once a run has ended (0 while it runs)
         study = open_study(folder, read_calibration(folder))

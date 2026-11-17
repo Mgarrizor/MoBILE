@@ -483,7 +483,10 @@ saldo_dir=$(mktemp -d)
 for a in $( (echo {account}; echo "$assoc" | cut -d'|' -f1) | grep . | sort -u); do
   (t {saldo_seconds} saldo -b -a "$a" {saldo_flags}; echo "saldo-exit: $?") > "$saldo_dir/$a" &
 done
-echo @@qos; [ -n {qos} ] && t {seconds} sacctmgr -n -P show qos {qos} format=name,maxwall,maxtrespu,maxjobspu,maxsubmitpu
+# The limits of every QOS this user may use (and of the one chosen), and of every partition: for the choices offered
+qos_list=$( (echo {qos}; echo "$assoc" | cut -d'|' -f3 | tr ',' '\n') | grep . | sort -u | paste -sd, -)
+echo @@qos; [ -n "$qos_list" ] && t {seconds} sacctmgr -n -P show qos "$qos_list" format=name,maxwall,maxtrespu,maxjobspu,maxsubmitpu
+echo @@partitions; t {seconds} scontrol -o show partition
 echo @@calibration; [ -n {ids} ] && t {seconds} sacct -n -X -P -j {ids} -o JobID,State,CPUTimeRAW
 echo @@mine; t {seconds} squeue --me -h -o '%A|%j|%T|%M|%l|%R'
 echo @@load; [ -n {partition} ] && t {seconds} sinfo -p {partition} -h -o '%T %D'
@@ -557,6 +560,107 @@ def _date(stamp):
     return datetime.datetime.strptime(stamp, "%Y%m%d").strftime("%-d %b %Y")
 
 
+def wall_text(text):
+    """'30 min', '6 h', '1 day', '4 days' of a Slurm time; the text as it is if it is not one (e.g. UNLIMITED)."""
+    seconds = wall_seconds(text)
+    if seconds is None:
+        return (text or "").strip().lower() or "no limit"
+    if seconds % 86400 == 0:
+        return f"{seconds // 86400} day{'s' if seconds != 86400 else ''}"
+    if seconds % 3600 == 0:
+        return f"{seconds // 3600} h"
+    return f"{seconds // 60} min" if seconds < 3600 else f"{seconds / 3600:g} h"
+
+
+def qos_limits(sections):
+    """{QOS: {maxwall, each (what a user may use at a time, said), jobs (running), submit (queued)}} of what the cluster said."""
+    names = {"cpu": "CPUs", "node": "nodes", "mem": "memory", "gres/gpu": "GPUs"}
+    found = {}
+    for line in sections.get("qos", []):
+        name, maxwall, tres, jobs, submit, *_ = line.split("|") + [""] * 5
+        if name:
+            found[name] = {"maxwall": maxwall, "jobs": jobs, "submit": submit,
+                           "tres": dict(part.partition("=")[::2] for part in tres.split(",") if part),
+                           "each": [_memory(value) if key == "mem" else f"{value} {names.get(key, key)}"
+                                    for key, _, value in (part.partition("=") for part in tres.split(",") if part)]}
+    return found
+
+
+def partition_limits(sections):
+    """{partition: {MaxTime, MaxNodes, DefaultTime, TotalNodes, TotalCPUs, State, ...}} of `scontrol -o show partition`."""
+    found = {}
+    for line in sections.get("partitions", []):
+        fields = dict(part.split("=", 1) for part in line.split() if "=" in part)
+        if fields.get("PartitionName"):
+            found[fields.pop("PartitionName")] = fields
+    return found
+
+
+def time_limit(sections, qos, partition):
+    """(seconds, said) of the longest a job may run with a QOS on a partition: the QOS's limit, or the partition's when the
+    QOS has none of its own; (None, said) if neither is known or there is none."""
+    limits, partitions = qos_limits(sections).get(qos), partition_limits(sections).get(partition)
+    if limits and wall_seconds(limits["maxwall"]) is not None:
+        return wall_seconds(limits["maxwall"]), f"{wall_text(limits['maxwall'])} (its own)"
+    if partitions and wall_seconds(partitions.get("MaxTime")) is not None:
+        own = "; none of its own" if limits else ""
+        return wall_seconds(partitions["MaxTime"]), f"{wall_text(partitions['MaxTime'])} (partition {partition}'s{own})"
+    return None, "no time limit known"
+
+
+def _qos_said(name, limits, sections, partition):
+    """e.g. 'up to 30 min (QOS dcgp_qos_dbg), at most 224 CPUs, 965 GB of memory, 2 nodes at a time, 2 jobs running, 2
+    queued — for short tests': its limits, and what they make it for, against the partition's (from the limits alone)."""
+    seconds, said = time_limit(sections, name, partition)
+    fields = partition_limits(sections).get(partition, {})
+    parts = [f"up to {said}" if seconds else said]
+    parts += [f"at most {', '.join(limits['each'])} at a time" if limits["each"] else "",
+              f"{limits['jobs']} job{'s' if limits['jobs'] != '1' else ''} running" if limits["jobs"] else "",
+              f"{limits['submit']} queued" if limits["submit"] else ""]
+    use = []
+    if seconds is not None and seconds <= 3600:
+        use.append("short tests")
+    if wall_seconds(limits["maxwall"]) and wall_seconds(fields.get("MaxTime")) and wall_seconds(limits["maxwall"]) > wall_seconds(fields["MaxTime"]):
+        use.append("long jobs")
+    nodes, most = limits["tres"].get("node", ""), fields.get("MaxNodes", "")
+    if nodes.isdigit() and most.isdigit() and int(nodes) > int(most):
+        use.append("large jobs")
+    return ", ".join(part for part in parts if part) + (f" — for {' and '.join(use)}" if use else "")
+
+
+def _partition_said(fields):
+    nodes, cpus = fields.get("TotalNodes", ""), fields.get("TotalCPUs", "")
+    per = int(cpus) // int(nodes) if nodes.isdigit() and cpus.isdigit() and int(nodes) else None
+    parts = [f"up to {wall_text(fields.get('MaxTime'))} a job" if fields.get("MaxTime") else "",
+             f"at most {fields['MaxNodes']} nodes a job" if fields.get("MaxNodes", "").isdigit() else "",
+             f"{int(nodes):,} nodes" + (f" of {per} CPUs" if per else "") if nodes.isdigit() else "",
+             fields["State"].lower() if fields.get("State", "UP") != "UP" else ""]
+    return ", ".join(part for part in parts if part)
+
+
+def choices(sections, account=None, partition=None):
+    """{"account", "partition", "qos": [(value, label)]} of what a Check found, for choosing rather than typing: the
+    projects of this user (with their budget, if saldo said it), the partitions (their limits) and the QOS of the account
+    chosen (their limits, the partition's time limit where a QOS has none)."""
+    allowed = {}
+    for line in sections.get("assoc", []):
+        parts = line.split("|")
+        if len(parts) >= 3 and parts[0]:
+            allowed.setdefault(parts[0], set()).update(qos for qos in parts[2].split(",") if qos)
+    budgets = {}
+    for line in sections.get("saldo", []):
+        parts = line.split()
+        if len(parts) >= 7 and len(parts[1]) == 8 and parts[1].isdigit() and parts[3].replace(".", "").isdigit():
+            budgets.setdefault(parts[0], f"{float(parts[3]) - float(parts[5]):,.0f} of {float(parts[3]):,.0f} core-hours left, "
+                                         f"ends {_date(parts[2])}")
+    accounts = [(name, f"{name}: {budgets[name]}" if name in budgets else name) for name in sorted(allowed)]
+    partitions = [(name, f"{name}: {_partition_said(fields)}") for name, fields in sorted(partition_limits(sections).items())]
+    limits = qos_limits(sections)
+    qos = [(name, f"{name}: {_qos_said(name, limits[name], sections, partition)}" if name in limits else name)
+           for name in sorted(allowed.get(account, set().union(*allowed.values()) if allowed else set()))]
+    return {"account": accounts, "partition": partitions, "qos": qos}
+
+
 def info_rows(sections, settings, record=None, today=None, folder=None):
     """[(what, value, from, warning)] of the cluster information (cluster_info), for the settings and, if given, the record of
     the calibration chosen (its jobs asked about) and its folder (its trials counted in the study copied back, which the
@@ -607,20 +711,21 @@ def info_rows(sections, settings, record=None, today=None, folder=None):
     if allowed:
         rows.append(("Your projects and QOS", "; ".join(f"{account}: {', '.join(sorted(qos))}" for account, qos in sorted(allowed.items())),
                      "sacctmgr show assoc", bool(settings.account) and settings.account not in allowed))
-    # The limits of the QOS chosen, and the time limit against them
-    for line in sections.get("qos", [])[:1]:
-        name, maxwall, tres, jobs, submit, *_ = line.split("|") + [""] * 5
-        names = {"cpu": "CPUs", "node": "nodes", "mem": "memory", "gres/gpu": "GPUs"}
-        each = [_memory(value) if key == "mem" else f"{value} {names.get(key, key)}"
-                for key, _, value in (part.partition("=") for part in tres.split(",") if part)]
-        limits = [f"a job runs at most {maxwall}" if maxwall else "no time limit"]
-        limits += [f"you may use at most {', '.join(each)} at a time" if each else "",
-                   f"run at most {jobs} job{'s' if jobs != '1' else ''} at a time" if jobs else "",
-                   f"queue at most {submit}" if submit else ""]
-        too_long = wall_seconds(maxwall) is not None and (wall_seconds(settings.time) or 0) > wall_seconds(maxwall)
-        rows.append((f"QOS {name}", ", ".join(limit for limit in limits if limit) +
+    # The limits of the QOS chosen, and the time limit against them (the partition's, where the QOS has none of its own)
+    found = qos_limits(sections).get(settings.qos)
+    if found:
+        seconds, said = time_limit(sections, settings.qos, settings.partition)
+        limits = [f"a job runs at most {said}" if seconds else said]
+        limits += [f"you may use at most {', '.join(found['each'])} at a time" if found["each"] else "",
+                   f"run at most {found['jobs']} job{'s' if found['jobs'] != '1' else ''} at a time" if found["jobs"] else "",
+                   f"queue at most {found['submit']}" if found["submit"] else ""]
+        too_long = seconds is not None and (wall_seconds(settings.time) or 0) > seconds
+        rows.append((f"QOS {settings.qos}", ", ".join(limit for limit in limits if limit) +
                      (f". The time limit set, {settings.time}, is longer: sbatch would refuse the job" if too_long else ""),
-                     "sacctmgr show qos", too_long))
+                     "sacctmgr show qos, scontrol show partition", too_long))
+    fields = partition_limits(sections).get(settings.partition)
+    if fields:
+        rows.append((f"Partition {settings.partition}", _partition_said(fields), "scontrol show partition", fields.get("State", "UP") != "UP"))
     # This calibration's jobs: their cost so far, and per completed trial
     jobs = [line.split("|") for line in sections.get("calibration", []) if line.split("|")[0].isdigit()]
     if record is not None and jobs:
@@ -689,4 +794,5 @@ def job_cost(settings):
 
 __all__ = ["ClusterError", "ClusterSettings", "CalibrationError", "certificate", "check_login", "cluster_info", "info_rows",
            "job_cost", "job_script", "last_log", "load_settings", "observation_files", "refresh", "remote_folder", "runs_at_once",
-           "save_settings", "send", "stop", "submit", "wall_seconds"]
+           "save_settings", "send", "stop", "submit", "wall_seconds", "choices", "qos_limits", "partition_limits", "time_limit",
+           "wall_text"]
