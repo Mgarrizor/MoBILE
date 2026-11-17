@@ -962,6 +962,10 @@ def _run_locked(folder, record, state, parallel, threads, deadline=None, trial_s
         if start is not None:
             study.enqueue_trial(start, user_attrs={"baseline": True})
             queued = True
+    # A trial queued but never taken (the process that queued it ended first, e.g. killed before its first trial began) runs
+    # on its own too, as a new one: else two workers side by side can both take it (SQLite has no row lock) and the one
+    # makes again the folder the other writes in (Directory not empty; the flaky CI test of the handover's §6.3 item 17)
+    queued = queued or bool(study.get_trials(deepcopy=False, states=(optuna.trial.TrialState.WAITING,)))
     target = record["n_trials"]
     completed, failed_before = counts(study)
     crash_limit = max(FAIL_FAST, CRASH_RATE * target)
