@@ -3950,6 +3950,65 @@ echo "64200001|cal_x|PENDING|0:00|20:00|(Priority)"
                               aggregation="sum", units="fraction", name="cases")
         np.testing.assert_allclose(part.values, apply_steps(before, climatology).values)
 
+    def test_several_validation_windows(self):
+        """An episode held out as a second validation window (e.g. a hump the calibration should not be pressed to fit,
+        1989-1993 in Debre Zeit, and the last years): calibration compares neither, each window is scored on its own."""
+        from mobile.calibration_data import Observations
+        from mobile.calibration_engine import (CalibrationError, SERIES, create_calibration, read_calibration, run_calibration,
+                                               trial_folder, trials_table)
+        from mobile.calibration_model import process_both, validation_parts, validation_windows
+        from mobile.calibration_steps import EDGE_ERROR, apply_steps
+        from mobile.sensitivity_runs import StudyState
+
+        self.assertEqual(validation_windows(None), [])
+        self.assertEqual(validation_windows(["2000-01-01", "2003-12-31"]), [("2000-01-01", "2003-12-31")])  # One, as before
+        windows = [["1994-01-01", "1996-12-31"], ["2000-01-01", "2003-12-31"]]
+        self.assertEqual(validation_parts(windows), ["validation_1", "validation_2"])
+        self.assertEqual(validation_parts(windows[1]), ["validation"])
+        # Filtered over the whole period, then each part cut: calibration has neither window, each window its own months
+        days = pd.date_range("1990-01-01", "2003-12-31", freq="D")
+        t = np.arange(len(days)) / 365.25
+        values = np.exp(0.15 * t + 0.5 * np.sin(2 * np.pi * t / 4.0)) * (1.2 + np.sin(2 * np.pi * t))
+        daily = Observations(shape="dated", values=values, index=pd.DataFrame({"start": days.values.astype("datetime64[D]"),
+                             "end": days.values.astype("datetime64[D]")}), aggregation="sum", units="fraction", name="cases")
+        steps = [{"kind": "aggregate", "period": "month", "how": "sum", "complete": True, "days": 1},
+                 {"kind": "filter", "type": "low", "short": 1.0, "long": 3.0, "unit": "years", "missing": "interpolate",
+                  "max_gap": 3, "edges": "cut", "edge_error": EDGE_ERROR}]
+
+        def months(part):
+            model, _, _ = process_both([daily], steps, daily, steps, validation=windows, part=part)
+            return pd.DatetimeIndex(model.index["start"][np.isfinite(np.asarray(model.values, float))]).year.unique()
+
+        calibration = set(months("calibration"))
+        self.assertFalse(calibration & set(range(1994, 1997)) or calibration & set(range(2000, 2004)))
+        self.assertTrue({1993, 1997, 1999} <= calibration)  # Up to each window
+        self.assertEqual(set(months("validation_1")), {1994, 1995, 1996})
+        self.assertEqual(set(months("validation_2")), {2000, 2001, 2002})  # The whole series ends early in 2002 (the filter)
+        # In a calibration: both stored, each scored and kept by trial; refused when they overlap or leave nothing
+        windows = [["2001-04-01", "2001-08-31"], ["2002-09-01", "2002-12-31"]]
+        objectives = [{**objective, "data_raw": objective["data"]} for objective in self.objectives()]
+        with self.assertRaisesRegex(CalibrationError, "overlap"):
+            create_calibration(self.config, objectives, temperature=self.temperature(), name="overlap",
+                               validation=[["2001-04-01", "2001-08-31"], ["2001-08-01", "2001-12-31"]])
+        folder = create_calibration(self.config, objectives, temperature=self.temperature(), n_trials=3, name="two_windows",
+                                    validation=windows)
+        self.assertEqual(read_calibration(folder)["validation"], windows)
+        self.assertEqual(run_calibration(folder, StudyState(), parallel=2)["status"], "finished")
+        for row in trials_table(folder):
+            scored = row["validation_windows"]
+            self.assertEqual([(entry["window"], entry["part"]) for entry in scored], [(windows[0], "validation_1"), (windows[1], "validation_2")])
+            self.assertEqual(row["validation"], scored[0]["values"])  # The first window, as the views read it
+            self.assertTrue(all(len(entry["values"]) == 2 for entry in scored))
+            series = trial_folder(folder, row["number"]) / SERIES
+            for part in ("calibration", "validation_1", "validation_2", "whole"):
+                self.assertTrue((series / f"objective_0_{part}_model.nc").is_file(), part)
+        # One window, as before: stored as [first, last], scored as "validation"
+        one = create_calibration(self.config, objectives, temperature=self.temperature(), n_trials=1, name="one_window",
+                                 validation=windows[1])
+        self.assertEqual(read_calibration(one)["validation"], windows[1])
+        run_calibration(one, StudyState())
+        self.assertEqual(trials_table(one)[0]["validation_windows"][0]["part"], "validation")
+
     def test_views_are_kept_and_never_fail_a_trial(self):
         from mobile.calibration_engine import (SERIES, VIEW, create_calibration, read_calibration, run_calibration, trial_comparison,
                                                trial_folder, trials_table)

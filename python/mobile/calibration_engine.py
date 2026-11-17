@@ -48,7 +48,7 @@ import pandas as pd
 
 from .calibration_data import DataError, drop_window, read_observations, select_window, write_observations
 from .calibration_metrics import DIRECTIONS, pair, metrics
-from .calibration_model import SPACES, model_members, process_both, seed_spread
+from .calibration_model import SPACES, model_members, process_both, seed_spread, validation_parts, validation_windows
 from .calibration_steps import apply_steps
 from .cells import cell_areas
 from .config import MAX_PATH_LENGTH, ConfigError
@@ -266,8 +266,10 @@ def create_calibration(config, objectives, parameters=(), temperature=None, seed
     the coolest to the warmest (regions by their mean weighted by people), first: (low, high) of dT_1 in °C, gap: (low,
     high) of each next gap, low at least 0, ordered: True (default) to keep their order, or False for each dT_k sampled on
     its own within the range of dT_1, trend: (low, high) of dT_trend in °C per decade, or absent for none}, or None.
-    validation: (first, last) dates of a validation window, or None: the objectives are calibrated on the period the model
-    and the data share without it, and each trial is scored on it too, with the same metrics, kept with the trial.
+    validation: (first, last) dates of a validation window, several windows [(first, last), ...] (e.g. an episode the
+    calibration should not be pressed to fit, and the last years), or None: the objectives are calibrated on the period
+    the model and the data share without any of them, and each trial is scored on each window too, with the same
+    metrics, kept with the trial.
     views: comparisons pinned to be drawn for each trial and never optimised, as the objectives but without a metric
     ({name, data, variable, space, aggregation, steps, data_raw, data_steps}): their series are kept with each trial."""
     if not objectives:
@@ -345,14 +347,23 @@ def create_calibration(config, objectives, parameters=(), temperature=None, seed
 
 
 def _validation(validation, objectives):
-    """[first, last] of a validation window, checked: within the observations of every objective, with some left out of it."""
+    """The validation windows, checked: each with a first and a last date, within the observations of every objective;
+    none overlapping; some of the period left out of all of them. One window as [first, last], several as
+    [[first, last], ...] (as validation_windows reads them)."""
     try:
-        first, last = (pd.Timestamp(value) for value in validation)
-    except (TypeError, ValueError):
-        raise CalibrationError(f"the validation window needs a first and a last date: {validation!r}") from None
-    if first > last:
-        raise CalibrationError("the validation window must start before it ends")
-    window = (str(first.date()), str(last.date()))
+        given = [validation] if isinstance(validation[0], (str, pd.Timestamp, datetime.date)) else list(validation)
+        windows = sorted((pd.Timestamp(first), pd.Timestamp(last)) for first, last in given)
+    except (TypeError, ValueError, IndexError):
+        raise CalibrationError(f"each validation window needs a first and a last date: {validation!r}") from None
+    if not windows:
+        raise CalibrationError("give at least one validation window, or none")
+    for first, last in windows:
+        if first > last:
+            raise CalibrationError(f"the validation window {first.date()} to {last.date()} must start before it ends")
+    for (_, last), (first, _) in zip(windows, windows[1:]):
+        if first <= last:
+            raise CalibrationError("the validation windows overlap")
+    windows = [(str(first.date()), str(last.date())) for first, last in windows]
     for objective in objectives:
         if not objective.get("data_raw"):
             raise CalibrationError(f"{objective['name']}: a validation window needs the observations as loaded: add the objective again")
@@ -360,11 +371,13 @@ def _validation(validation, objectives):
         if data.shape != "dated":
             raise CalibrationError(f"{objective['name']}: a validation window needs dated observations")
         try:
-            select_window(data, *window)
-            drop_window(data, *window)
+            rest = data
+            for window in windows:
+                select_window(data, *window)
+                rest = drop_window(rest, *window)
         except DataError as error:
             raise CalibrationError(f"{objective['name']}: {error}") from None
-    return list(window)
+    return list(windows[0]) if len(windows) == 1 else [list(window) for window in windows]
 
 
 def _temperature(temperature, temp_file, pop_file):
@@ -453,7 +466,7 @@ def objective_series(objective, run_dirs, validation=None, part=None):
     its own steps (calibration_model.process_both), so that e.g. a climatology covers the same years on both sides. With
     only the observations as processed (earlier objectives), those, and the model output processed by its steps (for
     several seeds, the median of the seeds each processed). validation and part as for process_both: with a validation
-    window, part "calibration" leaves it out, "validation" keeps it only."""
+    window, part "calibration" leaves them out, a part of validation_parts keeps that window only."""
     members = [member for run_dir in run_dirs
                for member in model_members(run_dir, objective["variable"], objective["space"], None, objective["aggregation"])]
     if objective.get("data_raw"):
@@ -498,7 +511,7 @@ def keep_views(views, run_dirs, folder, validation=None):
     """Keep in a folder the model and the observations of each view (a comparison pinned to be drawn, never optimised): for
     the whole period, and with a validation window for each of its parts. One that cannot be had is left out: a view
     never fails a trial."""
-    for part in (("calibration", "validation", None) if validation else (None,)):
+    for part in (("calibration", *validation_parts(validation), None) if validation else (None,)):
         for index, view in enumerate(views):
             try:
                 _keep(folder, index, part, *objective_series(view, run_dirs, validation, part), kind=VIEW)
@@ -1052,8 +1065,12 @@ def _run_locked(folder, record, state, parallel, threads, deadline=None, trial_s
                 kept = here / SERIES
                 flat = []
                 results = evaluate(objectives, run_dirs, window, "calibration" if window else None, keep=kept, flat=flat)
-                if window:  # Scored on the validation window too, kept with the trial; not optimised
-                    trial.set_user_attr("validation", evaluate(objectives, run_dirs, window, "validation", strict=False, keep=kept))
+                if window:  # Scored on each validation window too, kept with the trial; not optimised
+                    scored = [{"window": list(span), "part": part,
+                               "values": evaluate(objectives, run_dirs, window, part, strict=False, keep=kept)}
+                              for span, part in zip(validation_windows(window), validation_parts(window))]
+                    trial.set_user_attr("validation", scored[0]["values"])  # The first window, as the views read it
+                    trial.set_user_attr("validation_windows", scored)  # Every window: [{window, part, values}]
                     keep_series(objectives, run_dirs, kept, window, None)  # The whole period too, for the plots
                 keep_views(views, run_dirs, kept, window)
                 lasted = persistence(objectives, run_dirs, flat)
@@ -1139,7 +1156,8 @@ def _run_locked(folder, record, state, parallel, threads, deadline=None, trial_s
 # ---------------------------------------------------------------- results
 
 def trials_table(folder):
-    """[{number, state, values, params, offsets, seconds, failure, baseline, validation, infeasible (why, or None),
+    """[{number, state, values, params, offsets, seconds, failure, baseline, validation, validation_windows (each window's
+    {window, part, values}), infeasible (why, or None),
     persistence, violation, regime}] of the trials of a calibration, in order."""
     record = read_calibration(folder)
     study = open_study(folder, record)
@@ -1150,6 +1168,7 @@ def trials_table(folder):
         rows.append({"number": trial.number, "state": trial.state.name, "values": trial.values, "params": dict(trial.params),
                      "offsets": offsets, "seconds": seconds, "failure": trial.user_attrs.get("failure"),
                      "baseline": bool(trial.user_attrs.get("baseline")), "validation": trial.user_attrs.get("validation"),
+                     "validation_windows": trial.user_attrs.get("validation_windows"),
                      "infeasible": trial.user_attrs.get(INFEASIBLE), "persistence": trial.user_attrs.get(PERSISTENCE),
                      "violation": trial.user_attrs.get(CONSTRAINT, (None,))[0], "regime": trial.user_attrs.get(REGIME)})
     return rows
@@ -1157,9 +1176,9 @@ def trials_table(folder):
 
 def trial_comparison(folder, number, index=0, part=None, kind=OBJECTIVE):
     """(model, data, model values, data values, labels) of objective `index` (or view, kind VIEW) for a completed trial:
-    its runs processed as the objective says, and the observations, paired as for the metrics. With a validation window,
-    part "calibration" or "validation" for one part of the period, None for the whole period the model and the data
-    share."""
+    its runs processed as the objective says, and the observations, paired as for the metrics. With validation windows,
+    part "calibration" or one of validation_parts (e.g. "validation", "validation_2") for one part of the period, None
+    for the whole period the model and the data share."""
     record = read_calibration(folder)
     objective = resolved(folder, record)["objectives" if kind == OBJECTIVE else "views"][index]
     here = trial_folder(folder, number)

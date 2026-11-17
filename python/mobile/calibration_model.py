@@ -234,6 +234,23 @@ def shared_span(model, data):
     return str(first.date()), str(last.date())
 
 
+def validation_windows(validation):
+    """[(first, last), ...] of a calibration's validation: none (None), one window [first, last], or several
+    [[first, last], ...]."""
+    if not validation:
+        return []
+    if isinstance(validation[0], str):
+        return [tuple(validation)]
+    return [tuple(window) for window in validation]
+
+
+def validation_parts(validation):
+    """The names of the parts scored on the validation windows, in their order: "validation" for one window,
+    "validation_1", "validation_2", ... for several."""
+    windows = validation_windows(validation)
+    return ["validation"] if len(windows) == 1 else [f"validation_{k}" for k in range(1, len(windows) + 1)]
+
+
 def _split_at_filter(steps):
     """(steps up to and including the last time filter, the steps after it), or None without a filter."""
     last = max((i for i, step in enumerate(steps) if step.get("kind") == "filter"), default=None)
@@ -246,8 +263,9 @@ def process_both(members, model_steps, data, data_steps, others=None, model_note
     cover the same years. For several runs, the median and range of the runs each processed (seed_spread). span is the
     (first, last) dates cut to, or None if they could not be cut (not dated).
 
-    validation: (first, last) dates of a validation window, with part "calibration" for the shared period without it,
-    "validation" for the window only, or None for the whole shared period. A side whose steps have a time filter is
+    validation: the validation windows (validation_windows: one (first, last), or several), with part "calibration" for
+    the shared period without any of them, a part of validation_parts (e.g. "validation", or "validation_2") for that
+    window only, or None for the whole shared period. A side whose steps have a time filter is
     filtered over the whole shared period, up to and including its last filter, and only then cut to the part, the rest
     of its steps (e.g. an anomaly) applied to the part: the filter's unreliable ends are then only those of the whole
     period, and each part compares all its months the filter keeps, as a plot of the whole period shows them. Steps
@@ -265,17 +283,29 @@ def process_both(members, model_steps, data, data_steps, others=None, model_note
         return model, apply_steps(data, data_steps, others), span
     if span is None:
         raise DataError("a validation window needs dated observations")
-    cut = drop_window if part == "calibration" else select_window
+    windows = validation_windows(validation)
+    if part == "calibration":
+        def cut(series):
+            for window in windows:
+                series = drop_window(series, *window)
+            return series
+    else:
+        if part not in validation_parts(validation):
+            raise DataError(f"no validation part {part!r}: the parts are {', '.join(validation_parts(validation))}")
+        window = windows[validation_parts(validation).index(part)]
+
+        def cut(series):
+            return select_window(series, *window)
     model_split, data_split = _split_at_filter(model_steps), _split_at_filter(data_steps)
     if model_split is None:
-        members, after = [cut(member, *validation) for member in members], model_steps
+        members, after = [cut(member) for member in members], model_steps
     else:
         before, after = model_split
-        members = [cut(apply_steps(member, before), *validation) for member in members]
+        members = [cut(apply_steps(member, before)) for member in members]
     model = apply_steps(members[0], after) if len(members) == 1 else seed_spread(members, after, None, model_note)
     if data_split is None:
-        data = apply_steps(cut(data, *validation), data_steps, others)
+        data = apply_steps(cut(data), data_steps, others)
     else:
         before, after = data_split
-        data = apply_steps(cut(apply_steps(data, before, others), *validation), after, others)
+        data = apply_steps(cut(apply_steps(data, before, others)), after, others)
     return model, data, span
