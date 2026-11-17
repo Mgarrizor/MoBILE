@@ -157,17 +157,21 @@ def _plan(folder, record):
         here = Path(path).resolve()
         name = str(here.relative_to(folder)) if here.is_relative_to(folder) else f"inputs/external/{key}_{here.name}"
         files[name], inputs[key] = here, name
-    objectives = []
-    for index, objective in enumerate(resolved(folder, record)["objectives"]):
-        objective = dict(objective)
-        for key in ("data", "data_raw"):
-            if objective.get(key):
-                name = f"data/objective_{index}_{key}_{Path(objective[key]).name}"
-                files[name], objective[key] = Path(objective[key]), name
-        objectives.append(objective)
+    found = resolved(folder, record)
+    moved = {}
+    for kind in ("objectives", "views"):  # The observations of the objectives, and of the views (comparisons only drawn)
+        moved[kind] = []
+        for index, item in enumerate(found[kind]):
+            item = dict(item)
+            for key in ("data", "data_raw"):
+                if item.get(key):
+                    name = f"data/{kind[:-1]}_{index}_{key}_{Path(item[key]).name}"
+                    files[name], item[key] = Path(item[key]), name
+            moved[kind].append(item)
     if (folder / DATABASE).is_file():
         files[DATABASE] = folder / DATABASE
-    there = {**record, "run_inputs": inputs, "objectives": objectives, "setup": {**record["setup"], "inputs": dict(inputs)}}
+    there = {**record, "run_inputs": inputs, "objectives": moved["objectives"], "setup": {**record["setup"], "inputs": dict(inputs)},
+             **({"views": moved["views"]} if record.get("views") else {})}
     return there, files
 
 

@@ -3508,7 +3508,8 @@ echo "$@" >> "$HOME/scancel.txt"
         from mobile.sensitivity_runs import StudyState
 
         settings, home = self.cluster()
-        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=3, name="sent")
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=3, name="sent",
+                                    views=[{"name": "monthly", "data": str(self.data), "variable": "Inew", "steps": self.MONTHLY}])
         self.assertEqual(observation_files(folder), [(str(self.data.resolve()), self.data.stat().st_size)])
         with self.assertRaisesRegex(ClusterError, "tick that its observations may be copied"):
             send(folder, settings)
@@ -3544,6 +3545,10 @@ echo "$@" >> "$HOME/scancel.txt"
         self.assertEqual(sum(trial.state == optuna.trial.TrialState.COMPLETE for trial in trials), 3)
         self.assertTrue((trial_folder(folder, 2) / SERIES).is_dir())
         self.assertFalse(list(Path(folder).glob("trials/*/seed_*")))
+        # The view's observations went with it (data/), and its series came back with the trials'
+        self.assertEqual(json.loads((there / "calibration.json").read_text())["views"][0]["data"], f"data/view_0_data_{self.data.name}")
+        self.assertTrue((there / "data" / f"view_0_data_{self.data.name}").is_file())
+        self.assertTrue((trial_folder(folder, 2) / SERIES / "view_0_whole_model.nc").is_file())
         model, data, *_ = trial_comparison(folder, 2, 0)  # Drawn here from the series kept there
         self.assertEqual(len(model), len(data))
         job_id, tail = last_log(folder)
@@ -3846,6 +3851,35 @@ echo "64200001|cal_x|PENDING|0:00|20:00|(Priority)"
         self.assertNotIn("trend", read_calibration(plain)["temperature"])
         self.assertEqual(run_calibration(plain, StudyState())["status"], "finished")
         self.assertTrue(all("dT_trend" not in row["params"] for row in trials_table(plain)))
+
+    def test_views_are_kept_and_never_fail_a_trial(self):
+        from mobile.calibration_engine import (SERIES, VIEW, create_calibration, read_calibration, run_calibration, trial_comparison,
+                                               trial_folder, trials_table)
+        from mobile.sensitivity_runs import StudyState
+
+        views = [{"name": "monthly", "data": str(self.data), "variable": "Inew", "steps": self.MONTHLY, "metric": "rmse"},
+                 {"name": "broken", "data": str(self.data), "variable": "Inew", "steps": [{"kind": "transform", "transform": "log"}]}]
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=3, name="views", views=views)
+        kept = read_calibration(folder)["views"]
+        self.assertEqual([view["name"] for view in kept], ["monthly", "broken"])
+        self.assertNotIn("metric", kept[0])  # Drawn, never optimised
+        self.assertEqual(kept[0]["data"], str(self.data.resolve()))
+        record = run_calibration(folder, StudyState(), parallel=2)
+        self.assertEqual((record["status"], record["completed"], record["failed"]), ("finished", 3, 0))  # The broken view failed none
+        for row in trials_table(folder):
+            self.assertEqual(len(row["values"]), 2)  # Only the objectives are optimised
+            series = trial_folder(folder, row["number"]) / SERIES
+            self.assertTrue((series / "view_0_whole_model.nc").is_file())
+            self.assertTrue((series / "view_0_whole_data.nc").is_file())
+            self.assertFalse((series / "view_1_whole_model.nc").exists())  # A log of zeros: left out
+        model, data, model_values, data_values, _ = trial_comparison(folder, 1, 0, kind=VIEW)
+        self.assertEqual(len(model_values), len(data_values))
+        self.assertEqual(len(data_values), 24)  # The two years, monthly
+        objective = trial_comparison(folder, 1, 0)  # The objectives as before
+        self.assertEqual(len(objective[2]), 24)
+        # Without views, as before
+        plain = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=1, name="no_views")
+        self.assertEqual(read_calibration(plain)["views"], [])
 
     def test_earlier_versions_are_not_resumed(self):
         from mobile.calibration_engine import (CalibrationError, calibration_label, create_calibration, read_calibration, run_calibration,
