@@ -61,6 +61,8 @@ def main():
                            "to decide whether one can end before the deadline")
     calibrate.add_argument("--end-time", help="stop before this time, e.g. 2026-11-12T08:00 (default: the end of the Slurm job)")
     calibrate.add_argument("--mobile", help="the MoBILE clone (default: that of the calibration if it exists, else $MOBILE)")
+    calibrate.add_argument("--trials", type=int, help="first raise the trials it runs to this number, e.g. to continue one "
+                           "that has finished (not below those completed)")
 
     args = parser.parse_args()
 
@@ -86,7 +88,7 @@ def main():
         if args.command == "calibrate":
             from .calibration_cli import calibrate as run_it
 
-            sys.exit(run_it(args.folder, args.parallel, args.trial_minutes, args.end_time, args.mobile))
+            sys.exit(run_it(args.folder, args.parallel, args.trial_minutes, args.end_time, args.mobile, trials=args.trials))
         config = Config.load(args.config)
         _run(args, config)
     except ConfigError as error:

@@ -1251,6 +1251,25 @@ def trial_comparison(folder, number, index=0, part=None, kind=OBJECTIVE):
     return model, data, model_values, data_values, labels
 
 
+def set_trials(folder, n_trials):
+    """Raise the number of trials a calibration runs to (it goes on to it when run again, e.g. a finished one), and return
+    the record. Optuna keeps no target of its own: the study goes on from all its trials, as one longer run. Refused for
+    a calibration made by an earlier version, one running now, or fewer than have completed already."""
+    record = read_calibration(folder)
+    if not resumable(record):
+        raise CalibrationError(OLD_CALIBRATION)
+    if isinstance(n_trials, bool) or not isinstance(n_trials, int) or n_trials < 1:
+        raise CalibrationError(f"the number of trials must be a whole number above 0: {n_trials!r}")
+    if is_running(folder):
+        raise CalibrationError(f"this calibration is running: {running_where(folder)}; change its trials once it has stopped")
+    completed = completed_trials(folder, record)
+    if n_trials < completed:
+        raise CalibrationError(f"{completed} trials have completed already: give at least that many")
+    record = {**record, "n_trials": n_trials}
+    write_calibration(folder, record)
+    return record
+
+
 def resumable(record):
     """Whether a calibration was made by this version of the engine, and so can be run further."""
     return record.get("version") == VERSION

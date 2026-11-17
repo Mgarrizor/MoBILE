@@ -13,7 +13,7 @@ import time
 
 import optuna
 
-from .calibration_engine import CONSTRAINT, INFEASIBLE, CalibrationError, front, read_calibration, run_calibration
+from .calibration_engine import CONSTRAINT, INFEASIBLE, CalibrationError, front, read_calibration, run_calibration, set_trials
 from .config import ConfigError
 from .sensitivity_runs import StudyState
 
@@ -93,8 +93,9 @@ def rows_of(study):
              "violation": t.user_attrs.get(CONSTRAINT, (None,))[0]} for t in study.get_trials(deepcopy=False)]
 
 
-def calibrate(folder, parallel=None, trial_minutes=None, end_time=None, mobile=None, out=sys.stdout):
-    """Run the calibration in a folder; returns the exit code (EXIT)."""
+def calibrate(folder, parallel=None, trial_minutes=None, end_time=None, mobile=None, out=sys.stdout, trials=None):
+    """Run the calibration in a folder; returns the exit code (EXIT). trials: first raise the number of trials it runs to
+    (set_trials), e.g. to continue one that has finished."""
     def say(text):
         print(text, file=out, flush=True)
 
@@ -103,6 +104,15 @@ def calibrate(folder, parallel=None, trial_minutes=None, end_time=None, mobile=N
     except (OSError, ValueError) as error:
         say(f"Not a calibration folder: {folder} ({error})")
         return EXIT_ERROR
+    if trials is not None:
+        try:
+            before = record["n_trials"]
+            record = set_trials(folder, trials)
+        except CalibrationError as error:
+            say(f"[{_stamp()}] cannot set its trials to {trials}: {error}")
+            return EXIT_ERROR
+        if trials != before:
+            say(f"[{_stamp()}] trials asked for: {before} -> {trials}")
     threads = record["setup"]["run"]["threads"]
     available = cores()
     if parallel is None:
