@@ -314,55 +314,55 @@ parameters:
     group: Hydro
     section: Temporary ponds
     value: 0.48
-    min: 0.24
-    max: 0.72
-    curated: false
-    info: Fraction of the temporary ponds that the mosquito uses to breed.
+    min: 0.1
+    max: 1.0
+    curated: true
+    info: Fraction of the temporary ponds that the mosquito uses to breed (a fraction; the source uses 0.48, calibrated for Senegal, and 0.5 or 1.0 in other set-ups).
     source: utils/vectri/mo_constants.f90
   wpond_shapep2:
     group: Hydro
     section: Temporary ponds
     value: 1.0
-    min: 0.5
-    max: 1.5
-    curated: false
-    info: Shape factor p of the pond geometry, divided by 2 (source range 0.5 to 2).
+    min: 0.25
+    max: 2.0
+    curated: true
+    info: Shape factor p of the pond geometry, divided by 2 (Asare et al. 2016; the source says p = 1, range 0.5 to 2, yet stores 1.0 here; the range covers both readings).
     source: utils/vectri/mo_constants.f90
   wpond_depthref:
     group: Hydro
     section: Temporary ponds
     value: 300.0
-    min: 150.0
-    max: 450.0
-    curated: false
-    info: Reference water depth of the ponds, in mm (source range 250 to 350).
+    min: 250.0
+    max: 350.0
+    curated: true
+    info: Reference water depth of the ponds, in mm (Asare et al. 2016, 300, range 250 to 350).
     source: utils/vectri/mo_constants.f90
   wpond_CN:
     group: Hydro
     section: Temporary ponds
     value: 86.78
-    min: 43.4
-    max: 130.0
-    curated: false
-    info: Curve number of the runoff formula, S = 25400/CN - 254 (source range 80 to 90).
+    min: 80.0
+    max: 90.0
+    curated: true
+    info: Curve number of the runoff formula, S = 25400/CN - 254 (Asare et al. 2016, 85, range 80 to 90; 86.78 calibrated for Senegal).
     source: utils/vectri/mo_constants.f90
   wpond_ref:
     group: Hydro
     section: Temporary ponds
     value: 0.02
-    min: 0.01
-    max: 0.03
-    curated: false
-    info: Reference pond water fraction (source range 0.005 to 0.02).
+    min: 0.005
+    max: 0.02
+    curated: true
+    info: Reference pond water fraction (Asare et al. 2016, range 0.5 % to 2 %).
     source: utils/vectri/mo_constants.f90
   soilinfil_SA:
     group: Hydro
     section: Temporary ponds
     value: 675.16
-    min: 338.0
-    max: 1010.0
-    curated: false
-    info: Infiltration of pond water into the soil, the same in every cell.
+    min: 50.0
+    max: 750.0
+    curated: true
+    info: Infiltration of pond water into the soil, the same in every cell, from clay (50) to silt (250) and sand (700, 750 in the source's mean); 675.16 calibrated for Senegal (sandy).
     source: mo_const.f90
   wperm_ratio:
     group: Hydro
