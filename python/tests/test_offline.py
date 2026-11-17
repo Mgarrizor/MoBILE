@@ -3100,6 +3100,25 @@ sleep ${FAKE_SLEEP:-0}
         self.assertIn("(interrupted,", calibration_label(killed, record))
         self.assertEqual(run_calibration(killed, StudyState(), parallel=2)["status"], "finished")  # And it goes on
 
+    def test_a_queued_trial_never_taken_runs_alone_on_resume(self):
+        """The process that queued the start trial ended before taking it (the flaky CI test, killed right after it said
+        it runs): resumed with workers side by side, that trial runs on its own first, as in a new calibration; else two
+        workers could both take it and one would make again the folder the other writes in."""
+        from mobile.calibration_engine import baseline, create_calibration, open_study, read_calibration, run_calibration
+        from mobile.sensitivity_runs import StudyState
+
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=4, name="queued")
+        record = read_calibration(folder)
+        open_study(folder, record).enqueue_trial(baseline(record["temperature"]), user_attrs={"baseline": True})
+        with mock.patch.dict(os.environ, {"FAKE_SLEEP": "0.5"}):
+            self.assertEqual(run_calibration(folder, StudyState(), parallel=2)["status"], "finished")
+        trials = sorted(open_study(folder, read_calibration(folder)).trials, key=lambda trial: trial.number)
+        first, others = trials[0], trials[1:]
+        self.assertTrue(first.user_attrs.get("baseline"))
+        self.assertEqual(first.state.name, "COMPLETE")
+        for other in others:  # None began before the queued one had ended
+            self.assertGreaterEqual(other.datetime_start, first.datetime_complete, (first.number, other.number))
+
     def test_resumed_stops_runs_left_running(self):
         """A run left running by a process that died goes on writing in its trial folder: the calibration, resumed, stops
         it before it makes the folder again (else: Directory not empty, and the calibration stops with an error)."""
