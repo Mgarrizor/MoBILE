@@ -10,7 +10,7 @@ import optuna.visualization as vis
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-from .calibration_engine import CONSTRAINT, REGIME, front, open_study, read_calibration, trials_table
+from .calibration_engine import CONSTRAINT, LIMITS, PERSISTENCE, REGIME, front, open_study, read_calibration, trials_table
 from .plots import COMPARED, GRID, MODELLED, OBSERVED, _base_layout
 
 # Said by Optuna whenever a target is given to PED-ANOVA; ours is given the right way (results_figure)
@@ -88,7 +88,7 @@ def results_figure(folder, kind, index=0):
         if len(names) < 2:
             raise ResultsError("the Pareto front needs two objectives or more; with one, the best trial is its front")
         shown = names[:3]
-        # Infeasible trials (transmission died out) in grey, out of the front
+        # Infeasible trials (transmission died out, or beyond a limit) in grey, out of the front
         figure = vis.plot_pareto_front(study, targets=lambda trial: tuple(trial.values[:len(shown)]), target_names=shown)
     elif kind == "contour" and len(sampled) < 2:
         raise ResultsError("a contour needs two sampled parameters or more")
@@ -147,7 +147,8 @@ def distributions_figure(record, complete, index, front, every_trial=None):
     panels = value_panels(record)
     every_trial = complete if every_trial is None else every_trial
     if not complete:
-        raise ResultsError("no trial is feasible yet: in all of them transmission died out (see Where transmission dies out)")
+        raise ResultsError("no trial is feasible yet: in all of them transmission died out, or an objective is beyond its limit "
+                           "(see Epidemic or endemic, and the Pareto front's notes)")
     objective = record["objectives"][index]
     maximize = objective["direction"] == "maximize"
     values = np.array([trial.values[index] for trial in complete])
@@ -194,8 +195,25 @@ def _regime_trials(complete):
     return known
 
 
+def died_out(violation, persistence, limits):
+    """Whether a trial is infeasible because transmission died out (or an objective's series did not vary), as the engine
+    judges it from how long transmission lasted (persistence: more than half the seeds died out, or a flat series), and
+    not only because an objective is beyond its limit (limits: {objective: excess}, > 0 beyond). violation: the largest
+    of its constraints. A trial of a calibration from before persistence was kept: infeasible with no limit broken."""
+    if violation is None or violation <= 0:
+        return False
+    if persistence:
+        return persistence.get("died_out", 0) * 2 > len(persistence.get("last") or []) or bool(persistence.get("flat"))
+    return not any(excess > 0 for excess in (limits or {}).values())
+
+
+def beyond_limits(limits):
+    """The objectives a trial is beyond the limit of (limits: {objective: excess}, > 0 beyond), in their order."""
+    return [name for name, excess in (limits or {}).items() if excess > 0]
+
+
 def _died(trial):
-    return trial.user_attrs.get(CONSTRAINT, (-1.0,))[0] > 0
+    return died_out(trial.user_attrs.get(CONSTRAINT, (-1.0,))[0], trial.user_attrs.get(PERSISTENCE), trial.user_attrs.get(LIMITS))
 
 
 def boundary_figure(record, complete, measure):
