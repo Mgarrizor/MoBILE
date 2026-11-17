@@ -687,14 +687,23 @@ WINDOW_BAR = 16  # Height of the bars of the windows, in pixels
 
 def mark_windows(figure, span, validation):
     """Semi-transparent bars along the top of a time-series figure, each across the dates of a window and named in it:
-    the calibration window in green (span, the period the model and the data share, without the validation window: one
-    bar, or two if the validation window lies inside), the validation window in purple. span and validation are
-    (first, last) dates; the bars sit just above the first panel, whose x axis all the panels share."""
+    the calibration window in green (span, the period the model and the data share, without the validation windows: a
+    bar for each stretch between them), each validation window in purple ("Validation window", or numbered in date
+    order when there are several). span is (first, last) dates, validation one window (first, last) or several
+    [(first, last), ...] (as calibration_model.validation_windows reads them); the bars sit just above the first panel,
+    whose x axis all the panels share."""
+    from .calibration_model import validation_windows
+
     first, last = pd.Timestamp(span[0]), pd.Timestamp(span[1])
-    start, end = pd.Timestamp(validation[0]), pd.Timestamp(validation[1])
-    bars = [(first, min(last, start - pd.Timedelta(days=1)), "Calibration window", CALIBRATION_WINDOW),
-            (max(first, start), min(last, end), "Validation window", VALIDATION_WINDOW),
-            (max(first, end + pd.Timedelta(days=1)), last, "Calibration window", CALIBRATION_WINDOW)]
+    windows = sorted((pd.Timestamp(start), pd.Timestamp(end)) for start, end in validation_windows(list(validation)))
+    day = pd.Timedelta(days=1)
+    bars, edge = [], first
+    for k, (start, end) in enumerate(windows):
+        bars.append((edge, min(last, start - day), "Calibration window", CALIBRATION_WINDOW))
+        bars.append((max(first, start), min(last, end), "Validation window" + (f" {k + 1}" if len(windows) > 1 else ""),
+                     VALIDATION_WINDOW))
+        edge = max(edge, end + day)
+    bars.append((edge, last, "Calibration window", CALIBRATION_WINDOW))
     top = max((axis.domain[1] for axis in figure.select_yaxes() if axis.domain), default=1.0)
     for annotation in figure.layout.annotations:  # The title of the first panel goes above the bars
         if annotation.yref == "paper" and annotation.y is not None and annotation.y >= top - 1e-6:

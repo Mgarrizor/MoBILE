@@ -21,10 +21,10 @@ from .calibration_data import (
 from .calibration_metrics import DIRECTIONS, METRICS, metrics, pair
 from .calibration_model import (
     DRIVERS, SEED_MEAN, SPACES, chosen_seeds, default_aggregation, driver_panel, members_mean, model_members, process_both, run_choices,
-    run_elsewhere, run_seeds, run_variables, seed_spread, shared_span,
+    run_elsewhere, run_seeds, run_variables, seed_spread, shared_span, validation_parts, validation_windows,
 )
 from .calibration_progress import DOING, DONE, TODO, anchor, progress_column
-from .calibration_run_ui import calibration_run_card, driver_controls, paired_span
+from .calibration_run_ui import calibration_run_card, driver_controls, paired_span, typed_validation
 from .calibration_steps import (
     AGGREGATE_PERIODS, COMBINATIONS, EDGE, EDGE_ERROR, EDGES, FILTER_MISSING, FILTERS, OPERATIONS, PREPARING, RECIPES, SELECTIONS,
     STATISTICS, STEP_KINDS, TIME_UNITS, TRANSFORMS, apply_steps, default_step, describe, recipe_steps,
@@ -662,14 +662,17 @@ def calibration_server(input, output, session, setup, setup_state):
 
     data = pipeline(DATA, lambda: cut(data_raw()), lambda: others_for(chosen()), data_name, span=common_span)
 
+    extra_windows = reactive.value([])  # [(id, (start, end))] of the validation windows added under the first in the Calibration card
+
     def validation_window():
-        """(first, last) dates of the validation window of the Calibration card, if it is on and both are given, else None."""
-        if "cal_validation" not in input or not input.cal_validation() or "cal_validation_dates" not in input:
+        """The validation windows of the Calibration card (typed_validation: one (first, last), or several), if they are on
+        and all are complete and apart, else None."""
+        if "cal_validation" not in input or "cal_validation_dates" not in input:
             return None
-        dates = input.cal_validation_dates()
-        if not dates or dates[0] is None or dates[1] is None:
+        try:
+            return typed_validation(input, extra_windows())
+        except ValueError:
             return None
-        return str(dates[0]), str(dates[1])
 
     @reactive.effect
     def default_validation_window():
@@ -977,14 +980,18 @@ def calibration_server(input, output, session, setup, setup_state):
 
     @reactive.calc
     def split_metrics():
-        """[(title, metrics or None)] of the calibration years and of the validation window, each cut before the steps as
-        the calibration does, if the window of the Calibration card is on; else []. A part that cannot be had is None."""
+        """[(title, metrics or None)] of the calibration years and of each validation window, each cut before the steps as
+        the calibration does, if the windows of the Calibration card are on; else []. A part that cannot be had is None."""
         window, span = validation_window(), common_span()
         if window is None or span is None or isinstance(paired(), str):
             return []
         members, model_raw = model_members_or_error()[0], model_raw_or_error()[0]
         parts = []
-        for part, title in (("calibration", "Calibration window"), ("validation", f"Validation window, {window[0]} to {window[1]}")):
+        windows, parts_named = validation_windows(window), validation_parts(window)
+        titles = [("calibration", "Calibration window")] + [
+            (part, f"Validation window{f' {k + 1}' if len(windows) > 1 else ''}, {first} to {last}")
+            for k, (part, (first, last)) in enumerate(zip(parts_named, windows))]
+        for part, title in titles:
             try:
                 m, d, _ = process_both(members, [without_uid(s) for s in model.live()], data_raw(), [without_uid(s) for s in data.live()],
                                        others_for(chosen()), model_raw.notes[0], window, part)
@@ -1205,8 +1212,8 @@ def calibration_server(input, output, session, setup, setup_state):
                  + f"{values['n']} pairs, from {labels[0]} to {labels[-1]}: the periods the model and the data share, without a "
                  "missing value on either side.", class_="small mb-1"),
             units,
-            ui.p("With the validation window of the Calibration card on: the metrics of all the years, then those of the "
-                 "calibration window (the years the calibration uses) and of the validation window (left out of it), each cut "
+            ui.p("With the validation windows of the Calibration card on: the metrics of all the years, then those of the "
+                 "calibration window (the years the calibration uses) and of each validation window (left out of it), each cut "
                  "before the steps, as the calibration does.", class_="small mb-1") if split_metrics() else None,
             metrics_table(values, model_values, data_values, split_metrics()),
         )
@@ -1246,4 +1253,5 @@ def calibration_server(input, output, session, setup, setup_state):
         objectives (for the steps to follow the new one)."""
         return chosen(), input[f"{MODEL}_run"](), tuple(objective["name"] for objective in objectives())
 
-    return SimpleNamespace(objectives=objectives, views=views, prepared=prepared, activity=activity)
+    return SimpleNamespace(objectives=objectives, views=views, prepared=prepared, activity=activity, extra_windows=extra_windows,
+                           span=common_span)
