@@ -82,6 +82,7 @@ CRASH_RATE = 0.1  # The calibration stops when more trials fail than this share 
 EXPECTED_FROM = 10  # The time a trial takes is the 95th percentile of the completed trials once there are this many
 CONSTRAINT = "constraint"  # Trial attribute: (violation,), <= 0 feasible (persistence); also given to Optuna
 PERSISTENCE = "persistence"  # Trial attribute: how long transmission lasted in each seed (persistence)
+LIMITS = "limits"  # Trial attribute: {objective: how far beyond its limit (> 0) or within it (<= 0)}, of those with a limit
 INFEASIBLE = "infeasible"  # Trial attribute: why the trial is infeasible, for the user
 DIED_OUT_DAYS = 365  # A seed whose output has no positive value in this many last days (or all, if shorter) died out
 REGIME = "regime"  # Trial attribute: where between epidemic and endemic the runs are (regime)
@@ -260,7 +261,9 @@ def create_calibration(config, objectives, parameters=(), temperature=None, seed
 
     config: the setup, with the parameters not calibrated and the outputs the objectives need.
     objectives: [{name, data (observations file), variable, space, aggregation, steps (applied to the model output),
-    metric}]; each is minimised or maximised as its metric says (calibration_metrics.DIRECTIONS).
+    metric, limit (optional)}]; each is minimised or maximised as its metric says (calibration_metrics.DIRECTIONS). A
+    limit makes it a hard constraint too: a trial beyond it (above it for a minimised one or a bias, below it for a
+    maximised one) is infeasible, kept out of the Pareto front and graded by how far beyond; none by default.
     parameters: SampledParameter of the model to calibrate (uniform or log-uniform), in the units of the sliders.
     temperature: {cells: [{lat, lon}, or {lat, lon, members: [{lat, lon}]} for a region whose cells share one offset] from
     the coolest to the warmest (regions by their mean weighted by people), first: (low, high) of dT_1 in °C, gap: (low,
@@ -281,6 +284,11 @@ def create_calibration(config, objectives, parameters=(), temperature=None, seed
             raise CalibrationError(f"unknown metric {objective['metric']!r}: one of {', '.join(DIRECTIONS)}")
         if objective.get("space", "people") not in SPACES:
             raise CalibrationError(f"unknown space {objective['space']!r}: one of {', '.join(SPACES)}")
+        limit = objective.get("limit")
+        if limit is not None and (isinstance(limit, bool) or not isinstance(limit, (int, float)) or not math.isfinite(limit)):
+            raise CalibrationError(f"{objective['name']}: its limit must be a number, or none")
+        if limit is not None and DIRECTIONS[objective["metric"]] != "maximize" and limit <= 0:
+            raise CalibrationError(f"{objective['name']}: its limit must be above 0 ({objective['metric']} is at least 0)")
         read_observations(objective["data"])  # Raises DataError if it cannot be read
         if objective.get("data_raw"):
             read_observations(objective["data_raw"])
@@ -561,6 +569,46 @@ def evaluate(objectives, run_dirs, validation=None, part=None, strict=True, keep
             continue
         results.append(abs(value) if objective["direction"] == "zero" else value)
     return results
+
+
+def limits_said(objectives, results):
+    """[(name, value, limit, excess)] of the objectives with a limit: excess > 0 beyond it (above it for a minimised one or
+    a |bias|, below it for a maximised one), <= 0 within it."""
+    said = []
+    for objective, value in zip(objectives, results):
+        limit = objective.get("limit")
+        if limit is None or value is None:
+            continue
+        excess = (limit - value) if objective["direction"] == "maximize" else (value - limit)
+        said.append((objective["name"], value, limit, float(excess)))
+    return said
+
+
+def log_base(objective):
+    """The base of the log an objective's model steps take, if it is measured in log units (a bias or an RMSE after a
+    log: its values are log-ratios, read as factors), else None."""
+    if objective.get("metric") not in ("bias", "rmse"):
+        return None
+    logs = [step["transform"] for step in objective.get("steps", []) if step.get("kind") == "transform"
+            and step.get("transform") in ("log", "log10")]
+    return (math.e if logs[-1] == "log" else 10.0) if logs else None
+
+
+def limit_said(objective, value, limit):
+    """How a value beyond an objective's limit is said: as factors for one in log units ("Decadal_level ×3.6 off, beyond
+    ×3"; an RMSE "typically ×…"), else as numbers ("Seasonal_shape 0.42, beyond its limit 0.7")."""
+    base = log_base(objective)
+    if base is None:
+        return f"{objective['name']} {value:.3g}, beyond its limit {limit:g}"
+    factor, most = (round(base ** abs(number), 2) for number in (value, limit))
+    if objective["metric"] == "bias":
+        return f"{objective['name']} ×{factor:g} off, beyond ×{most:g}"
+    return f"{objective['name']} typically ×{factor:g} off, beyond ×{most:g}"
+
+
+def limits_exceeded(objectives, results):
+    """{objective: excess} of the objectives with a limit (limits_said), each a constraint for the sampler."""
+    return {name: excess for name, _, _, excess in limits_said(objectives, results)}
 
 
 def persistence(objectives, run_dirs, flat=()):
@@ -1080,10 +1128,19 @@ def _run_locked(folder, record, state, parallel, threads, deadline=None, trial_s
             # Infeasible (transmission died out, or a series did not vary): completed, kept out of the front, and graded
             # for the sampler by how near persisting it came
             trial.set_user_attr(PERSISTENCE, {key: value for key, value in lasted.items() if key not in ("violation", "reason")})
-            trial.set_user_attr(CONSTRAINT, (lasted["violation"],))
             trial.set_constraint("transmission", lasted["violation"])
-            if lasted["violation"] > 0:
-                trial.set_user_attr(INFEASIBLE, lasted["reason"])
+            beyond = limits_exceeded(objectives, results)
+            for name, excess in beyond.items():
+                trial.set_constraint(f"limit: {name}", excess)
+            if beyond:
+                trial.set_user_attr(LIMITS, beyond)
+            violation = max([lasted["violation"], *beyond.values()])
+            trial.set_user_attr(CONSTRAINT, (violation,))
+            if violation > 0:
+                said = {objective["name"]: objective for objective in objectives}
+                trial.set_user_attr(INFEASIBLE, "; ".join([lasted.get("reason", "")] * (lasted["violation"] > 0) + [
+                    limit_said(said[name], value, limit) for name, value, limit, excess in limits_said(objectives, results)
+                    if excess > 0]))
         except RunCancelled:
             trial.set_user_attr("cancelled", True)
             raise
@@ -1170,7 +1227,8 @@ def trials_table(folder):
                      "baseline": bool(trial.user_attrs.get("baseline")), "validation": trial.user_attrs.get("validation"),
                      "validation_windows": trial.user_attrs.get("validation_windows"),
                      "infeasible": trial.user_attrs.get(INFEASIBLE), "persistence": trial.user_attrs.get(PERSISTENCE),
-                     "violation": trial.user_attrs.get(CONSTRAINT, (None,))[0], "regime": trial.user_attrs.get(REGIME)})
+                     "violation": trial.user_attrs.get(CONSTRAINT, (None,))[0], "regime": trial.user_attrs.get(REGIME),
+                     "limits": trial.user_attrs.get(LIMITS)})
     return rows
 
 

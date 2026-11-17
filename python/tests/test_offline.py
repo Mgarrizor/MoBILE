@@ -4180,6 +4180,53 @@ echo "64200001|cal_x|PENDING|0:00|20:00|(Priority)"
         self.assertNotIn("--trials", job_script(replaced(settings), record, "/there"))
         self.assertIn("n_trials", REMOTE_FIELDS)
 
+    def test_objective_limits(self):
+        """A limit on an objective makes it a hard constraint (none by default): a trial beyond it is infeasible, kept out
+        of the Pareto front and graded by how far beyond; one within it, as before."""
+        from mobile.calibration_engine import CalibrationError, create_calibration, front, open_study, read_calibration, run_calibration, trials_table
+        from mobile.sensitivity_runs import StudyState
+
+        timing, swings = self.objectives()
+        for limit, said in ((0.0, "above 0"), ("x", "a number")):
+            with self.assertRaisesRegex(CalibrationError, said):
+                create_calibration(self.config, [timing, {**swings, "limit": limit}], temperature=self.temperature(), name=f"bad{limit}")
+        # Strict: correlation at least 0.999, relative RMSE at most 0.01: (nearly) every trial beyond them
+        folder = create_calibration(self.config, [{**timing, "limit": 0.999}, {**swings, "limit": 0.01}], temperature=self.temperature(),
+                                    n_trials=6, name="strict")
+        self.assertEqual([objective.get("limit") for objective in read_calibration(folder)["objectives"]], [0.999, 0.01])
+        self.assertEqual(run_calibration(folder, StudyState(), parallel=2)["status"], "finished")
+        rows = trials_table(folder)
+        beyond = [row for row in rows if row["limits"] and max(row["limits"].values()) > 0]
+        self.assertTrue(beyond)
+        for row in beyond:
+            self.assertGreater(row["violation"], 0)
+            self.assertIn("beyond its limit", row["infeasible"])
+            correlation, relative = row["values"]
+            self.assertAlmostEqual(row["limits"]["timing"], 0.999 - correlation)  # Below the limit of a maximised one
+            self.assertAlmostEqual(row["limits"]["swings"], relative - 0.01)
+        study = open_study(folder, read_calibration(folder))
+        self.assertFalse(set(front(study, rows)) & {row["number"] for row in beyond})  # Out of the front
+        trial = next(t for t in study.trials if t.number == beyond[0]["number"])
+        self.assertTrue(any(value > 0 for value in trial.system_attrs.get("constraints", trial.user_attrs.get("constraint", ()))))
+        self.assertIn("swings", beyond[0]["infeasible"])  # Not in log units: said as numbers
+        # Said as factors for an objective in log units (a bias or an RMSE after a log), as numbers otherwise
+        from mobile.calibration_engine import limit_said, log_base
+        log = {"kind": "transform", "transform": "log", "offset": 1e-5}
+        level = {"name": "Decadal_level", "metric": "bias", "steps": [log, {"kind": "filter", "type": "low"}]}
+        shape = {"name": "Decadal_shape", "metric": "rmse", "steps": [{**log, "transform": "log10"}, {"kind": "transform", "transform": "anomaly"}]}
+        season = {"name": "Seasonal_shape", "metric": "correlation", "steps": [log, {"kind": "climatology", "by": "month"}]}
+        self.assertEqual((log_base(level), log_base(shape), log_base(season)), (math.e, 10.0, None))
+        self.assertEqual(limit_said(level, 1.29, math.log(3)), "Decadal_level ×3.63 off, beyond ×3")
+        self.assertEqual(limit_said(shape, 0.3, 0.2), "Decadal_shape typically ×2 off, beyond ×1.58")
+        self.assertEqual(limit_said(season, 0.42, 0.7), "Seasonal_shape 0.42, beyond its limit 0.7")
+        # Loose: nothing beyond, all as without a limit
+        loose = create_calibration(self.config, [timing, {**swings, "limit": 100.0}], temperature=self.temperature(), n_trials=3, name="loose")
+        run_calibration(loose, StudyState())
+        self.assertTrue(all(row["violation"] <= 0 and row["limits"]["swings"] < 0 for row in trials_table(loose)))
+        plain = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=1, name="no_limit")
+        run_calibration(plain, StudyState())
+        self.assertIsNone(trials_table(plain)[0]["limits"])
+
     def test_views_are_kept_and_never_fail_a_trial(self):
         from mobile.calibration_engine import (SERIES, VIEW, create_calibration, read_calibration, run_calibration, trial_comparison,
                                                trial_folder, trials_table)
