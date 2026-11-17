@@ -43,6 +43,7 @@ MONTH_NAMES = {str(m): datetime.date(2000, m, 1).strftime("%b") for m in range(1
 SELECTIONS_OF_SHAPE = {"dated": ("window", "months", "years"), "yearly": ("window", "years"), "climatology": ("months",),
                        "season": ("seasons",), "age": ("bands",), "single": ()}
 OBJECTIVE_REMOVE = "Shiny.setInputValue('cal_objective_remove', {{index: {index}, at: Date.now()}}, {{priority: 'event'}})"
+VIEW_REMOVE = "Shiny.setInputValue('cal_view_remove', {{index: {index}, at: Date.now()}}, {{priority: 'event'}})"
 STEP_ACTION = ("Shiny.setInputValue('{prefix}_step_action', {{uid: '{uid}', action: '{action}', at: Date.now()}}, "
                "{{priority: 'event'}})")
 DATA, MODEL = "cal_data", "cal_model"  # The prefixes of the ids of the two boxes
@@ -181,8 +182,13 @@ def _comparison_card():
                 ui.input_text("cal_objective_name", "Name", placeholder="e.g. timing", width="100%"),
                 ui.input_select("cal_objective_metric", "Metric", {key: text.split(":")[0] for key, text in METRICS.items()},
                                 selected="correlation", width="100%"),
-                ui.div(ui.input_action_button("cal_add_objective", "Add as objective", class_="btn-sm btn-primary"), class_="pt-4"),
-                col_widths=(5, 4, 3), fill=False,
+                ui.div(ui.input_action_button("cal_add_objective", "Add as objective", class_="btn-sm btn-primary"),
+                       ui.input_action_button("cal_add_view", with_tip("Pin as a view", "Keep this comparison with the calibration "
+                                              "to draw it for each trial, next to the objectives (A trial of the Pareto front), "
+                                              "without optimising it: e.g. the monthly series, to see what the objectives miss. "
+                                              "The metric is not used."), class_="btn-sm btn-outline-primary"),
+                       class_="pt-4 d-flex flex-wrap gap-1"),
+                col_widths=(5, 3, 4), fill=False,
             ),
             ui.output_ui("cal_objective_problem"),
             class_="border-top pt-2 mt-2",
@@ -1031,24 +1037,35 @@ def calibration_server(input, output, session, setup, setup_state):
     # ---------------------------------------------------------------- objectives
 
     objectives = reactive.value([])  # [{name, data, variable, space, aggregation, steps, metric, direction, output}]
+    views = reactive.value([])  # The same without metric and direction: drawn for each trial, never optimised
     objective_problem = reactive.value(None)
 
     @reactive.effect
     @reactive.event(input.cal_add_objective)
     def add_objective():
+        add_comparison(view=False)
+
+    @reactive.effect
+    @reactive.event(input.cal_add_view)
+    def add_view():
+        add_comparison(view=True)
+
+    def add_comparison(view):
+        """Add the comparison prepared as an objective, or pin it as a view (no metric)."""
         result = paired()
         if isinstance(result, str):
             objective_problem.set(result)
             return
-        name = input.cal_objective_name().strip() or f"objective_{len(objectives()) + 1}"
+        kept = views if view else objectives
+        name = input.cal_objective_name().strip() or f"{'view' if view else 'objective'}_{len(kept()) + 1}"
         if not NAME.match(name):
             objective_problem.set("Names use letters, digits, '.', '_' and '-' only (no spaces).")
             return
-        if name in {objective["name"] for objective in objectives()}:
-            objective_problem.set(f"There is an objective named {name} already.")
+        if name in {entry["name"] for entry in [*objectives(), *views()]}:
+            objective_problem.set(f"There is an objective or a view named {name} already.")
             return
         _, data_values, model_paired, data_paired, _, values, span = result
-        if input.cal_objective_metric() == "rmse_relative" and values["rmse_relative"] is None:
+        if not view and input.cal_objective_metric() == "rmse_relative" and values["rmse_relative"] is None:
             objective_problem.set(f"RMSE relative divides each series by its mean, and after these steps the mean of the model is "
                                   f"{model_paired.mean():.3g} and of the data {data_paired.mean():.3g}: it is not defined unless both "
                                   f"are positive (not after a log or an anomaly). Use Correlation (scale-free too) or RMSE.")
@@ -1057,7 +1074,7 @@ def calibration_server(input, output, session, setup, setup_state):
         # the Data box, so that each trial cuts both to the period they share before the steps; not if a step combines other
         # data sets, which the calibration does not keep: then the observations as processed here, kept as they are
         stamp = f"{name}_{datetime.datetime.now():%Y%m%d-%H%M%S}"
-        target = Path(setup().runs_dir).joinpath(*DATA_FOLDER) / f"objective_{stamp}.nc"
+        target = Path(setup().runs_dir).joinpath(*DATA_FOLDER) / f"{'view' if view else 'objective'}_{stamp}.nc"
         data_steps = [without_uid(step) for step in data.live()]
         keep_raw = not any(step["kind"] == "combine" for step in data_steps)
         raw_target = target.with_name(f"objective_{stamp}_raw.nc")
@@ -1072,9 +1089,9 @@ def calibration_server(input, output, session, setup, setup_state):
         metric = input.cal_objective_metric()
         # The steps as the cards show them now, as for the comparison: not as they were when added
         steps = [without_uid(step) for step in model.live()]
-        objectives.set([*objectives(), {
+        kept.set([*kept(), {
             "name": name, "data": str(target), "variable": input[f"{MODEL}_variable"](), "space": input[f"{MODEL}_space"](),
-            "aggregation": None, "steps": steps, "metric": metric, "direction": DIRECTIONS[metric],
+            "aggregation": None, "steps": steps, **({} if view else {"metric": metric, "direction": DIRECTIONS[metric]}),
             **({"data_raw": str(raw_target), "data_steps": data_steps} if keep_raw else {}),
             "describe": f"{data_values.name} ({len(data_values)} values, {SHAPES[data_values.shape].split(':')[0].lower()}) against "
                         f"{input[f'{MODEL}_variable']()}, {SPACES[input[f'{MODEL}_space']()].lower()}, then "
@@ -1089,7 +1106,7 @@ def calibration_server(input, output, session, setup, setup_state):
         for flag in flags:
             ui.update_switch(output_switch_id(flag), value=True)
         if flags:
-            ui.notification_show(f"{name} needs {', '.join(output_label(flag) for flag in flags)}: ticked in the Outputs card of tab 2. "
+            ui.notification_show(f"{name}{' (view)' if view else ''} needs {', '.join(output_label(flag) for flag in flags)}: ticked in the Outputs card of tab 2. "
                                  f"Press Apply parameters & outputs there before the calibration.", type="message", duration=8)
 
     @reactive.effect
@@ -1097,6 +1114,12 @@ def calibration_server(input, output, session, setup, setup_state):
     def remove_objective():
         index = int(input.cal_objective_remove()["index"])
         objectives.set([objective for i, objective in enumerate(objectives()) if i != index])
+
+    @reactive.effect
+    @reactive.event(input.cal_view_remove)
+    def remove_view():
+        index = int(input.cal_view_remove()["index"])
+        views.set([view for i, view in enumerate(views()) if i != index])
 
     recipe_note = reactive.value(None)  # (text, a problem)
 
@@ -1147,17 +1170,24 @@ def calibration_server(input, output, session, setup, setup_state):
     @render.ui
     def cal_objectives():
         found = objectives()
+        pinned = [ui.tags.tr(
+            ui.tags.td(view["name"]),
+            ui.tags.td("View: drawn for each trial, not optimised"),
+            ui.tags.td(view["describe"], class_="text-muted"),
+            ui.tags.td(ui.tags.button("Remove", class_="btn btn-sm btn-outline-secondary py-0", onclick=VIEW_REMOVE.format(index=i))),
+        ) for i, view in enumerate(views())]
         if not found:
-            return ui.p("No objective yet: compare the model and the data above, then press Add as objective. Add several, e.g. the "
+            return ui.div(ui.p("No objective yet: compare the model and the data above, then press Add as objective. Add several, e.g. the "
                         "monthly series with the correlation (timing) and their climatology with the relative RMSE (season).",
-                        class_="small text-muted")
+                        class_="small text-muted"),
+                          ui.tags.table(ui.tags.tbody(*pinned), class_="table table-sm small mb-1") if pinned else None)
         rows = [ui.tags.tr(
             ui.tags.td(objective["name"]),
             ui.tags.td(METRICS[objective["metric"]].split(":")[0], f" ({'higher' if objective['direction'] == 'maximize' else 'lower'} is better)"),
             ui.tags.td(objective["describe"], class_="text-muted"),
             ui.tags.td(ui.tags.button("Remove", class_="btn btn-sm btn-outline-secondary py-0", onclick=OBJECTIVE_REMOVE.format(index=i))),
         ) for i, objective in enumerate(found)]
-        return ui.tags.table(ui.tags.tbody(*rows), class_="table table-sm small mb-1")
+        return ui.tags.table(ui.tags.tbody(*rows, *pinned), class_="table table-sm small mb-1")
 
     @render.ui
     def cal_comparison():
@@ -1216,4 +1246,4 @@ def calibration_server(input, output, session, setup, setup_state):
         objectives (for the steps to follow the new one)."""
         return chosen(), input[f"{MODEL}_run"](), tuple(objective["name"] for objective in objectives())
 
-    return SimpleNamespace(objectives=objectives, prepared=prepared, activity=activity)
+    return SimpleNamespace(objectives=objectives, views=views, prepared=prepared, activity=activity)

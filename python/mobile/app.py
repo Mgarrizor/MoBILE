@@ -284,7 +284,7 @@ def create_app(config):
         def parameters_problems():
             """What makes the parameters and outputs shown invalid: an output an objective needs not ticked; with population
             growth in the setup applied, a growth_ratio_ceiling too low for it."""
-            needed, _ = needed_outputs(calibration.objectives())
+            needed, _ = needed_outputs([*calibration.objectives(), *calibration.views()])
             shown = set(selected_output())
             found = [f"Tick {output_label(flag)}: needed by {', '.join(names)}" for flag, names in needed.items() if flag not in shown]
             growth = setup().inputs.get("growth") or 0
@@ -338,14 +338,14 @@ def create_app(config):
 
         @render.ui
         def outputs_needed():
-            needed, unknown = needed_outputs(calibration.objectives())
+            needed, unknown = needed_outputs([*calibration.objectives(), *calibration.views()])
             if not needed and not unknown:
                 return None
             shown = set(selected_output())
             lines = [ui.tags.li(f"{output_label(flag)}: needed by {', '.join(names)}",
                                 class_="text-danger" if flag not in shown else None) for flag, names in needed.items()]
             lines += [ui.tags.li(f"{name}: its variable is not written by any of these outputs", class_="text-danger") for name in unknown]
-            return ui.div(ui.tags.strong("For the calibration's objectives", class_="small"), ui.tags.ul(*lines, class_="small mb-1"))
+            return ui.div(ui.tags.strong("For the calibration's objectives and views", class_="small"), ui.tags.ul(*lines, class_="small mb-1"))
 
         @reactive.calc
         def setup_state():
@@ -1368,6 +1368,7 @@ def create_app(config):
         calibrating = calibration_run_server(
             input, output, session, setup, calibration.objectives, applied_overrides, applied_output, not_applied, load_template,
             lambda: run_task.status() == "running" or analysis.running(), lambda: agents(), lambda: input.ha(), slider_setup,
+            calibration.views,
         )
         progress_server(input, calibration.prepared, calibrating.what, calibrating.stored, calibration.activity,
                         lambda: input.cal_previous())

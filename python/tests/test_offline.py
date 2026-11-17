@@ -4324,5 +4324,39 @@ class TestTrendInTheCard(unittest.TestCase):
         self.assertEqual([row["number"] for row in sort_rows(front, TREND, False, {})], [2, 0, 1])
 
 
+class TestFrontTableAndViews(unittest.TestCase):
+    """The Pareto table is sent again only when what it shows changes; a trial is drawn against an objective or a view."""
+
+    def test_table_key(self):
+        from mobile.calibration_run_ui import front_key
+        record = {"objectives": [{"name": "o"}], "parameters": [{"name": "a"}]}
+        row = lambda n, v, state="COMPLETE", **more: {"number": n, "values": [v], "state": state, "offsets": {"dT_1": 0.5},  # noqa: E731
+                                                     "params": {"a": 1.0}, **more}
+        every = [row(0, 2.0), row(1, 1.0), row(2, None, "RUNNING")]
+        key = front_key((record, every, every[:2]))
+        # Read again, as at each refresh: equal although every object is new
+        self.assertEqual(front_key((dict(record), [dict(r) for r in every], [dict(r) for r in every[:2]])), key)
+        # A trial more that is not on the front, and no infeasible one: nothing in the table changes
+        self.assertEqual(front_key((record, [*every, row(3, 9.0)], every[:2])), key)
+        # Control: a trial joins the front, or one more infeasible trial is counted below the table
+        self.assertNotEqual(front_key((record, [*every, row(3, 0.5)], [*every[:2], row(3, 0.5)])), key)
+        dead = [*every, row(3, 9.0, infeasible=True)]
+        self.assertNotEqual(front_key((record, dead, every[:2])), key)
+        self.assertNotEqual(front_key((record, [*dead, row(4, 9.0)], every[:2])), front_key((record, dead, every[:2])))
+        self.assertIsNone(front_key(None))
+
+    def test_objectives_then_views(self):
+        from mobile.calibration_engine import OBJECTIVE, VIEW
+        from mobile.calibration_run_ui import comparison_choice, comparison_choices, comparison_name
+        record = {"objectives": [{"name": "season"}, {"name": "level"}], "views": [{"name": "monthly"}]}
+        self.assertEqual(comparison_choices(record), {"0": "season", "1": "level", "v0": "monthly (view)"})
+        self.assertEqual(comparison_choice("1"), (OBJECTIVE, 1))
+        self.assertEqual(comparison_choice("v0"), (VIEW, 0))
+        self.assertEqual(comparison_name(record, VIEW, 0), "monthly (view, not optimised)")
+        self.assertEqual(comparison_name(record, OBJECTIVE, 1), "level")
+        # Control: a calibration from before the views offers its objectives only
+        self.assertEqual(comparison_choices({"objectives": record["objectives"]}), {"0": "season", "1": "level"})
+
+
 if __name__ == "__main__":
     unittest.main()

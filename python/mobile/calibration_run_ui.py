@@ -18,7 +18,7 @@ from shiny import reactive, render, ui
 from sqlalchemy.exc import SQLAlchemyError
 
 from .calibration_engine import (
-    OLD_CALIBRATION, SAMPLER_LINKS, SAMPLERS, CalibrationError, best_trials, calibration_label, calibrations_dir, create_calibration,
+    OBJECTIVE, OLD_CALIBRATION, SAMPLER_LINKS, SAMPLERS, VIEW, CalibrationError, best_trials, calibration_label, calibrations_dir, create_calibration,
     is_running, list_calibrations, read_calibration, read_cluster, resolved, resumable, run_calibration, running_where, status_of,
     trial_comparison,
     trial_folder, trials_table,
@@ -413,6 +413,41 @@ def front_columns(record):
             *[f"p:{parameter['name']}" for parameter in record.get("parameters", [])]}
 
 
+def comparison_choices(record):
+    """{choice: label} of what a trial can be drawn against: the objectives ("0", "1", …), then the views pinned with the
+    calibration ("v0", …), which are drawn but never optimised; older calibrations have none."""
+    return ({str(k): o["name"] for k, o in enumerate(record["objectives"])}
+            | {f"v{k}": f"{view['name']} (view)" for k, view in enumerate(record.get("views") or [])})
+
+
+def comparison_choice(choice):
+    """(OBJECTIVE or VIEW, index) of a choice of comparison_choices."""
+    return (VIEW, int(choice[1:])) if choice.startswith("v") else (OBJECTIVE, int(choice))
+
+
+def comparison_name(record, kind, index):
+    """The name of an objective, or of a view with 'view, not optimised', for a title."""
+    if kind == VIEW:
+        return f"{record['views'][index]['name']} (view, not optimised)"
+    return record["objectives"][index]["name"]
+
+
+def front_key(found):
+    """What the Pareto table shows of (record, rows, front), comparable: the same for a progress read again with no change
+    to the front, different when a trial joins or leaves it (or, with infeasible trials, when one more is completed)."""
+    if found is None:
+        return None
+    record, every, front = found
+    completed = [row for row in every if row["state"] == "COMPLETE"]
+    dead = sum(bool(row.get("infeasible")) for row in completed)
+    shape = (tuple(o["name"] for o in record["objectives"]), bool(record.get("validation")),
+             repr(record.get("temperature")), tuple(parameter["name"] for parameter in record.get("parameters", [])))
+    rows = tuple((row["number"], tuple(row["values"]), tuple(row.get("validation") or ()),
+                  tuple(sorted((row.get("offsets") or {}).items())), tuple(sorted((row.get("params") or {}).items())))
+                 for row in front)
+    return shape, rows, dead, len(completed) if dead else None
+
+
 def sort_rows(front, column, descending, distances):
     """The trials of a Pareto front sorted by a column (front_columns), high to low or low to high; trials without a
     value (e.g. no validation score) last either way, and equal values by trial number."""
@@ -602,8 +637,9 @@ def _clock(seconds):
 
 
 def calibration_run_server(input, output, session, setup, objectives, overrides, selected_output, not_applied, load_template, busy,
-                           agents, ha, slider_setup):
-    """The server side of the card. objectives() are those added in the comparison card; overrides() and selected_output()
+                           agents, ha, slider_setup, views):
+    """The server side of the card. objectives() are those added in the comparison card, views() those pinned there (drawn,
+    not optimised); overrides() and selected_output()
     the parameters and outputs applied, which every run of a calibration uses, and not_applied() why they cannot be used, or
     None; load_template(record) fills tabs 1 and 2 and HA from a calibration, and says what it did; busy() is true while a single run or an analysis goes on; slider_setup() the sliders, with their ranges and starts.
     Returns running() and cancel() for the rest of the app."""
@@ -846,13 +882,13 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         found = []
         if not objectives():
             found.append("Add at least one objective (in Model and data, above).")
-        needed, unknown = needed_outputs(objectives())
+        needed, unknown = needed_outputs([*objectives(), *views()])
         if unknown:
             found.append(f"{', '.join(unknown)}: {'its variable is' if len(unknown) == 1 else 'their variables are'} not written by "
                          f"any output of the model.")
         missing = [output_label(flag) for flag in needed if flag not in selected_output()]
         if missing:
-            found.append(f"The objectives need {', '.join(missing)}, not among the outputs applied: tick "
+            found.append(f"The objectives and views need {', '.join(missing)}, not among the outputs applied: tick "
                          f"{'it' if len(missing) == 1 else 'them'} and press Apply parameters & outputs (tab 2. Parameters & SA).")
         elif not_applied():
             found.append(not_applied())
@@ -1020,6 +1056,7 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
             config = replace(setup(), params=fixed, output=output).with_run(nagent=nagent, seed=seed,
                                                                                                        threads=threads())
             folder = create_calibration(config, [{k: v for k, v in o.items() if k not in ("output", "describe")} for o in objectives()],
+                                        views=[{k: v for k, v in o.items() if k not in ("output", "describe")} for o in views()],
                                         parameters=parameters, temperature=temperature, seeds=[seed + i for i in range(input.cal_seeds())],
                                         n_trials=input.cal_trials(), sampler=input.cal_sampler(), startup_trials=input.cal_startup(),
                                         sampler_seed=seed, name=name or None, validation=validation())
@@ -1083,13 +1120,21 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
                           "describe": f"{objective['metric'].replace('_', ' ')} of {objective['variable']}, "
                                       f"{len(objective.get('steps') or [])} model steps: from the template {name}"})
         objectives.set(taken)
-        # The outputs: those its objectives need, the others off, to be applied in tab 2
-        needed, _ = needed_outputs(taken)
+        pinned = []  # Its views, the same way
+        for view in resolved(folder, record)["views"]:
+            if not all(Path(view[key]).is_file() for key in ("data", "data_raw") if view.get(key)):
+                missing.append(f"{view['name']} (view)")
+                continue
+            pinned.append({**view, "describe": f"view of {view['variable']}, {len(view.get('steps') or [])} model steps: from the "
+                                               f"template {name}"})
+        views.set(pinned)
+        # The outputs: those its objectives and views need, the others off, to be applied in tab 2
+        needed, _ = needed_outputs([*taken, *pinned])
         for group in OUTPUT_FLAGS.values():
             for flag, _, _ in group:
                 ui.update_switch(output_switch_id(flag), value=flag in needed)
         if missing:
-            notes.append(f"objectives left out, their observations are no longer where they were: {', '.join(missing)}")
+            notes.append(f"objectives or views left out, their observations are no longer where they were: {', '.join(missing)}")
         # Validation window
         window = record.get("validation")
         ui.update_switch("cal_validation", value=bool(window))
@@ -1247,6 +1292,7 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
                          f"{temperature['gap']} °C; means {', '.join(f'{m:.2f}' for m in temperature['means'])} °C")
             if temperature.get("trend"):
                 lines.append(trend_said(temperature))
+        lines += [f"{view['name']}: view of {view['variable']}, drawn for each trial, not optimised" for view in record.get("views") or []]
         for parameter in record.get("parameters", []):
             lines.append(f"{parameter['name']}: {parameter['distribution']} from {parameter['low']:.4g} to {parameter['high']:.4g}")
         said = record_windows(folder)
@@ -1299,7 +1345,7 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
 
     # The menus of the calibration shown, set only when their choices change: drawn again at each refresh, a menu would
     # put back the choice it was drawn with, undoing one made in the meantime
-    menu_frame = reactive.value(None)  # (folder, objective choices), or None without a front
+    menu_frame = reactive.value(None)  # (folder, objective choices, objective and view choices), or None without a front
     trial_menu = reactive.value({})  # {number: label} of the trials of the front
 
     @reactive.effect
@@ -1308,7 +1354,7 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         frame, trials = None, {}
         if found is not None and found[2]:
             record, _, front = found
-            frame = (shown(), {str(k): o["name"] for k, o in enumerate(record["objectives"])})
+            frame = (shown(), {str(k): o["name"] for k, o in enumerate(record["objectives"])}, comparison_choices(record))
             trials = {str(row["number"]): f"Trial {row['number']}" for row in sorted(front, key=lambda row: row["number"])}
         with reactive.isolate():
             if frame != menu_frame():
@@ -1374,9 +1420,22 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         await send_new("cal_history_plot", (shown(), tuple((row["number"], row["state"]) for row in rows), log),
                        lambda: calibration_history_figure(rows, record["objectives"], log))
 
+    front_drawn = reactive.value(None)  # front_key of what the Pareto table shows
+
+    @reactive.effect
+    def front_changed():
+        """The table is sent again only when what it shows changes: sent at each refresh of the progress, it would scroll
+        back to its left and top every few seconds."""
+        key = (shown(), front_key(progress()))
+        with reactive.isolate():
+            if key != front_drawn():
+                front_drawn.set(key)
+
     @render.ui
     def cal_front():
-        found = progress()
+        front_drawn()
+        with reactive.isolate():
+            found = progress()
         if found is None:
             return ui.p("Choose a calibration under Calibrations to see its Pareto front.", class_="small text-muted mb-0")
         record, every, front = found
@@ -1465,7 +1524,7 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         frame = menu_frame()
         if frame is None:
             return None
-        objectives_ = frame[1]
+        objectives_ = frame[2]
         with reactive.isolate():
             trials = trial_menu()
             trial = input.cal_best_trial() if "cal_best_trial" in input and input.cal_best_trial() in trials else next(iter(trials))
@@ -1484,18 +1543,19 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
             text = "A trial of the Pareto front, against the data, is drawn here."
             await send_new("cal_best_plot", ("message", text), lambda: message_figure(text))
             return
-        number, index = int(input.cal_best_trial()), int(input.cal_best_objective() or 0)
-        if str(number) not in trial_menu() or index >= len(found[0]["objectives"]):
+        number, choice = int(input.cal_best_trial()), input.cal_best_objective() or "0"
+        if str(number) not in trial_menu() or choice not in comparison_choices(found[0]):
             return  # A choice of another calibration, until its menus follow
+        kind, index = comparison_choice(choice)
         chosen = driver_choices(input, "cal_best_driver")
-        figure, problem = trial_figure(folder, found[0], number, index, chosen)
+        figure, problem = trial_figure(folder, found[0], number, index, chosen, kind)
         best_problem.set(problem)
-        key = (folder, number, index, tuple(sorted(chosen.items())))
+        key = (folder, number, kind, index, tuple(sorted(chosen.items())))
         if isinstance(figure, str):
             await send_new("cal_best_plot", key, lambda: message_figure(figure))
             return
         row = next((row for row in found[2] if row["number"] == number), {})
-        figure.update_layout(title=f"Trial {number}, against {found[0]['objectives'][index]['name']} (model scaled to the mean of the data)"
+        figure.update_layout(title=f"Trial {number}, against {comparison_name(found[0], kind, index)} (model scaled to the mean of the data)"
                                    f"{validation_scores(found[0], row)}")
         await send_new("cal_best_plot", key, figure)
 
@@ -1505,17 +1565,17 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
     def cal_best_problem():
         return ui.p(best_problem(), class_="small text-danger mb-1") if best_problem() else None
 
-    def trial_figure(folder, record, number, index, chosen):
-        """(a figure of trial `number` against the data of objective `index`, with the drivers chosen of its run below, and
+    def trial_figure(folder, record, number, index, chosen, kind=OBJECTIVE):
+        """(a figure of trial `number` against the data of objective `index` (or view, kind VIEW), with the drivers chosen of its run below, and
         what is wrong with any of the drivers), or (a str saying why there is no figure, None). The figures are kept: a
         trial does not change once done; each is given as a copy, for its own title."""
-        key = (folder, number, index, tuple(sorted(chosen.items())))
+        key = (folder, number, kind, index, tuple(sorted(chosen.items())))
         if key not in comparisons:
             window = record.get("validation")
             try:
-                model, data, m, d, labels = trial_comparison(folder, number, index)
+                model, data, m, d, labels = trial_comparison(folder, number, index, kind=kind)
                 if window and data.shape != "dated":  # E.g. a climatology: that of the calibration years, as scored
-                    model, data, m, d, labels = trial_comparison(folder, number, index, "calibration")
+                    model, data, m, d, labels = trial_comparison(folder, number, index, "calibration", kind=kind)
             except (DataError, OSError, KeyError, ValueError) as error:
                 return f"Trial {number} cannot be drawn: {error}.", None
             # The drivers of the run of the trial (its first seed), within the periods the model and the data share
@@ -1570,19 +1630,20 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
             text = "Where the calibration started is drawn here once its first trial is done."
             await send_new("cal_start_plot", ("message", text), lambda: message_figure(text))
             return
-        index = int(input.cal_best_objective() or 0)
-        if index >= len(record["objectives"]):
+        choice = input.cal_best_objective() or "0"
+        if choice not in comparison_choices(record):
             return  # A choice of another calibration, until its menus follow
+        kind, index = comparison_choice(choice)
         chosen = driver_choices(input, "cal_start_driver")
-        figure, problem = trial_figure(folder, record, row["number"], index, chosen)
+        figure, problem = trial_figure(folder, record, row["number"], index, chosen, kind)
         start_problem.set(problem)
-        key = (folder, row["number"], index, tuple(sorted(chosen.items())))
+        key = (folder, row["number"], kind, index, tuple(sorted(chosen.items())))
         if isinstance(figure, str):
             await send_new("cal_start_plot", key, lambda: message_figure(figure))
             return
         what = "no temperature offset" if start else "the first trial (none without offsets)"
         values = ", ".join(f"{o['name']} {value:.3g}" for o, value in zip(record["objectives"], row["values"]))
-        figure.update_layout(title=f"Start: trial {row['number']}, {what} ({values}), against {record['objectives'][index]['name']}"
+        figure.update_layout(title=f"Start: trial {row['number']}, {what} ({values}), against {comparison_name(record, kind, index)}"
                                    f"{validation_scores(record, row)}")
         await send_new("cal_start_plot", key, figure)
 
