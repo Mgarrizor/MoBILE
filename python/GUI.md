@@ -363,6 +363,12 @@ The correlation is maximised, the RMSEs minimised, the size of the bias minimise
 The RMSE of the series each divided by its mean needs both means positive: after a log or an anomaly it is not defined,
 and Add as objective says so (use the correlation, or the RMSE, instead).
 
+**Pin as a view**, beside it, keeps the comparison with the calibration without optimising it: the same observations,
+steps and output as an objective, no metric. Each trial keeps its series, and "A trial of the front" can be drawn
+against it, e.g. the plain monthly series of model and data next to objectives that filter or summarise them. Views are
+listed under the objectives (removable), restored by Use as template, and named in the calibration's description; a
+view that cannot be had for a trial is left out of it without failing the trial. Older calibrations have none.
+
 **Recipe**, above the name and metric, fills the steps of both boxes and the metric for objectives that do not depend
 on how many of the cases are reported, which needs a model of reporting (not yet in the app). The steps that prepare the
 values are kept, in their order, at the top: aggregate, arithmetic, select and combine (e.g. monthly sums divided by
@@ -472,9 +478,10 @@ together (the Pareto front):
   again for the other way (▼ high to low, ▲ low to high; an objective sorts best first at the first click; trials
   without a value last). It is sorted at first by the distance to the ideal point, closest first (each objective
   scaled from its best value on the front, 0, to its worst, 1; then the distance over all of them: 0 is a trial best
-  on all). The first 10 are shown, **Show all** for the rest. In a box of its own,
+  on all). The first 10 are shown, **Show all** for the rest. The table is sent again only when what it shows changes
+  (a trial joining or leaving the front), so its scroll stays where it is between new trials. In a box of its own,
   a trial of the front against the data of an
-  objective (the model scaled to the mean of the data) with its **Possible drivers**, and below it, in a box of its own, where the
+  objective or a pinned view (the model scaled to the mean of the data) with its **Possible drivers**, and below it, in a box of its own, where the
   calibration started: its first trial, with no temperature offset (when the ranges allow it), processed and scored like
   every other trial, with its **Possible drivers** (rainfall, temperature and vector densities of its run, as in the
   Model and data card) in panels below that zoom together; the vector densities only if the runs wrote them (ticked
