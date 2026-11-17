@@ -3713,6 +3713,16 @@ echo "$@" >> "$HOME/scancel.txt"
         self.assertTrue((trial_folder(folder, 2) / SERIES).is_dir())
         refresh(folder, say=said.append)  # The study copied back says trial 1 ended
         self.assertRegex(said[-1], r"^Copying back 0 new trials ")
+        # Continued there with more trials: the job raises them first; the copy here says it at once, and Refresh brings
+        # back the trials run
+        submit(folder, settings, trials=5)
+        self.assertEqual(read_calibration(folder)["n_trials"], 5)
+        self.assertIn("--trials 5", (there / "job.sh").read_text())
+        refresh(folder)
+        record = read_calibration(folder)
+        self.assertEqual((record["n_trials"], record["completed"], record["status"]), (5, 5, "finished"))
+        with self.assertRaisesRegex(ClusterError, "5 trials have completed already"):
+            submit(folder, settings, trials=4)
 
     def test_cluster_jobs_and_login(self):
         from mobile.calibration_engine import create_calibration, is_running, read_calibration, read_cluster, running_where, status_of
@@ -4128,6 +4138,47 @@ echo "64200001|cal_x|PENDING|0:00|20:00|(Priority)"
         self.assertEqual(read_calibration(one)["validation"], windows[1])
         run_calibration(one, StudyState())
         self.assertEqual(trials_table(one)[0]["validation_windows"][0]["part"], "validation")
+
+    def test_more_trials_continue_a_finished_calibration(self):
+        """mobile calibrate --trials N raises the trials of a calibration, which goes on from all those it has (Optuna keeps
+        no target: one longer run); a job on a cluster passes it on."""
+        import io
+
+        from mobile.calibration_cli import EXIT_ERROR, calibrate
+        from mobile.calibration_engine import (CalibrationError, create_calibration, open_study, read_calibration, run_calibration,
+                                               set_trials, write_calibration)
+        from mobile.cluster import REMOTE_FIELDS, job_script
+        from mobile.sensitivity_runs import StudyState
+
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=3, name="more")
+        self.assertEqual(run_calibration(folder, StudyState())["status"], "finished")
+        first = {t.number: t.values for t in open_study(folder, read_calibration(folder)).trials}
+        self.assertEqual(run_calibration(folder, StudyState())["completed"], 3)  # Run again as it is: nothing more
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {"PATH": f"{self.stand_in_compilers()}{os.pathsep}{os.environ['PATH']}"}):
+            self.assertEqual(calibrate(str(folder), parallel=1, out=out, trials=5), 0)
+        self.assertIn("trials asked for: 3 -> 5", out.getvalue())
+        record = read_calibration(folder)
+        self.assertEqual((record["n_trials"], record["completed"], record["status"]), (5, 5, "finished"))
+        trials = {t.number: t.values for t in open_study(folder, record).trials}
+        self.assertEqual({number: trials[number] for number in first}, first)  # The first three as they were
+        # Refused: fewer than completed, not a whole number, a calibration of an earlier version
+        out = io.StringIO()
+        self.assertEqual(calibrate(str(folder), parallel=1, out=out, trials=4), EXIT_ERROR)
+        self.assertIn("5 trials have completed already", out.getvalue())
+        with self.assertRaisesRegex(CalibrationError, "whole number"):
+            set_trials(folder, 2.5)
+        old = {**record}
+        del old["version"]
+        write_calibration(folder, old)
+        with self.assertRaisesRegex(CalibrationError, "earlier version"):
+            set_trials(folder, 10)
+        # On a cluster: the job raises them first, and Refresh brings the record's number back
+        from dataclasses import replace as replaced
+        settings, _ = self.cluster()
+        self.assertIn('exec mobile calibrate "$1" --parallel 2 --trials 1000', job_script(replaced(settings), record, "/there", trials=1000))
+        self.assertNotIn("--trials", job_script(replaced(settings), record, "/there"))
+        self.assertIn("n_trials", REMOTE_FIELDS)
 
     def test_views_are_kept_and_never_fail_a_trial(self):
         from mobile.calibration_engine import (SERIES, VIEW, create_calibration, read_calibration, run_calibration, trial_comparison,

@@ -36,7 +36,7 @@ SETTINGS_FILE = "cluster.json"  # In the settings folder: the cluster settings l
 LOGS = "logs"
 JOB_SCRIPT = "job.sh"
 LOGIN = "log in to the cluster first (e.g. `step ssh login <your e-mail> --provisioner cineca-hpc` for CINECA), then try again"
-REMOTE_FIELDS = ("status", "completed", "failed", "failure", "binary_md5")  # Taken from the record there on refresh
+REMOTE_FIELDS = ("status", "completed", "failed", "failure", "binary_md5", "n_trials")  # Taken from the record there on refresh
 SSH_SECONDS = 60  # A command that is not a copy
 COPY_SECONDS = 600  # A copy back: this, plus its size at COPY_KB_PER_SECOND (LEONARDO to a home line: ~1 MB/s, 12 Nov 2026)
 COPY_KB_PER_SECOND = 100
@@ -264,8 +264,9 @@ def runs_at_once(settings, threads):
     return settings.parallel or max(1, settings.cpus // threads)
 
 
-def job_script(settings, record, target):
-    """The batch script that runs the calibration in a folder there (its first argument)."""
+def job_script(settings, record, target, trials=None):
+    """The batch script that runs the calibration in a folder there (its first argument). trials: raise the trials it runs
+    to, first (mobile calibrate --trials), e.g. to continue one that has finished."""
     threads = record["setup"]["run"]["threads"]
     parallel = runs_at_once(settings, threads)
     if parallel * threads > settings.cpus:
@@ -285,18 +286,25 @@ def job_script(settings, record, target):
               "#SBATCH --signal=B:TERM@60  # Before the end: stop cleanly, if the deadline has not stopped it already",
               f"#SBATCH --output={target}/{LOGS}/%j.out", ""]
     lines += [line for line in settings.setup.splitlines()]
-    options = f" --parallel {parallel}" + (f" --trial-minutes {settings.trial_minutes:g}" if settings.trial_minutes else "")
+    options = (f" --parallel {parallel}" + (f" --trial-minutes {settings.trial_minutes:g}" if settings.trial_minutes else "")
+               + (f" --trials {int(trials)}" if trials else ""))
     lines += ["", "# exec: the signal of Slurm goes to the batch shell; so mobile gets it", f'exec mobile calibrate "$1"{options}', ""]
     return "\n".join(lines)
 
 
-def submit(folder, settings):
+def submit(folder, settings, trials=None):
     """Submit a job that runs the calibration there, after the last of its jobs that Slurm lists now (asked in the same
-    call, not taken from the last refresh). Returns its id; the job it waits for, if any, is its "after" in CLUSTER."""
+    call, not taken from the last refresh). Returns its id; the job it waits for, if any, is its "after" in CLUSTER.
+    trials: the job first raises the trials it runs to (e.g. to continue one that has finished); the copy here says it
+    at once, the one there when the job starts (Refresh brings it back)."""
     folder = Path(folder)
     cluster = _cluster(folder)
     target = cluster["folder"]
-    script = job_script(settings, read_calibration(folder), target)
+    record = read_calibration(folder)
+    if trials is not None and trials < completed_trials(folder, record):
+        raise ClusterError(f"{completed_trials(folder, record)} trials have completed already (as of the last refresh): "
+                           "give at least that many")
+    script = job_script(settings, record, target, trials)
     ids = [job["id"] for job in cluster["jobs"]]
     # The jobs of it that squeue lists, on a line of their own; the last of them, in the order submitted, is waited for
     ask = (f"listed=\" $(squeue -h -j {','.join(ids)} -o %A 2>/dev/null | awk '{{printf \"%s \", $1}}')\"; "
@@ -316,6 +324,8 @@ def submit(folder, settings):
     after = next((old for old in reversed(ids) if old in listed), None)
     cluster["jobs"].append({"id": job, "submitted": _now(), "state": "PENDING", "listed": True, "after": after})
     _write_cluster(folder, cluster)
+    if trials is not None:
+        write_calibration(folder, {**read_calibration(folder), "n_trials": int(trials)})
     return job
 
 
