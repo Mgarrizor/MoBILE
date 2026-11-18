@@ -65,6 +65,10 @@ PAGE_STYLE = """
     height: calc(100vh - var(--sidebar-top, 0px)); overflow-y: auto; overflow-x: hidden; }
 }
 .apply-bar { display: flex; flex-direction: column; align-items: center; margin: 1rem 0; }
+/* The resolution of the PNG of a plot, typed at its top right, above Plotly's buttons */
+.png-dpi { display: flex; justify-content: flex-end; font-size: 0.75rem; color: var(--bs-secondary-color); line-height: 1; margin-bottom: 1px; }
+.png-dpi input { width: 3.6rem; font-size: 0.75rem; padding: 0 0.2rem; margin: 0 0.2rem; border: 1px solid var(--bs-border-color);
+  border-radius: 3px; background: var(--bs-body-bg); color: var(--bs-body-color); }
 /* North over West and East, South under them, as in the Copernicus data store */
 .region-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 9rem)); column-gap: 0.75rem; }
 .region-north { grid-area: 1 / 2; } .region-west { grid-area: 2 / 1; }
@@ -190,6 +194,91 @@ function plotColours() {
 function isText(colour) {
   return colour === PLOT_COLOURS.light.text || colour === PLOT_COLOURS.dark.text;
 }
+// Download as PNG at a resolution typed above each plot (dpi; a screen is 96), of the plot as it is shown (for a map
+// that plays, the day shown). Plotly's own button draws the plot as an SVG picture onto a canvas, and Safari leaves
+// out the pictures inside it (the cells of a map, the terrain): these are decoded first and the picture drawn twice.
+const PNG_DPI = 300, PNG_DPI_RANGE = [72, 1200], SCREEN_DPI = 96;
+function pngBox(plot) {
+  if (plot.pngInput) return;
+  const box = document.createElement('div');
+  box.className = 'png-dpi';
+  box.innerHTML = `<label title="The resolution of Download plot as PNG (the camera below): the plot as shown, ` +
+    `its pixels × dpi / ${SCREEN_DPI}">PNG <input type="number" min="${PNG_DPI_RANGE[0]}" max="${PNG_DPI_RANGE[1]}" ` +
+    `step="1" value="${PNG_DPI}"> dpi</label>`;
+  plot.parentNode.insertBefore(box, plot);
+  plot.pngInput = box.querySelector('input');
+}
+function pngDpi(plot) {
+  const typed = Number(plot.pngInput ? plot.pngInput.value : PNG_DPI);
+  if (!Number.isFinite(typed) || typed <= 0) return PNG_DPI;
+  return Math.min(PNG_DPI_RANGE[1], Math.max(PNG_DPI_RANGE[0], Math.round(typed)));
+}
+const CRC_TABLE = Array.from({length: 256}, (_, n) => {
+  let c = n;
+  for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+  return c >>> 0;
+});
+function crc32(bytes) {
+  let c = 0xFFFFFFFF;
+  for (const b of bytes) c = CRC_TABLE[(c ^ b) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+// The PNG with its resolution recorded (a pHYs chunk after the header), so that documents place it at its size
+function withDpi(png, dpi) {
+  const perMetre = Math.round(dpi / 0.0254);
+  const chunk = new Uint8Array(21);
+  const view = new DataView(chunk.buffer);
+  view.setUint32(0, 9);
+  chunk.set([112, 72, 89, 115], 4);  // pHYs
+  view.setUint32(8, perMetre);
+  view.setUint32(12, perMetre);
+  chunk[16] = 1;  // Per metre
+  view.setUint32(17, crc32(chunk.subarray(4, 17)));
+  const end = 33;  // The signature (8) and the header chunk (25)
+  const out = new Uint8Array(png.length + chunk.length);
+  out.set(png.subarray(0, end), 0);
+  out.set(chunk, end);
+  out.set(png.subarray(end), end + chunk.length);
+  return out;
+}
+function loaded(image, source) {
+  return new Promise((done, failed) => { image.onload = done; image.onerror = failed; image.src = source; });
+}
+async function plotPng(plot, dpi) {
+  const width = plot._fullLayout.width, height = plot._fullLayout.height, scale = dpi / SCREEN_DPI;
+  const svg = await Plotly.toImage(plot, {format: 'svg', width: width, height: height});
+  // The pictures inside it decoded beforehand, which Safari needs to draw them
+  await Promise.all(Array.from(plot.querySelectorAll('image')).map(function(inner) {
+    const source = inner.getAttribute('href') || inner.getAttribute('xlink:href');
+    return source ? loaded(new Image(), source).catch(() => null) : null;
+  }));
+  const image = new Image();
+  await loaded(image, svg);
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(width * scale);
+  canvas.height = Math.round(height * scale);
+  const context = canvas.getContext('2d');
+  for (const wait of [0, 250]) {
+    await new Promise(done => setTimeout(done, wait));
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  }
+  const blob = await new Promise(done => canvas.toBlob(done, 'image/png'));
+  return withDpi(new Uint8Array(await blob.arrayBuffer()), dpi);
+}
+async function downloadPng(plot) {
+  const png = await plotPng(plot, pngDpi(plot));
+  const date = ((plot.layout || {}).meta || {}).date;
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(new Blob([png], {type: 'image/png'}));
+  link.download = `${plot.id || 'plot'}${date ? '_' + date : ''}.png`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(link.href), 10000);
+}
+const PNG_BUTTON = {name: 'png', title: 'Download plot as PNG (at the dpi above the plot)', icon: Plotly.Icons.camera,
+                    click: plot => { downloadPng(plot).catch(error => console.error('PNG', error)); }};
 function themeLayout(layout, plain) {
   const colours = plotColours();
   layout.paper_bgcolor = colours.paper;
@@ -291,9 +380,13 @@ Shiny.addCustomMessageHandler('plot', function(message) {
     container.heightFromFigure = false;
   }
   // On the region map, a way back to drawing after zooming
-  const extra = message.id === 'region_map' ? {modeBarButtonsToAdd: ['drawrect'], modeBarButtonsToRemove: ['select2d', 'lasso2d']} : {};
+  // Our own PNG button for Plotly's, at the dpi typed above the plot
+  const region = message.id === 'region_map';
   const drawing = Plotly.react(message.id, message.figure.data, layout,
-                               {responsive: true, displaylogo: false, doubleClick: 'reset', ...extra});
+                               {responsive: true, displaylogo: false, doubleClick: 'reset',
+                                modeBarButtonsToAdd: [PNG_BUTTON, ...(region ? ['drawrect'] : [])],
+                                modeBarButtonsToRemove: ['toImage', ...(region ? ['select2d', 'lasso2d'] : [])]});
+  pngBox(container);
   if (player) {
     document.getElementById(player.dateId).textContent = (layout.meta || {}).date || '';
     drawing.then(() => player.drawn());
