@@ -439,7 +439,7 @@ parameters:
     section: Agent capacity
     value: 1.0
     min: 1.0
-    max: 2.0
+    max: 3.0
     curated: false
     info: 'Spare agent slots: at most nagent x growth_ratio_ceiling agents. 1 means the population cannot grow beyond the
       starting agents.'
