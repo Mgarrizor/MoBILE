@@ -49,7 +49,7 @@ import pandas as pd
 from .calibration_data import DataError, drop_window, read_observations, select_window, write_observations
 from .calibration_metrics import DIRECTIONS, ENSEMBLE, pair, metrics
 from .observation import band as _band, coverage as coverage_of, crps
-from .calibration_model import SPACES, model_members, process_both, process_observed, seed_spread, validation_parts, validation_windows
+from .calibration_model import PEOPLE_OUTPUTS, SPACES, model_count_members, model_members, process_both, process_observed, seed_spread, validation_parts, validation_windows
 from .calibration_steps import apply_steps
 from .cells import cell_areas
 from .config import MAX_PATH_LENGTH, ConfigError
@@ -309,6 +309,9 @@ def create_calibration(config, objectives, parameters=(), temperature=None, seed
         if not (view.get("data") or view.get("data_raw")):
             raise CalibrationError(f"view {view.get('name')}: give its observations")
     observation = _observation(observation, objectives)
+    if observation and config.output is not None and not set(PEOPLE_OUTPUTS.values()) <= set(config.output):
+        raise CalibrationError("the observational model needs the outputs Agents per cell and Humans per agent (the model's "
+                               "own population, which growth changes): tick them in the outputs")
     if validation is not None:
         validation = _validation(validation, objectives)
     for parameter in parameters:
@@ -527,7 +530,8 @@ def observed_series(objective, run_dirs, validation=None, part=None, observation
     if observation and objective.get("data_raw"):
         members = [member for run_dir in run_dirs
                    for member in model_members(run_dir, objective["variable"], objective["space"], None, objective["aggregation"])]
-        model, data, _, draws = process_observed(members, objective["steps"], read_observations(objective["data_raw"]),
+        counts = [member for run_dir in run_dirs for member in model_count_members(run_dir, objective["variable"])]
+        model, data, _, draws = process_observed(members, counts, objective["steps"], read_observations(objective["data_raw"]),
                                                  objective.get("data_steps", []), observation, validation=validation, part=part)
         return model, data, draws
     return (*objective_series(objective, run_dirs, validation, part), None)

@@ -2448,7 +2448,7 @@ def fake_run(folder, values, pop, seed=1):
 
 
 TOY_MODEL = """
-import sys
+import os, sys
 from pathlib import Path
 import netCDF4, numpy as np
 args = dict(zip(sys.argv[1::2], sys.argv[2::2]))
@@ -2472,6 +2472,17 @@ with netCDF4.Dataset(out / "output.nc", "w") as data:
     field = data.createGroup("Human").createVariable("Inew", "f4", ("time", "lat", "lon"), fill_value=np.float32(np.nan))
     field.units, field.long_name = "fraction", "NEW symptomatic population per person"
     field[:] = inew
+    # The model's own population: agents in each cell, growing by FAKE_GROWTH over the run (0: none), and its humans per
+    # agent (fixed): people = agents x HA
+    grow = float(os.environ.get("FAKE_GROWTH", "0"))
+    share = np.linspace(0.0, 1.0, len(days))[:, None, None]
+    agents = np.where(pop > 0, 100.0 * (1.0 + grow * share), np.nan)
+    ratio = np.where(pop > 0, np.broadcast_to(np.nan_to_num(pop) * 1e6 / 100.0, agents.shape), np.nan)
+    people_outputs = () if os.environ.get("FAKE_NO_PEOPLE") else (("Nagent", agents, "Number of agents"), ("HA", ratio, "Human to agent ratio"))
+    for key, values, long_name in people_outputs:
+        variable = data["Human"].createVariable(key, "f4", ("time", "lat", "lon"), fill_value=np.float32(np.nan))
+        variable.units, variable.long_name = "adimensional", long_name
+        variable[:] = values
     climate = data.createGroup("Climate").createVariable("t2m", "f4", ("time", "lat", "lon"), fill_value=np.float32(np.nan))
     climate.units, climate.long_name = "celsius", "temperature"
     climate[:] = t2m
@@ -4331,7 +4342,10 @@ echo "64200001|cal_x|PENDING|0:00|20:00|(Priority)"
             create_calibration(self.config, objectives, temperature=self.temperature(), name="bad_obs",
                                observation={"rho": [0.5, 0.2], "k": [1, 50]})
         observation = {"rho": [0.1, 1.0], "k": [1.0, 50.0], "draws": 60}
-        folder = create_calibration(self.config, objectives, temperature=self.temperature(), n_trials=3, name="observed",
+        with self.assertRaisesRegex(CalibrationError, "Agents per cell and Humans per agent"):
+            create_calibration(self.config, objectives, temperature=self.temperature(), name="no_people", observation=observation)
+        config = replace(self.config, output=("out_I_new", "out_N", "out_HA"))
+        folder = create_calibration(config, objectives, temperature=self.temperature(), n_trials=3, name="observed",
                                     observation=observation)
         self.assertEqual(read_calibration(folder)["observation"], {"model": "negbin", "rho": [0.1, 1.0], "k": [1.0, 50.0], "draws": 60})
         self.assertEqual(run_calibration(folder, StudyState(), parallel=2)["status"], "finished")
@@ -4346,6 +4360,36 @@ echo "64200001|cal_x|PENDING|0:00|20:00|(Priority)"
         # A trial's draws are the same for every objective and part (the trial's seed): rerunning one gives the same band
         row = trials_table(folder)[1]
         self.assertTrue((trial_folder(folder, row["number"]) / SERIES / "objective_1_whole_band.nc").is_file())
+
+    def test_counts_of_the_models_own_population(self):
+        """The observational model draws around the model's cases as counts of its own population each day (agents x
+        humans per agent, which growth changes), not the observations' population."""
+        from mobile.calibration_data import DataError
+        from mobile.calibration_model import model_count_members, model_members
+        from mobile.runner import Runner
+
+        with mock.patch.dict(os.environ, {"FAKE_GROWTH": "1.0"}):  # The agents double over the run
+            result = Runner(replace(self.config, output=("out_I_new", "out_N", "out_HA"))).run("grown")
+        self.assertTrue(result.ok, result.log_tail())
+        counts = model_count_members(result.run_dir, "Inew")[0]
+        rate = model_members(result.run_dir, "Inew")[0]  # Per person, weighted by the population file's people
+        with netCDF4.Dataset(result.run_dir / "output" / "output.nc") as data:
+            inew, agents, ratio = (np.ma.filled(data[f"Human/{key}"][:].astype("f8"), np.nan) for key in ("Inew", "Nagent", "HA"))
+        np.testing.assert_allclose(counts.values, np.nansum(np.nan_to_num(inew) * np.nan_to_num(agents) * np.nan_to_num(ratio), axis=(1, 2)),
+                                   rtol=1e-6)
+        self.assertEqual((counts.units, counts.aggregation), ("cases", "sum"))
+        # The people the model stands for double over the run: so do its cases for the same rate (control: the rate times a
+        # fixed population would not)
+        people = np.nansum(np.nan_to_num(agents) * np.nan_to_num(ratio), axis=(1, 2))
+        self.assertAlmostEqual(people[-1] / people[0], 2.0, places=5)
+        warm = np.asarray(rate.values) > 0
+        per_person = np.asarray(counts.values)[warm] / np.asarray(rate.values)[warm]
+        self.assertGreater(per_person[-1] / per_person[0], 1.9)
+        with mock.patch.dict(os.environ, {"FAKE_NO_PEOPLE": "1"}):  # A run without them in its output
+            plain = Runner(self.config).run("plain")
+        self.assertTrue(plain.ok, plain.log_tail())
+        with self.assertRaisesRegex(DataError, "Agents per cell .* Humans per agent"):
+            model_count_members(plain.run_dir, "Inew")
 
     def test_views_are_kept_and_never_fail_a_trial(self):
         from mobile.calibration_engine import (SERIES, VIEW, create_calibration, read_calibration, run_calibration, trial_comparison,

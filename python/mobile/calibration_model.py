@@ -119,6 +119,47 @@ def _as_observations(days, values, folder, name, info, space, which, aggregation
     )
 
 
+PEOPLE_OUTPUTS = {"Nagent": "out_N", "HA": "out_HA"}  # The outputs that give the people of each cell each day (agents x HA)
+
+
+def _counts(run_dir, name, variables):
+    """(days, counts) of an output per person of one run as cases of the model's own population: each day the sum over
+    the simulated cells of the value times the people the cell stands for that day (its agents x its humans per agent,
+    which a growing population changes)."""
+    run_dir = Path(run_dir)
+    with netCDF4.Dataset(run_dir / "output" / "output.nc") as data:
+        def field(key):
+            info = variables[key]
+            return np.ma.filled(data[f"{info['group']}/{key}" if info["group"] else key][:].astype("f8"), np.nan)
+        values, agents, ratio = field(name), field("Nagent"), field("HA")
+        time = data["time"]
+        days = netCDF4.num2date(time[:], time.units, getattr(time, "calendar", "standard"), only_use_cftime_datetimes=False,
+                                only_use_python_datetimes=True)
+    if not values.shape == agents.shape == ratio.shape:
+        raise DataError(f"{name}, the agents and the humans per agent of the run are not on the same days and cells")
+    people = np.nan_to_num(agents) * np.nan_to_num(ratio)
+    counts = np.nansum(np.where(np.isfinite(values), values, 0.0) * people, axis=(1, 2))
+    return pd.to_datetime([day.isoformat() for day in days]).normalize(), counts
+
+
+def model_count_members(folder, name, seed=None, aggregation=None):
+    """The output of each run taken (as model_members), per person, made cases of the model's own population each day
+    (_counts): what the observational model draws reported cases around. Needs the outputs Agents per cell (Nagent) and
+    Humans per agent (HA)."""
+    variables = run_variables(folder)
+    if name not in variables or variables[name]["static"]:
+        raise DataError(f"the run has no daily output {name!r}")
+    missing = [key for key in PEOPLE_OUTPUTS if key not in variables or variables[key]["static"]]
+    if missing:
+        raise DataError("the observational model needs the outputs Agents per cell (Nagent) and Humans per agent (HA), "
+                        f"for the model's own population: {', '.join(missing)} missing")
+    info = {**variables[name], "units": "cases"}
+    chosen = chosen_seeds(folder, seed)
+    runs = [(Path(folder), "single run")] if chosen is None else [(Path(folder) / f"seed_{s}", f"seed {s}") for s in chosen]
+    return [_as_observations(*_counts(run_dir, name, variables), folder, name, info, "sum", which, aggregation or "sum")
+            for run_dir, which in runs]
+
+
 def model_members(folder, name, space="people", seed=None, aggregation=None):
     """The output of each run taken: every seed of a seed band (seed=None or SEED_MEAN), one seed of it, or the single
     run; each reduced over the simulated cells into dated daily values, in the form of the observations."""
@@ -251,15 +292,17 @@ def validation_parts(validation):
     return ["validation"] if len(windows) == 1 else [f"validation_{k}" for k in range(1, len(windows) + 1)]
 
 
-def process_observed(members, model_steps, data, data_steps, observation, others=None, model_note=None, validation=None,
+def process_observed(members, counts, model_steps, data, data_steps, observation, others=None, model_note=None, validation=None,
                      part=None):
-    """(model, data, span, draws) with the observational model (observation.py): the model's cases for each month (its
-    steps up to the first that is not a preparing one, e.g. the monthly sums, per person; the mean of the runs if
-    several) times the observations' population N of each month are the mean counts reported cases are drawn around,
-    Y ~ negative binomial(mean rho * cases, dispersion k), `observation` {rho, k, draws, seed}; each draw, per person
-    again, goes through the rest of the model's steps as process_both takes the model's series (the filter first, then
-    the windows). model: the median of the processed draws (the series the metrics compare); draws: the processed draws
-    (draws x values of model); data as process_both gives it."""
+    """(model, data, span, draws) with the observational model (observation.py). members: the runs' output per person
+    (as model_members gives it), counts: the same as cases of the model's own population (model_count_members). The
+    model's cases for each month (the counts through the model's steps up to the first that is not a preparing one,
+    e.g. the monthly sums; the mean of the runs if several) are the mean counts reported cases are drawn around,
+    Y ~ negative binomial(mean rho * cases, dispersion k), `observation` {rho, k, draws, seed}; each draw is then made
+    per person as the data are (divided by the observations' population N of each month) and goes through the rest of
+    the model's steps as process_both takes the model's series (the filter first, then the windows). model: the median
+    of the processed draws (the series the metrics compare); draws: the processed draws (draws x values of model); data
+    as process_both gives it."""
     from .calibration_data import select_window
     from .calibration_steps import PREPARING, apply_steps
     from .observation import DRAWS, draw, median_of, process_draws
@@ -268,16 +311,16 @@ def process_observed(members, model_steps, data, data_steps, observation, others
     first = next((i for i, step in enumerate(model_steps) if step.get("kind") not in PREPARING), len(model_steps))
     prepare, rest = model_steps[:first], model_steps[first:]
     if span is not None:
-        members = [select_window(member, *span) for member in members]
+        counts = [select_window(member, *span) for member in counts]
         data = select_window(data, *span)
-    monthly = [apply_steps(member, prepare) for member in members]
+    monthly = [apply_steps(member, prepare) for member in counts]
     if any(not other.index.equals(monthly[0].index) for other in monthly[1:]):
         raise DataError("the runs do not give the same periods after the steps")
-    mean = np.nanmean(np.array([np.asarray(m.values, dtype="f8") for m in monthly]), axis=0)
-    base = replace(monthly[0], values=mean)
-    population = _population(base, data)
-    counts = draw(mean * population, observation["rho"], observation["k"], observation.get("draws", DRAWS), observation.get("seed"))
-    matrix = counts / population
+    mean = np.nanmean(np.array([np.asarray(m.values, dtype="f8") for m in monthly]), axis=0)  # Cases of the model, a month
+    population = _population(monthly[0], data)
+    base = replace(monthly[0], values=mean / population, units="cases per person")
+    drawn = draw(mean, observation["rho"], observation["k"], observation.get("draws", DRAWS), observation.get("seed"))
+    matrix = drawn / population  # Per person, as the data
     processed, shape = process_draws(base, matrix, rest, validation, part, others)
     return median_of(processed, shape), data_out, span, processed
 
