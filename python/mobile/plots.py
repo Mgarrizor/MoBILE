@@ -28,8 +28,9 @@ COLOUR_MAPS.update({
     name: sample_colorscale(name, 11, colortype="rgb")
     for name in ("Viridis", "Plasma", "Inferno", "Magma", "Cividis", "YlOrRd", "YlGnBu", "Greens", "Purples", "Greys", "Spectral_r", "RdBu_r")
 })
-# The population density map of the Senegal figure: white, greens, yellow, orange, red, purple, black (sampled from its colour bar)
-COLOUR_MAPS["Population density"] = ["#fffffe", "#ffffe7", "#e7f6c4", "#b9e09b", "#90c87b", "#d8e54f", "#f0cb44", "#ed8732", "#ea3624", "#a92317", "#791628", "#4e0a52", "#060006"]
+# Population density as NASA SEDAC maps it: white (unpopulated), light yellow, light green, green, yellow, orange, red,
+# dark red, purple, black (very dense)
+COLOUR_MAPS["nasa_sedac"] = ["#ffffff", "#ffffe0", "#c8f0a0", "#78c878", "#f0f000", "#ffa500", "#ff0000", "#990000", "#660066", "#000000"]
 GRID_STEPS = (0.05, 0.1, 0.2, 0.25, 0.5, 1, 2, 5, 10, 20)
 GRATICULE = "rgba(11, 11, 11, 0.3)"
 AXIS_FONT = 14

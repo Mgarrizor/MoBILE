@@ -1327,6 +1327,8 @@ def create_app(config):
                 # The zoom is kept while the grid and the shapefile are the same
                 uirevision=str((region_map_extent(), region_shapes() is not None and typed_shapes())),
             )
+            # The colour bar just right of the map, which keeps its shape and so does not fill the plot
+            figure.layout.meta = {**(figure.layout.meta or {}), "colourBarBeside": True}
             await send_figure(session, "region_map", figure)
 
         @render.ui
