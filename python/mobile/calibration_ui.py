@@ -19,7 +19,7 @@ from .calibration_data import (
     write_observations,
 )
 from .calibration_engine import log_base
-from .calibration_metrics import DIRECTIONS, METRICS, metrics, pair
+from .calibration_metrics import DIRECTIONS, ENSEMBLE, METRICS, metrics, pair
 from .calibration_model import (
     DRIVERS, SEED_MEAN, SPACES, chosen_seeds, default_aggregation, driver_panel, members_mean, model_members, process_both, run_choices,
     run_elsewhere, run_seeds, run_variables, seed_spread, shared_span, validation_parts, validation_windows,
@@ -184,7 +184,8 @@ def _comparison_card():
             ui.output_ui("cal_recipe_note"),
             ui.layout_columns(
                 ui.input_text("cal_objective_name", "Name", placeholder="e.g. timing", width="100%"),
-                ui.input_select("cal_objective_metric", "Metric", {key: text.split(":")[0] for key, text in METRICS.items()},
+                ui.input_select("cal_objective_metric", "Metric", {key: text.split(":")[0] + (" (observational model)" if key in ENSEMBLE
+                                                                         else "") for key, text in METRICS.items()},
                                 selected="correlation", width="100%"),
                 ui.div(ui.input_action_button("cal_add_objective", "Add as objective", class_="btn-sm btn-primary"),
                        ui.input_action_button("cal_add_view", with_tip("Pin as a view", "Keep this comparison with the calibration "

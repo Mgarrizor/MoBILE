@@ -720,14 +720,20 @@ def mark_windows(figure, span, validation):
     return figure
 
 
-def comparison_figure(model, data, labels, model_values, data_values, scale=False, drivers=()):
+REPORTED_BAND = "95 % of the reported series (observational model)"
+
+
+def comparison_figure(model, data, labels, model_values, data_values, scale=False, drivers=(), reported=None):
     """The model and the observations on the periods (months, seasons, years, age bands) they share, as paired by
     calibration_metrics.pair. With scale, the model times the ratio of the means, to compare timing by eye; the legend
     says by how much. drivers are (name, label, observations) of possible drivers such as rainfall, each drawn in a panel
-    below, sharing the time (or month) axis when they are on it too."""
-    factor = float(np.mean(data_values) / np.mean(model_values)) if scale and np.mean(model_values) > 0 else 1.0
+    below, sharing the time (or month) axis when they are on it too. reported: (low, high) of the band of reported series
+    of the observational model on the paired periods, the model then being their median (not scaled)."""
+    factor = float(np.mean(data_values) / np.mean(model_values)) if scale and reported is None and np.mean(model_values) > 0 else 1.0
     middle = ", median across seeds" if "lowest" in model.extra else ""
     model_label = f"Model{middle} × {factor:.3g} (scaled to the mean of the data)" if factor != 1.0 else f"Model: {model.name}{middle}"
+    if reported is not None:
+        model_label = "Model: median of the reported series (observational model)"
     if data.shape == "dated":
         middle = {data.label(i): pd.Timestamp(data.index["start"].iloc[i]) + (pd.Timestamp(data.index["end"].iloc[i])
                   - pd.Timestamp(data.index["start"].iloc[i])) / 2 for i in range(len(data))}
@@ -737,6 +743,8 @@ def comparison_figure(model, data, labels, model_values, data_values, scale=Fals
         found = _spread(model, [model_at[label] for label in labels])
         if found:  # A seed band: its spread over the seeds, on the paired periods
             spread = _band(x, found[0], found[1], MODELLED, "Model", found[2], factor)
+        if reported is not None:  # The band of the reported series instead
+            spread = _band(x, np.asarray(reported[0]), np.asarray(reported[1]), MODELLED, "Model", REPORTED_BAND)
         traces = [go.Scatter(x=x, y=data_values, mode="lines+markers", line={"color": OBSERVED, "width": 1.5}, marker={"size": 4},
                              name=f"Data: {data.name}", customdata=labels, hovertemplate="Data, %{customdata}: %{y:.4g}<extra></extra>"),
                   *spread,
@@ -752,8 +760,12 @@ def comparison_figure(model, data, labels, model_values, data_values, scale=Fals
                 traces.append(_edge_trace(replace(series, extra={EDGE: ends * scaled}), colour, label, at,
                                           [series.label(i) for i in range(len(series))]))
     else:
+        band = {} if reported is None else {"error_y": {  # The band of the reported series as whiskers
+            "type": "data", "symmetric": False, "array": np.asarray(reported[1]) - model_values,
+            "arrayminus": model_values - np.asarray(reported[0]), "color": "#475569", "thickness": 1.2}}
         traces = [go.Bar(x=labels, y=data_values, marker={"color": OBSERVED}, name=f"Data: {data.name}"),
-                  go.Bar(x=labels, y=model_values * factor, marker={"color": MODELLED}, name=model_label)]
+                  go.Bar(x=labels, y=model_values * factor, marker={"color": MODELLED},
+                         name=model_label + (f"; whiskers: {REPORTED_BAND}" if reported is not None else ""), **band)]
     title = "Model and data, on the periods they share"
     if not drivers:
         figure = go.Figure(traces, layout=_base_layout(title=title))

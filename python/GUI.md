@@ -438,6 +438,16 @@ together (the Pareto front):
   Create only and Run when a window would have no values. The same line is repeated in the messages of Create only,
   Run calibration and Use as template (with the setup now), and in the description of a calibration chosen under
   Calibrations.
+- **Observational model** (a switch, off at first) compares the data with the cases a trial's model would have had
+  reported, not with its cases: reported cases are drawn from a negative binomial around ρ̄ × the model's monthly cases
+  (per person × the data's population N of each month), with dispersion k. **ρ̄** (the average share of the cases
+  reported, 0.05–1 at first) and **k** (how much that share varies from month to month, a coefficient of variation 1/√k;
+  0.5–50 at first) are calibrated with the rest, log-uniform. Each trial draws as many reported series as **Draws per
+  trial** (500), each processed exactly as the data (÷ N, the objective's steps, its windows). An objective with the
+  metric **CRPS** scores those draws against the data directly; the other metrics compare the data with their median,
+  month by month. The objectives need the observations as loaded with a column N; Create only and Run say which lack
+  it, and refuse CRPS with the switch off. The band is a lower bound on the uncertainty: the months are drawn
+  independently, and each trial has one seed.
 - **Temperature offsets**, **one per cell** or **one per region**, the cells in each box of a size you give (e.g. 0.5°,
   with edges on multiples of it: the cells of a coarser grid, as when finer driving files were made from coarser ones).
   The cells of a region share its offset and keep their differences; its mean is that of its cells weighted by their
@@ -492,7 +502,9 @@ together (the Pareto front):
   The calibration running, or the one chosen, is drawn below: each objective trial by trial with the best so far
   (**Log scale** under it puts an objective's panel on a log scale, offered for those whose values are all above 0), the
   Pareto front, in a panel that folds (click its title), with the offsets and parameters of each trial and the mean
-  temperatures they give, and with validation windows its scores on each (a column per objective and window), in grey. Click a column title to sort by it,
+  temperatures they give, and with validation windows its scores on each (a column per objective and window), in grey;
+  with the observational model, its ρ̄ and k and, per objective and part, its **coverage**: the share of the data within
+  the band of the middle 95 % of its reported series (about 95 % for a model consistent with the data). Click a column title to sort by it,
   again for the other way (▼ high to low, ▲ low to high; an objective sorts best first at the first click; trials
   without a value last). It is sorted at first by the distance to the ideal point, closest first (each objective
   scaled from its best value on the front, 0, to its worst, 1; then the distance over all of them: 0 is a trial best
@@ -507,13 +519,15 @@ together (the Pareto front):
   only when what it shows changes, and the menus keep the choice made: a zoom or a choice is not undone by the next
   reading. The number of trials completed, in the list of calibrations, is counted in its study, so it follows a job
   on a cluster at each Refresh. With a validation window, semi-transparent bars along the top of these plots mark the calibration window
-  (green) and each validation window (purple), and their titles give the trial's validation scores on each; an objective that
+  (green) and each validation window (purple), and their titles give the trial's validation scores on each. With the
+  observational model the model is drawn as the median of its reported series, not scaled, with the band of the middle
+  95 % of them shaded (whiskers on bars for a climatology), and the title gives its ρ̄, k and coverage; an objective that
   is not a dated series, e.g. a climatology, is drawn for the calibration window only, as scored.
 - **Create only** makes the calibration without running it, and chooses it under Calibrations: run it here with
   **Resume here**, send it to a cluster (below), or run it with `mobile calibrate`.
 - **Use as template**, under Calibrations, fills the card and the objectives from the calibration chosen, for a new
   one: its objectives (those whose observations are still where they were), what it calibrates and the ranges (its
-  cells or regions found again on the setup now), the validation windows, the sampler, trials, start-up trials, seeds
+  cells or regions found again on the setup now), the validation windows, the observational model, the sampler, trials, start-up trials, seeds
   (the first one in the sidebar) and threads per run, and a new name (e.g. look_2). Change what you like, then Create
   only or Run calibration; the calibration chosen is not changed. It also fills the other tabs, for you to apply:
   its setup in the boxes of tab 1 (the dot turns amber if it differs from the setup applied: press Apply setup), its
