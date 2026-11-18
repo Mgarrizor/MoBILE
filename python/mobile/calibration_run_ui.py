@@ -28,7 +28,7 @@ from .calibration_engine import (
 )
 from .calibration_data import DataError, read_observations
 from .calibration_metrics import DIRECTIONS, ENSEMBLE, pair
-from .calibration_model import DRIVER_PERIODS, DRIVERS, driver_panel, validation_parts, validation_windows
+from .calibration_model import DRIVER_PERIODS, DRIVERS, PEOPLE_OUTPUTS, driver_panel, validation_parts, validation_windows
 from .calibration_results import FIGURES, ResultsError, beyond_limits, died_out, figure_help, results_figure
 from .calibration_steps import STATISTICS
 from .calibration_progress import DOING, DONE, TODO, anchor
@@ -92,7 +92,8 @@ def calibration_run_card():
                 class_="small text-muted mb-2"))),
         ui.input_switch("cal_observation", with_tip("Observational model", "Compares the data with the cases a trial's model "
                         "would have had reported, not with its cases: reported cases scatter around ρ̄ × the model's cases "
-                        "(negative binomial, dispersion k), ρ̄ and k calibrated with the rest."), value=False),
+                        "(negative binomial, dispersion k), ρ̄ and k calibrated with the rest. Needs the outputs Agents per "
+                        "cell and Humans per agent (tab 2), ticked when you turn it on."), value=False),
         ui.panel_conditional("input.cal_observation", ui.div(
             ui.layout_columns(
                 ui.input_numeric("cal_obs_rho_low", "ρ̄ (reporting) from", value=0.05, min=0, max=1, step=0.01),
@@ -105,9 +106,11 @@ def calibration_run_card():
             ui.tags.ul(
                 ui.tags.li("Each trial draws its ρ̄ (the average share of the cases reported) and k (how much the reported "
                            "share varies from month to month: a coefficient of variation 1/√k) from these ranges, log-uniform. "
-                           "Its model's monthly cases (per person × the data's N) give the mean ρ̄ × cases of a negative binomial, "
-                           "from which it draws as many reported series as asked, each processed exactly as the data (÷ N, then "
-                           "the objective's steps, its windows)."),
+                           "Its model's monthly cases, counted in the model's own population (each day, the new cases per person "
+                           "of each cell × its agents × its humans per agent, which growth changes), give the mean ρ̄ × cases of "
+                           "a negative binomial, from which it draws as many reported series as asked, each processed exactly as "
+                           "the data (÷ the data's N, then the objective's steps, its windows). Hence the outputs Agents per cell "
+                           "and Humans per agent, which turning this on ticks in tab 2 (press Apply parameters & outputs there)."),
                 ui.tags.li("An objective with the metric CRPS scores those draws against the data directly; the other metrics "
                            "compare the data with their median, month by month. The plots of a trial show the median and, "
                            "shaded, the band of the middle 95 % of the draws; the Pareto table gives ρ̄, k and the share of the "
@@ -578,6 +581,28 @@ def observation_said(observation):
     return (f"Observational model: reported cases negative binomial around ρ̄ × the model's, ρ̄ {observation['rho'][0]:g}–"
             f"{observation['rho'][1]:g} and k {observation['k'][0]:g}–{observation['k'][1]:g} (both calibrated, log-uniform), "
             f"{observation['draws']} draws per trial")
+
+
+OBSERVATIONAL = "the observational model"
+
+
+def observation_outputs(observation):
+    """{flag: ['the observational model']} for the outputs it needs (Agents per cell and Humans per agent: the people
+    each cell stands for each day, which its counts of reported cases are drawn from), {} for off (None)."""
+    return {flag: [OBSERVATIONAL] for flag in PEOPLE_OUTPUTS.values()} if observation else {}
+
+
+def outputs_missing(needed, applied):
+    """Why the outputs applied lack some that are needed ({flag: [names of what needs it]}), or None."""
+    missing = [flag for flag in needed if flag not in applied]
+    if not missing:
+        return None
+    who = {name for flag in missing for name in needed[flag]}
+    whom = " and ".join(part for part, there in (("the objectives and views", bool(who - {OBSERVATIONAL})),
+                                                  (OBSERVATIONAL, OBSERVATIONAL in who)) if there)
+    return (f"{whom[0].upper()}{whom[1:]} {'needs' if who == {OBSERVATIONAL} else 'need'} "
+            f"{', '.join(output_label(flag) for flag in missing)}, not among the outputs applied: tick "
+            f"{'it' if len(missing) == 1 else 'them'} and press Apply parameters & outputs (tab 2. Parameters & SA).")
 
 
 def observation_problems(observation, objectives):
@@ -1239,6 +1264,19 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         return {"rho": [input.cal_obs_rho_low(), input.cal_obs_rho_high()], "k": [input.cal_obs_k_low(), input.cal_obs_k_high()],
                 "draws": int(draws) if isinstance(draws, float) and draws.is_integer() else draws}
 
+    @reactive.effect
+    @reactive.event(input.cal_observation, ignore_init=True)
+    def tick_people_outputs():
+        """Turning the observational model on ticks the outputs it needs in tab 2 (to be applied there); off leaves them."""
+        if not input.cal_observation():
+            return
+        ticked = [flag for flag in observation_outputs(True) if not input[output_switch_id(flag)]()]
+        for flag in ticked:
+            ui.update_switch(output_switch_id(flag), value=True)
+        if ticked:
+            ui.notification_show(f"Ticked {' and '.join(output_label(flag) for flag in ticked)} in tab 2 (2. Parameters & SA): "
+                                 "the observational model needs them. Press Apply parameters & outputs there.", type="message")
+
     def problems():
         found = []
         if not objectives():
@@ -1247,10 +1285,11 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         if unknown:
             found.append(f"{', '.join(unknown)}: {'its variable is' if len(unknown) == 1 else 'their variables are'} not written by "
                          f"any output of the model.")
-        missing = [output_label(flag) for flag in needed if flag not in selected_output()]
+        for flag, names in observation_outputs(input.cal_observation()).items():
+            needed.setdefault(flag, []).extend(names)
+        missing = outputs_missing(needed, selected_output())
         if missing:
-            found.append(f"The objectives and views need {', '.join(missing)}, not among the outputs applied: tick "
-                         f"{'it' if len(missing) == 1 else 'them'} and press Apply parameters & outputs (tab 2. Parameters & SA).")
+            found.append(missing)
         elif not_applied():
             found.append(not_applied())
         try:
@@ -1500,6 +1539,7 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         views.set(pinned)
         # The outputs: those its objectives and views need, the others off, to be applied in tab 2
         needed, _ = needed_outputs([*taken, *pinned])
+        needed.update(observation_outputs(record.get("observation")))
         for group in OUTPUT_FLAGS.values():
             for flag, _, _ in group:
                 ui.update_switch(output_switch_id(flag), value=flag in needed)

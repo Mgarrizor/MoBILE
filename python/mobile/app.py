@@ -30,7 +30,7 @@ from .period import length_text, parse_day, period_days, spin_up_problem
 from .region import region_problems
 from .results import list_runs
 from .calibration_progress import progress_server
-from .calibration_run_ui import calibration_run_server
+from .calibration_run_ui import calibration_run_server, observation_outputs
 from .calibration_ui import calibration_server, calibration_tab
 from .sensitivity_ui import sensitivity_card, sensitivity_server
 from .scripts import (
@@ -282,9 +282,11 @@ def create_app(config):
 
         @reactive.calc
         def parameters_problems():
-            """What makes the parameters and outputs shown invalid: an output an objective needs not ticked; with population
-            growth in the setup applied, a growth_ratio_ceiling too low for it."""
+            """What makes the parameters and outputs shown invalid: an output an objective or the observational model needs
+            not ticked; with population growth in the setup applied, a growth_ratio_ceiling too low for it."""
             needed, _ = needed_outputs([*calibration.objectives(), *calibration.views()])
+            for flag, names in observation_outputs(input.cal_observation()).items():
+                needed.setdefault(flag, []).extend(names)
             shown = set(selected_output())
             found = [f"Tick {output_label(flag)}: needed by {', '.join(names)}" for flag, names in needed.items() if flag not in shown]
             growth = setup().inputs.get("growth") or 0

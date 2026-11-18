@@ -4922,6 +4922,27 @@ class TestObservationModelInTheGui(unittest.TestCase):
         self.assertEqual(front_columns(plain), {"number", IDEAL, "o0", "o1"})
         self.assertEqual(observation_said(None), "")
 
+    def test_people_outputs_required(self):
+        """With the observational model on, the outputs the engine needs (Agents per cell, Humans per agent) are required
+        and named; applied, nothing is said; off, nothing is required (control); the objectives' needs keep their wording."""
+        from mobile.calibration_engine import PEOPLE_OUTPUTS
+        from mobile.calibration_run_ui import observation_outputs, outputs_missing
+        on = {"rho": [0.05, 1.0], "k": [0.5, 50.0], "draws": 500}
+        self.assertEqual(set(observation_outputs(on)), set(PEOPLE_OUTPUTS.values()))
+        self.assertEqual(set(observation_outputs(on)), {"out_N", "out_HA"})
+        self.assertEqual(observation_outputs(None), {})
+        said = outputs_missing(observation_outputs(on), ("out_I_new",))
+        self.assertTrue(said.startswith("The observational model needs Agents per cell, Humans per agent, not among"), said)
+        self.assertIn("tick them and press Apply", said)
+        self.assertIsNone(outputs_missing(observation_outputs(on), ("out_I_new", "out_N", "out_HA")))
+        self.assertIsNone(outputs_missing(observation_outputs(None), ()))
+        both = {"out_I_new": ["incidence"], **observation_outputs(on)}
+        said = outputs_missing(both, ("out_HA",))
+        self.assertTrue(said.startswith("The objectives and views and the observational model need New symptomatic cases, "
+                                        "Agents per cell, not"), said)
+        self.assertTrue(outputs_missing({"out_I_new": ["incidence"]}, ()).startswith("The objectives and views need New "
+                                                                                       "symptomatic cases, not"))
+
     def test_band_on_the_plot(self):
         from mobile.calibration_metrics import pair
         from mobile.calibration_run_ui import paired_band

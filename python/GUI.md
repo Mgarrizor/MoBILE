@@ -440,7 +440,11 @@ together (the Pareto front):
   Calibrations.
 - **Observational model** (a switch, off at first) compares the data with the cases a trial's model would have had
   reported, not with its cases: reported cases are drawn from a negative binomial around ρ̄ × the model's monthly cases
-  (per person × the data's population N of each month), with dispersion k. **ρ̄** (the average share of the cases
+  counted in the model's own population (each day, the new cases per person of each cell × its agents × its humans per
+  agent, which growth changes), with dispersion k; each draw is then made per person as the data are (÷ the data's
+  population N of each month). It therefore needs the outputs **Agents per cell** and **Humans per agent**: turning the
+  switch on ticks them in tab 2 (press **Apply parameters & outputs** there), and while it is on, Create only, Run and
+  Apply refuse outputs without them. **ρ̄** (the average share of the cases
   reported, 0.05–1 at first) and **k** (how much that share varies from month to month, a coefficient of variation 1/√k;
   0.5–50 at first) are calibrated with the rest, log-uniform. Each trial draws as many reported series as **Draws per
   trial** (500), each processed exactly as the data (÷ N, the objective's steps, its windows). An objective with the
