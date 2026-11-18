@@ -23,11 +23,11 @@ from .calibration_engine import (
     OBJECTIVE, OLD_CALIBRATION, SAMPLER_LINKS, SAMPLERS, VIEW, CalibrationError, best_trials, calibration_label, calibrations_dir, create_calibration,
     is_running, list_calibrations, log_base, read_calibration, read_cluster, resolved, resumable, run_calibration, running_where,
     status_of,
-    trial_comparison,
+    trial_band, trial_comparison,
     trial_folder, trials_table,
 )
 from .calibration_data import DataError, read_observations
-from .calibration_metrics import DIRECTIONS
+from .calibration_metrics import DIRECTIONS, ENSEMBLE, pair
 from .calibration_model import DRIVER_PERIODS, DRIVERS, driver_panel, validation_parts, validation_windows
 from .calibration_results import FIGURES, ResultsError, beyond_limits, died_out, figure_help, results_figure
 from .calibration_steps import STATISTICS
@@ -89,6 +89,32 @@ def calibration_run_card():
                            "may not overlap."),
                 ui.tags.li("Both are cut before the steps of the Model and Data boxes, so e.g. a climatology objective is that of "
                            "the calibration window only. The Model and data card above gives the metrics of each window for its run."),
+                class_="small text-muted mb-2"))),
+        ui.input_switch("cal_observation", with_tip("Observational model", "Compares the data with the cases a trial's model "
+                        "would have had reported, not with its cases: reported cases scatter around ρ̄ × the model's cases "
+                        "(negative binomial, dispersion k), ρ̄ and k calibrated with the rest."), value=False),
+        ui.panel_conditional("input.cal_observation", ui.div(
+            ui.layout_columns(
+                ui.input_numeric("cal_obs_rho_low", "ρ̄ (reporting) from", value=0.05, min=0, max=1, step=0.01),
+                ui.input_numeric("cal_obs_rho_high", "to", value=1.0, min=0, max=1, step=0.05),
+                ui.input_numeric("cal_obs_k_low", "k (dispersion) from", value=0.5, min=0, step=0.5),
+                ui.input_numeric("cal_obs_k_high", "to", value=50.0, min=0, step=5),
+                ui.input_numeric("cal_obs_draws", "Draws per trial", value=OBSERVATION_DRAWS, min=20, step=100),
+                col_widths=(3, 2, 3, 2, 2), fill=False,
+            ),
+            ui.tags.ul(
+                ui.tags.li("Each trial draws its ρ̄ (the average share of the cases reported) and k (how much the reported "
+                           "share varies from month to month: a coefficient of variation 1/√k) from these ranges, log-uniform. "
+                           "Its model's monthly cases (per person × the data's N) give the mean ρ̄ × cases of a negative binomial, "
+                           "from which it draws as many reported series as asked, each processed exactly as the data (÷ N, then "
+                           "the objective's steps, its windows)."),
+                ui.tags.li("An objective with the metric CRPS scores those draws against the data directly; the other metrics "
+                           "compare the data with their median, month by month. The plots of a trial show the median and, "
+                           "shaded, the band of the middle 95 % of the draws; the Pareto table gives ρ̄, k and the share of the "
+                           "data within the band (coverage: about 95 % for a model consistent with the data)."),
+                ui.tags.li("The band is a lower bound on the uncertainty: the months are drawn independently (a reporting error "
+                           "that persists for years would widen it), and each trial has one seed (the model's own randomness is "
+                           "not in it). The objectives need the observations as loaded with their population, a column N."),
                 class_="small text-muted mb-2"))),
         anchor("what"),
         ui.h6("What to calibrate", class_="mt-2"),
@@ -451,7 +477,7 @@ LIMIT_HELP = {
     "typical_factor": "a trial whose model is off by more than this factor in root mean square (the RMSE of the logs: some "
                       "points may be further off) is kept off the front: e.g. 1.5 or 2",
     "at_least": "a trial below this is kept off the front: e.g. 0.5",
-    "at_most": "a trial whose RMSE is above this is kept off the front, in the units of the metric",
+    "at_most": "a trial above this (its RMSE or CRPS) is kept off the front, in the units of the metric",
     "abs_at_most": "a trial whose bias is beyond this either way is kept off the front, in the units of the data",
 }
 
@@ -540,6 +566,87 @@ def infeasible_notes(record, rows):
     return notes
 
 
+OBSERVATION_DRAWS = 500  # Reported series drawn per trial by the observational model, at first
+OBSERVED_COLUMNS = (("p:obs_rho", "ρ̄ (reporting)"), ("p:obs_k", "k (dispersion)"))  # Of the observational model, in the table
+
+
+def observation_said(observation):
+    """The observational model of a calibration in words, e.g. 'Observational model: reported cases negative binomial
+    around ρ̄ × the model's, ρ̄ 0.05–1 and k 0.5–50 (both calibrated, log-uniform), 500 draws per trial'; '' without."""
+    if not observation:
+        return ""
+    return (f"Observational model: reported cases negative binomial around ρ̄ × the model's, ρ̄ {observation['rho'][0]:g}–"
+            f"{observation['rho'][1]:g} and k {observation['k'][0]:g}–{observation['k'][1]:g} (both calibrated, log-uniform), "
+            f"{observation['draws']} draws per trial")
+
+
+def observation_problems(observation, objectives):
+    """What stops a calibration with this observational model ({rho, k, draws}, or None for off) and these objectives,
+    as the engine checks it: the ranges, the draws, CRPS without it, and the observations' population (a column N)."""
+    found = []
+    if not observation:
+        crps = [o["name"] for o in objectives if o.get("metric") in ENSEMBLE]
+        if crps:
+            found.append(f"{', '.join(crps)}: CRPS scores the reported series of the observational model: turn it on, or "
+                         "choose another metric.")
+        return found
+    numbers = lambda pair: all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in pair)
+    rho, k, draws = observation["rho"], observation["k"], observation["draws"]
+    if not numbers(rho) or not 0 < rho[0] < rho[1] <= 1:
+        found.append("ρ̄ (reporting) needs a range above 0 and at most 1, its low below its high.")
+    if not numbers(k) or not 0 < k[0] < k[1]:
+        found.append("k (dispersion) needs a range above 0, its low below its high.")
+    if not isinstance(draws, int) or isinstance(draws, bool) or draws < 20:
+        found.append("The observational model needs at least 20 draws per trial (500 at first).")
+    old, unpeopled = [], []
+    for objective in objectives:
+        if not objective.get("data_raw"):
+            old.append(objective["name"])
+            continue
+        try:
+            if "N" not in _loaded(objective["data_raw"]).extra:
+                unpeopled.append(objective["name"])
+        except (DataError, OSError, ValueError):
+            unpeopled.append(objective["name"])
+    if old:
+        found.append(f"The observational model needs the observations as loaded, which {', '.join(old)} lack: add "
+                     f"{'it' if len(old) == 1 else 'them'} again.")
+    if unpeopled:
+        found.append(f"The observational model needs the observations' population (a column N), which "
+                     f"{', '.join(unpeopled)} {'has' if len(unpeopled) == 1 else 'have'} not.")
+    return found
+
+
+def coverage_parts(record):
+    """[(part, label)] of the parts a trial's coverage is kept for: the whole period, or the calibration window and each
+    validation window; [] without the observational model."""
+    if not record.get("observation"):
+        return []
+    validation = record.get("validation")
+    if not validation:
+        return [("whole", "")]
+    parts = validation_parts(validation)
+    return [("calibration", "calibration")] + [(part, "validation" if len(parts) == 1 else f"validation {k}")
+                                               for k, part in enumerate(parts, start=1)]
+
+
+def paired_band(band, model, data):
+    """(low, high) of a band of reported series (trial_band: on the values of the model series) on the periods the model
+    and the data are paired on, as the plots draw them; None without a band."""
+    if band is None:
+        return None
+    low, _, high = band
+    if len(low) != len(model.values):
+        raise ValueError("its band of reported series does not match its model series")
+    return pair(replace(model, values=np.asarray(low, dtype="f8")), data)[0], pair(replace(model, values=np.asarray(high, dtype="f8")), data)[0]
+
+
+def coverage_of(row, part, index):
+    """The share of the data within the band of objective `index` in a part, for a trial; None if it has none."""
+    shares = (row.get("coverage") or {}).get(part) or []
+    return shares[index] if index < len(shares) else None
+
+
 def trend_said(temperature):
     """e.g. 'Temperature trend in -0.5 to 1.5 °C per decade, 0 on 1991-12-31', of a calibration's temperature record."""
     low, high = temperature["trend"]
@@ -592,6 +699,8 @@ def front_columns(record):
     count = len(record["objectives"])
     return {"number", IDEAL, *[f"o{k}" for k in range(count)],
             *[key for keys, _ in window_columns(record) for key in keys],
+            *([key for key, _ in OBSERVED_COLUMNS] if record.get("observation") else []),
+            *[f"c:{part}:{k}" for part, _ in coverage_parts(record) for k in range(count)],
             *[f"t{k}" for k in range(len((record.get("temperature") or {}).get("means") or []))],
             *([TREND] if (record.get("temperature") or {}).get("trend") else []),
             *[f"p:{parameter['name']}" for parameter in record.get("parameters", [])]}
@@ -647,7 +756,8 @@ def front_key(found):
     shape = (tuple(o["name"] for o in record["objectives"]), repr(record.get("validation")),
              repr(record.get("temperature")), tuple(parameter["name"] for parameter in record.get("parameters", [])))
     rows = tuple((row["number"], tuple(row["values"]), tuple(tuple(scores or ()) for scores in window_scores(record, row)),
-                  tuple(sorted((row.get("offsets") or {}).items())), tuple(sorted((row.get("params") or {}).items())))
+                  tuple(sorted((row.get("offsets") or {}).items())), tuple(sorted((row.get("params") or {}).items())),
+                  repr(row.get("coverage")))
                  for row in front)
     return shape, rows, dead, len(completed) if dead else None
 
@@ -663,6 +773,9 @@ def sort_rows(front, column, descending, distances, record=None):
             return distances[row["number"]]
         if column.startswith("p:"):
             return row["params"].get(column[2:])
+        if column.startswith("c:"):
+            _, part, k = column.split(":")
+            return coverage_of(row, part, int(k))
         if column == TREND:
             return row["offsets"].get("dT_trend")
         if column[0] == "w":
@@ -1118,6 +1231,14 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
                     class_="d-flex align-items-end gap-2"))
         return ui.TagList(*rows) if rows else None
 
+    def observation():
+        """The observational model as the card says ({rho, k, draws}, as create_calibration takes it), or None if off."""
+        if not input.cal_observation():
+            return None
+        draws = input.cal_obs_draws()
+        return {"rho": [input.cal_obs_rho_low(), input.cal_obs_rho_high()], "k": [input.cal_obs_k_low(), input.cal_obs_k_high()],
+                "draws": int(draws) if isinstance(draws, float) and draws.is_integer() else draws}
+
     def problems():
         found = []
         if not objectives():
@@ -1141,6 +1262,7 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
                 found += [problem for *_, said in windows() for problem in said]
         except ValueError as error:
             found.append(str(error))
+        found += observation_problems(observation(), objectives())
         parameters = chosen_parameters()
         for parameter in parameters:
             low, high = parameter.low, parameter.high
@@ -1254,7 +1376,9 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
             temperature = read_calibration(folder).get("temperature") or {}
             ui.notification_show(f"Running {Path(folder).name}. {record_windows(folder)}"
                                  + (f" {trend_said(temperature)}." if temperature.get("trend") else "")
-                                 + f" {limits_said(read_calibration(folder)['objectives'])}", type="message", duration=15)
+                                 + f" {limits_said(read_calibration(folder)['objectives'])}"
+                                 + (f" {observation_said(read_calibration(folder).get('observation'))}."
+                                    if read_calibration(folder).get("observation") else ""), type="message", duration=15)
 
     @reactive.effect
     @reactive.event(input.cal_create)
@@ -1268,7 +1392,9 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         ui.notification_show(f"Created {Path(folder).name}, not run. It is chosen under Calibrations: press Resume here to run it on "
                              f"this computer, Send it to LEONARDO in Run on LEONARDO (CINECA), or run `mobile calibrate {folder}` ({threads_} "
                              f"thread{'s' if threads_ > 1 else ''} per run). {record_windows(folder)} "
-                             f"{limits_said(read_calibration(folder)['objectives'])}", type="message", duration=15)
+                             f"{limits_said(read_calibration(folder)['objectives'])}"
+                             + (f" {observation_said(read_calibration(folder).get('observation'))}."
+                                if read_calibration(folder).get("observation") else ""), type="message", duration=15)
 
     def make_calibration():
         """The folder of a new calibration as the card says, or None after saying what is wrong."""
@@ -1301,7 +1427,7 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
                                         views=[{k: v for k, v in o.items() if k not in ("output", "describe")} for o in views()],
                                         parameters=parameters, temperature=temperature, seeds=[seed + i for i in range(input.cal_seeds())],
                                         n_trials=input.cal_trials(), sampler=input.cal_sampler(), startup_trials=input.cal_startup(),
-                                        sampler_seed=seed, name=name or None, validation=validation())
+                                        sampler_seed=seed, name=name or None, validation=validation(), observation=observation())
         except (ConfigError, CalibrationError, DataError, ValueError, OSError) as error:
             ui.notification_show(f"The calibration cannot be made: {error}", type="error")
             return None
@@ -1386,6 +1512,15 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         if restored:
             ui.update_date_range("cal_validation_dates", start=restored[0][0], end=restored[0][1])
         extra_windows.set([(next(window_ids), (pd.Timestamp(first).date(), pd.Timestamp(last).date())) for first, last in restored[1:]])
+        # The observational model
+        observed = record.get("observation")
+        ui.update_switch("cal_observation", value=bool(observed))
+        if observed:
+            ui.update_numeric("cal_obs_rho_low", value=observed["rho"][0])
+            ui.update_numeric("cal_obs_rho_high", value=observed["rho"][1])
+            ui.update_numeric("cal_obs_k_low", value=observed["k"][0])
+            ui.update_numeric("cal_obs_k_high", value=observed["k"][1])
+            ui.update_numeric("cal_obs_draws", value=observed["draws"])
         # Optuna and runs; the sidebar seed is the first seed
         ui.update_select("cal_sampler", selected=record["sampler"]["name"])
         ui.update_numeric("cal_trials", value=record["n_trials"])
@@ -1541,6 +1676,8 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
             if temperature.get("trend"):
                 lines.append(trend_said(temperature))
         lines += [f"{view['name']}: view of {view['variable']}, drawn for each trial, not optimised" for view in record.get("views") or []]
+        if record.get("observation"):
+            lines.append(observation_said(record["observation"]))
         for parameter in record.get("parameters", []):
             lines.append(f"{parameter['name']}: {parameter['distribution']} from {parameter['low']:.4g} to {parameter['high']:.4g}")
         said = record_windows(folder)
@@ -1701,6 +1838,8 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         trended = bool((record.get("temperature") or {}).get("trend"))
         parameters = [parameter["name"] for parameter in record.get("parameters", [])]
         held = window_columns(record)
+        observed_columns = OBSERVED_COLUMNS if record.get("observation") else ()
+        covered = coverage_parts(record)
         distances = ideal_distances(front, record["objectives"])
         columns = front_columns(record)
         key, descending = front_sort()
@@ -1724,7 +1863,10 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
                               for keys, label in held for column, name in zip(keys, names)],
                             *[head(f"t{k}", f"dT{k + 1} → mean") for k in range(len(means))],
                             *([head(TREND, "Trend [°C/decade]")] if trended else []),
-                            *[head(f"p:{name}", name) for name in parameters])
+                            *[head(f"p:{name}", name) for name in parameters],
+                            *[head(key, label) for key, label in observed_columns],
+                            *[head(f"c:{part}:{k}", f"{name} coverage{f' ({label})' if label else ''}", class_="text-secondary")
+                              for part, label in covered for k, name in enumerate(names)])
         rows = [ui.tags.tr(ui.tags.td(str(row["number"])), ui.tags.td(f"{distances[row['number']]:.3f}"),
                            *[ui.tags.td(f"{value:.4g}") for value in row["values"]],
                            *[ui.tags.td("–" if value is None else f"{value:.4g}", class_="text-secondary")
@@ -1733,9 +1875,17 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
                              for k in range(len(means))],
                            *([ui.tags.td("–" if row["offsets"].get("dT_trend") is None else f"{row['offsets']['dT_trend']:+.2f}")]
                              if trended else []),
-                           *[ui.tags.td(f"{row['params'][name]:.4g}") for name in parameters])
+                           *[ui.tags.td(f"{row['params'][name]:.4g}") for name in parameters],
+                           *[ui.tags.td("–" if row["params"].get(key[2:]) is None else f"{row['params'][key[2:]]:.3g}")
+                             for key, _ in observed_columns],
+                           *[ui.tags.td("–" if coverage_of(row, part, k) is None else f"{100 * coverage_of(row, part, k):.0f} %",
+                                        class_="text-secondary")
+                             for part, _ in covered for k in range(len(names))])
                 for row in shown_rows]
-        return ui.div(ui.p("Click a column title to sort by it, again for the other way.", class_="small text-muted mb-1"),
+        return ui.div(ui.p("Click a column title to sort by it, again for the other way."
+                           + (" Coverage: the share of the data within the band of the middle 95 % of the trial's reported "
+                              "series (about 95 % for a model consistent with the data)." if covered else ""),
+                           class_="small text-muted mb-1"),
                       ui.tags.div(ui.tags.table(ui.tags.thead(header), ui.tags.tbody(*rows), class_="table table-sm small mb-1"),
                                   style="overflow-x: auto;"),
                       ui.p(f"The first {len(shown_rows)} of the {len(front)} trials of the front, in this order: Show all for the "
@@ -1804,7 +1954,8 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
             await send_new("cal_best_plot", key, lambda: message_figure(figure))
             return
         row = next((row for row in found[2] if row["number"] == number), {})
-        figure.update_layout(title=f"Trial {number}, against {comparison_name(found[0], kind, index)} (model scaled to the mean of the data)"
+        figure.update_layout(title=f"Trial {number}, against {comparison_name(found[0], kind, index)} "
+                                   f"{reporting_said(found[0], row, index if kind == OBJECTIVE else None)}"
                                    f"{validation_scores(found[0], row)}")
         await send_new("cal_best_plot", key, figure)
 
@@ -1822,9 +1973,12 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         if key not in comparisons:
             window = record.get("validation")
             try:
+                part = None
                 model, data, m, d, labels = trial_comparison(folder, number, index, kind=kind)
                 if window and data.shape != "dated":  # E.g. a climatology: that of the calibration years, as scored
-                    model, data, m, d, labels = trial_comparison(folder, number, index, "calibration", kind=kind)
+                    part = "calibration"
+                    model, data, m, d, labels = trial_comparison(folder, number, index, part, kind=kind)
+                reported = paired_band(trial_band(folder, number, index, part, kind), model, data)
             except (DataError, OSError, KeyError, ValueError) as error:
                 return f"Trial {number} cannot be drawn: {error}.", None
             # The drivers of the run of the trial (its first seed), within the periods the model and the data share
@@ -1837,7 +1991,7 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
                         drivers.append((name, DRIVERS[name][0], driver_panel(run_dir, name, period, how, by_month, first, last)))
                 except (DataError, OSError, KeyError) as error:
                     problems.append(f"{DRIVERS[name][0]}: {error}")
-            figure = comparison_figure(model, data, labels, m, d, scale=True, drivers=drivers)
+            figure = comparison_figure(model, data, labels, m, d, scale=True, drivers=drivers, reported=reported)
             if window and data.shape == "dated":
                 mark_windows(figure, (str(data.index["start"].min().date()), str(data.index["end"].max().date())), window)
             elif window:
@@ -1846,6 +2000,19 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
             comparisons[key] = (figure, "; ".join(problems) or None)
         figure, problem = comparisons[key]
         return go.Figure(figure), problem
+
+    def reporting_said(record, row, index=None):
+        """How the model of a trial is drawn, for a title: scaled to the mean of the data, or, with the observational model,
+        the median of its reported series with its ρ̄ and k, and the coverage of objective `index` (None for a view)."""
+        if not record.get("observation"):
+            return "(model scaled to the mean of the data)"
+        reporting = row.get("reporting") or {}
+        said = ", ".join(f"{name} {reporting[key]:.3g}" for key, name in (("rho", "ρ̄"), ("k", "k")) if reporting.get(key) is not None)
+        covered = [f"{label + ' ' if label else ''}{100 * coverage_of(row, part, index):.0f} %"
+                   for part, label in coverage_parts(record) if index is not None and coverage_of(row, part, index) is not None]
+        if covered:
+            said += ("; " if said else "") + "coverage " + ", ".join(covered)
+        return f"(model: median of its reported series{'; ' + said if said else ''})"
 
     def validation_scores(record, row):
         """'; validation: name value, ...' of a trial, for a title, if the calibration has validation windows (one part
@@ -1893,7 +2060,9 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         what = "no temperature offset" if start else "the first trial (none without offsets)"
         values = ", ".join(f"{o['name']} {value:.3g}" for o, value in zip(record["objectives"], row["values"]))
         figure.update_layout(title=f"Start: trial {row['number']}, {what} ({values}), against {comparison_name(record, kind, index)}"
-                                   f"{validation_scores(record, row)}")
+                                   + (f" {reporting_said(record, row, index if kind == OBJECTIVE else None)}"
+                                      if record.get("observation") else "")
+                                   + f"{validation_scores(record, row)}")
         await send_new("cal_start_plot", key, figure)
 
     @render.ui

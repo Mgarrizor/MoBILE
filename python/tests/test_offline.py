@@ -4819,6 +4819,96 @@ class TestTrendInTheCard(unittest.TestCase):
         self.assertEqual([row["number"] for row in sort_rows(front, TREND, False, {})], [2, 0, 1])
 
 
+class TestObservationModelInTheGui(unittest.TestCase):
+    """The observational model in the card, the Pareto table and the trial plots; checked against the engine's own checks."""
+
+    def setUp(self):
+        from mobile.calibration_data import Observations, write_observations
+        self.folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.folder)
+        start = pd.date_range("1990-01", periods=24, freq="MS")
+        index = pd.DataFrame({"start": start.values.astype("datetime64[D]"),
+                              "end": (start + pd.offsets.MonthEnd(0)).values.astype("datetime64[D]")})
+        self.data = Observations(shape="dated", values=np.arange(1.0, 25.0), units="cases", name="cases", index=index)
+        write_observations(replace(self.data, extra={"N": np.full(24, 1000.0)}), self.folder / "peopled.nc")
+        write_observations(self.data, self.folder / "plain.nc")
+
+    def objective(self, name, path, metric="correlation"):
+        return {"name": name, "metric": metric, "direction": "minimize", "data": str(self.folder / path),
+                "data_raw": str(self.folder / path), "steps": []}
+
+    def test_card_checks_as_the_engine(self):
+        """Each case the card refuses, the engine's own check refuses too; what it accepts, the engine accepts (control)."""
+        from mobile.calibration_engine import CalibrationError, _observation
+        from mobile.calibration_run_ui import observation_problems
+        good = {"rho": [0.05, 1.0], "k": [0.5, 50.0], "draws": 500}
+        peopled = [self.objective("timing", "peopled.nc"), self.objective("band", "peopled.nc", "crps")]
+        self.assertEqual(observation_problems(good, peopled), [])
+        self.assertEqual(_observation(good, peopled)["rho"], [0.05, 1.0])
+        cases = [({**good, "rho": [0.0, 1.0]}, peopled, "ρ̄"), ({**good, "rho": [0.5, 1.2]}, peopled, "ρ̄"),
+                 ({**good, "rho": [0.5, 0.2]}, peopled, "ρ̄"), ({**good, "k": [0.0, 5.0]}, peopled, "k (dispersion)"),
+                 ({**good, "k": [5.0, 1.0]}, peopled, "k (dispersion)"), ({**good, "draws": 10}, peopled, "20 draws"),
+                 (good, [self.objective("timing", "plain.nc")], "column N"), (None, peopled, "CRPS")]
+        for observation, objectives, said in cases:
+            problems = observation_problems(observation, objectives)
+            self.assertTrue(any(said in problem for problem in problems), (observation, problems))
+            with self.assertRaises(CalibrationError, msg=str(observation)):
+                _observation(observation, objectives)
+        self.assertEqual(observation_problems(None, peopled[:1]), [])  # Off, no CRPS: nothing to say
+
+    def test_said_and_table(self):
+        from mobile.calibration_run_ui import IDEAL, coverage_parts, front_columns, observation_said, sort_rows
+        observation = {"model": "negbin", "rho": [0.05, 1.0], "k": [0.5, 50.0], "draws": 500}
+        self.assertEqual(observation_said(observation), "Observational model: reported cases negative binomial around ρ̄ × the "
+                                                        "model's, ρ̄ 0.05–1 and k 0.5–50 (both calibrated, log-uniform), 500 draws per trial")
+        objectives = [{"name": "Timing", "direction": "maximize"}, {"name": "Level", "direction": "minimize"}]
+        record = {"objectives": objectives, "observation": observation, "validation": [["1989-01-01", "1993-12-31"], ["1998-01-01", "2003-12-31"]]}
+        self.assertEqual(coverage_parts(record), [("calibration", "calibration"), ("validation_1", "validation 1"),
+                                                  ("validation_2", "validation 2")])
+        self.assertTrue({"p:obs_rho", "p:obs_k", "c:calibration:0", "c:validation_2:1"} <= front_columns(record))
+        self.assertEqual(coverage_parts({"objectives": objectives, "observation": observation}), [("whole", "")])
+        front = [{"number": n, "values": [0.5, 1.0], "params": {"obs_rho": rho}, "offsets": {},
+                  "coverage": {"calibration": [share, 0.9]}} for n, rho, share in ((0, 0.3, 0.8), (1, 0.1, None), (2, 0.6, 0.95))]
+        numbers = lambda column, descending: [row["number"] for row in sort_rows(front, column, descending, {}, record)]
+        self.assertEqual(numbers("p:obs_rho", True), [2, 0, 1])
+        self.assertEqual(numbers("c:calibration:0", True), [2, 0, 1])  # Trial 1 has no coverage: last
+        # Control: without the observational model, no column of it
+        plain = {"objectives": objectives}
+        self.assertEqual(coverage_parts(plain), [])
+        self.assertEqual(front_columns(plain), {"number", IDEAL, "o0", "o1"})
+        self.assertEqual(observation_said(None), "")
+
+    def test_band_on_the_plot(self):
+        from mobile.calibration_metrics import pair
+        from mobile.calibration_run_ui import paired_band
+        from mobile.plots import REPORTED_BAND, comparison_figure
+        model = replace(self.data, values=self.data.values * 0.5, name="Inew")
+        data = replace(self.data, values=np.r_[np.full(6, np.nan), self.data.values[6:]])  # The first 6 months missing
+        low, high = model.values - 1, model.values + 2
+        band = paired_band((low, model.values, high), model, data)
+        m, d, labels = pair(model, data)
+        self.assertEqual(len(band[0]), len(labels))
+        np.testing.assert_allclose(band[0], m - 1)
+        np.testing.assert_allclose(band[1], m + 2)
+        figure = comparison_figure(model, data, labels, m, d, scale=True, reported=band)
+        names = [trace.name for trace in figure.data]
+        self.assertIn(f"Model: {REPORTED_BAND}", names)
+        self.assertIn("Model: median of the reported series (observational model)", names)
+        np.testing.assert_allclose(figure.data[-1].y, m)  # The median as it is: not scaled to the data
+        with self.assertRaises(ValueError):
+            paired_band((low[:5], model.values[:5], high[:5]), model, data)
+        # Control: without a band, the model scaled and no band
+        plain = comparison_figure(model, data, labels, m, d, scale=True)
+        self.assertNotIn(f"Model: {REPORTED_BAND}", [trace.name for trace in plain.data])
+        self.assertIsNone(paired_band(None, model, data))
+        # A climatology: the band as whiskers on the model's bars
+        months = replace(self.data, shape="climatology", values=np.arange(1.0, 13.0),
+                         index=pd.DataFrame({"month": np.arange(1, 13)}))
+        m, d, labels = pair(months, months)
+        bars = comparison_figure(months, months, labels, m, d, reported=(m - 1, m + 1))
+        np.testing.assert_allclose(bars.data[1].error_y.array, np.ones(12))
+
+
 class TestObjectiveLimitsInTheGui(unittest.TestCase):
     """The Limit field of an objective: its words by metric and steps, the value stored as the engine reads it, and the
     trials beyond a limit told apart from those where transmission died out."""
