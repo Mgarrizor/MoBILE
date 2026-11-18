@@ -99,7 +99,8 @@ def describe(step):
     if kind == "climatology":
         return f"climatology by {step['by']}"
     if kind == "transform":
-        extra = f" of {step['window']}" if step["transform"] == "moving_average" else f" (offset {step['offset']:g})" if step["transform"] in ("log", "log10") and step["offset"] else ""
+        unit = " cases" if step.get("offset_unit") == IN_CASES else ""
+        extra = f" of {step['window']}" if step["transform"] == "moving_average" else f" (offset {step['offset']:g}{unit})" if step["transform"] in ("log", "log10") and step["offset"] else ""
         return f"{TRANSFORMS[step['transform']].split(' (')[0].lower()}{extra}"
     if kind == "filter":
         if step["type"] == "band":
@@ -322,14 +323,34 @@ def climatology(observations, step, _others):
 
 # ---------------------------------------------------------------- transform
 
+IN_CASES = "case"  # The unit of a log's offset that is in cases: the offset over the population N of each value
+POPULATION = "N"  # The column of the population of each value, for an offset in cases
+
+
+def log_offset(observations, step):
+    """The offset of a log step for each value: the offset itself (offset_unit "value", by default), or in cases
+    (offset_unit "case"), the offset over the population of each value (the column N), so that a log of cases per person
+    is log((cases + offset) / N), e.g. log((cases + 1) / N): the usual log(y + 1) of counts, made per person."""
+    offset = float(step.get("offset") or 0)
+    if step.get("offset_unit", "value") != IN_CASES:
+        return offset
+    if POPULATION not in observations.extra:
+        raise DataError("an offset in cases needs the population of each value (a column N): the observations' own, or the "
+                        "observational model's")
+    population = np.asarray(observations.extra[POPULATION], dtype="f8")
+    if np.any(~(population > 0)):
+        raise DataError("an offset in cases needs a population N above 0 for every value")
+    return offset / population
+
+
 def transform(observations, step, _others):
     kind, values, sd = step["transform"], observations.values, observations.sd
     if kind in ("log", "log10"):
-        shifted = values + float(step.get("offset") or 0)
+        offset = log_offset(observations, step)
+        shifted = values + offset
         if np.any(shifted[~np.isnan(shifted)] <= 0):
             raise DataError("the log needs positive values: add an offset, e.g. 1 for counts with zeros")
         log = np.log if kind == "log" else np.log10
-        offset = float(step.get("offset") or 0)
 
         def operate(v):
             with np.errstate(divide="ignore", invalid="ignore"):  # A value cut at the ends may not be positive: missing
