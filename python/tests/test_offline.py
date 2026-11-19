@@ -2490,6 +2490,63 @@ print("Program finished successfully")
 """
 
 
+class TestLogOffsetInCases(unittest.TestCase):
+    """A log's offset in cases: log((cases + 1) / N) for the observations (their column N) and for each reported series the
+    observational model draws (the population of each month it is made per person by)."""
+
+    @staticmethod
+    def monthly(values, population=None, first="1990-01"):
+        from mobile.calibration_data import Observations
+        start = pd.date_range(first, periods=len(values), freq="MS")
+        index = pd.DataFrame({"start": start.values.astype("datetime64[D]"),
+                              "end": (start + pd.offsets.MonthEnd(0)).values.astype("datetime64[D]")})
+        extra = {} if population is None else {"N": np.asarray(population, float)}
+        return Observations(shape="dated", values=np.asarray(values, float), index=index, units="cases", name="cases",
+                            aggregation="sum", extra=extra)
+
+    LOG = {"kind": "transform", "transform": "log", "offset": 1.0, "offset_unit": "case", "window": 3}
+
+    def test_observations(self):
+        from mobile.calibration_data import DataError
+        from mobile.calibration_steps import apply_steps
+        cases, population = np.array([0, 3, 40, 500, 0, 7] * 4, float), np.linspace(2e5, 4e5, 24)
+        divide = {"kind": "arithmetic", "operation": "divide", "operand": "column", "column": "N", "number": 1, "units": ""}
+        result = apply_steps(self.monthly(cases, population), [divide, self.LOG])
+        np.testing.assert_allclose(result.values, np.log((cases + 1) / population), rtol=1e-12)
+        # Control: the same offset per person is not the same series (the population is not 1)
+        plain = apply_steps(self.monthly(cases, population), [divide, {**self.LOG, "offset_unit": "value"}])
+        self.assertFalse(np.allclose(plain.values, result.values))
+        with self.assertRaisesRegex(DataError, "offset in cases needs the population"):
+            apply_steps(self.monthly(cases / 3e5), [self.LOG])
+
+    def test_reported_series_drawn(self):
+        from mobile.calibration_model import process_observed
+        from mobile.observation import draw
+        months = 60
+        counts = 50 + 40 * np.sin(np.arange(months) * 2 * np.pi / 12) ** 2  # Cases of the model, a month
+        population = np.linspace(3e5, 5e5, months)
+        data = self.monthly(np.round(counts * 0.3), population)
+        divide = {"kind": "arithmetic", "operation": "divide", "operand": "column", "column": "N", "number": 1, "units": ""}
+        climatology = {"kind": "climatology", "by": "month"}
+        observation = {"rho": 0.3, "k": 1.0, "draws": 40, "seed": 7}
+        member = self.monthly(counts / population)  # Per person, as model_members gives it (not used for the draws)
+        for steps, expected in (([self.LOG], lambda y: np.log((y + 1) / population)),
+                                ([self.LOG, climatology], lambda y: np.log((y + 1) / population).reshape(-1, 12).mean(axis=0))):
+            model, data_out, _, processed = process_observed([member], [self.monthly(counts)], steps, data, [divide] + steps,
+                                                             observation)
+            drawn = draw(counts, 0.3, 1.0, 40, 7)
+            self.assertGreater((drawn == 0).sum(), 0)  # Zero months among the draws: the offset matters
+            np.testing.assert_allclose(processed, np.array([expected(row) for row in drawn]), rtol=1e-10)
+            self.assertTrue(np.all(np.isfinite(processed)))
+
+    def test_refused_without_the_observational_model(self):
+        from mobile.calibration_engine import CalibrationError, _observation
+        objective = {"name": "level", "metric": "rmse", "steps": [self.LOG]}
+        with self.assertRaisesRegex(CalibrationError, "offset in cases needs the observational model"):
+            _observation(None, [objective])
+        self.assertIsNone(_observation(None, [{**objective, "steps": [{**self.LOG, "offset_unit": "value"}]}]))
+
+
 class TestFilterEdges(unittest.TestCase):
     """The ends of a frequency filter, where it starts up: measured on test cycles, cut by default, shown shaded."""
 

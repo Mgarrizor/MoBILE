@@ -307,7 +307,10 @@ def process_observed(members, counts, model_steps, data, data_steps, observation
     from .calibration_steps import PREPARING, apply_steps
     from .observation import DRAWS, draw, median_of, process_draws
 
-    _, data_out, span = process_both(members, model_steps, data, data_steps, others, model_note, validation, part)
+    # Only the data and the span are taken here: the model's side of process_both (its runs per person, with no population
+    # of their own) is not used, so a log offset in cases is taken per value there
+    plain = [{**step, "offset_unit": "value"} if step.get("offset_unit") else step for step in model_steps]
+    _, data_out, span = process_both(members, plain, data, data_steps, others, model_note, validation, part)
     first = next((i for i, step in enumerate(model_steps) if step.get("kind") not in PREPARING), len(model_steps))
     prepare, rest = model_steps[:first], model_steps[first:]
     if span is not None:
@@ -318,7 +321,8 @@ def process_observed(members, counts, model_steps, data, data_steps, observation
         raise DataError("the runs do not give the same periods after the steps")
     mean = np.nanmean(np.array([np.asarray(m.values, dtype="f8") for m in monthly]), axis=0)  # Cases of the model, a month
     population = _population(monthly[0], data)
-    base = replace(monthly[0], values=mean / population, units="cases per person")
+    # Per person, with the population of each month for the steps that need it (a log's offset in cases)
+    base = replace(monthly[0], values=mean / population, units="cases per person", extra={**monthly[0].extra, "N": population})
     drawn = draw(mean, observation["rho"], observation["k"], observation.get("draws", DRAWS), observation.get("seed"))
     matrix = drawn / population  # Per person, as the data
     processed, shape = process_draws(base, matrix, rest, validation, part, others)

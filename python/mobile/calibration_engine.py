@@ -50,7 +50,7 @@ from .calibration_data import DataError, drop_window, read_observations, select_
 from .calibration_metrics import DIRECTIONS, ENSEMBLE, pair, metrics
 from .observation import band as _band, coverage as coverage_of, crps
 from .calibration_model import PEOPLE_OUTPUTS, SPACES, model_count_members, model_members, process_both, process_observed, seed_spread, validation_parts, validation_windows
-from .calibration_steps import apply_steps
+from .calibration_steps import IN_CASES, apply_steps
 from .cells import cell_areas
 from .config import MAX_PATH_LENGTH, ConfigError
 from .driving import LAT_NAMES, LON_NAMES, POP_NAMES, TEMP_NAMES, TIME_NAMES, first_name
@@ -425,11 +425,15 @@ def _temperature(temperature, temp_file, pop_file):
 
 def _observation(observation, objectives):
     """The observational model of a calibration, checked: the ranges of rho (in (0, 1]) and k (above 0), the draws; None
-    if none (then no objective may use a metric of the band, CRPS)."""
+    if none (then no objective may use a metric of the band, CRPS, nor a log offset in cases on the model's side: the
+    model's series has no population N of its own without it)."""
     if not observation:
         for objective in objectives:
             if objective["metric"] in ENSEMBLE:
                 raise CalibrationError(f"{objective['name']}: {objective['metric']} needs the observational model")
+            if any(step.get("offset_unit") == IN_CASES for step in objective.get("steps", [])):
+                raise CalibrationError(f"{objective['name']}: a log offset in cases needs the observational model (the "
+                                       "model's reported cases and their population)")
         return None
     try:
         rho = [float(value) for value in observation["rho"]]

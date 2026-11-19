@@ -20,7 +20,7 @@ from dataclasses import replace
 from scipy import signal
 
 from .calibration_data import DataError, drop_window, select_window
-from .calibration_steps import TIME_UNITS, _design, apply_steps, edge_error_of, edge_reach, regular_series
+from .calibration_steps import TIME_UNITS, _design, apply_steps, edge_error_of, edge_reach, log_offset, regular_series
 
 DRAWS = 500  # Reported series drawn from each model run, by default
 LEVELS = (2.5, 50.0, 97.5)  # Percentiles of the band: its low end, the median, its high end
@@ -88,7 +88,7 @@ def _batch_step(matrix, observations, step):
     if kind == "transform" and step.get("transform") in ("log", "log10", "anomaly"):
         if step["transform"] == "anomaly":
             return matrix - np.nanmean(matrix, axis=1, keepdims=True)
-        offset = float(step.get("offset") or 0)
+        offset = log_offset(observations, step)  # A number, or one for each value (in cases: over its population N)
         log = np.log if step["transform"] == "log" else np.log10
         shifted = matrix + offset
         if np.any(shifted[np.isfinite(shifted)] <= 0):
