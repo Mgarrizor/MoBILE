@@ -7,6 +7,7 @@ the calibration with Optuna are in the card below them (calibration_run_ui.py)."
 import datetime
 import itertools
 import re
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -21,7 +22,8 @@ from .calibration_data import (
 from .calibration_engine import log_base
 from .calibration_metrics import DIRECTIONS, ENSEMBLE, METRICS, metrics, pair
 from .calibration_model import (
-    DRIVERS, SEED_MEAN, SPACES, chosen_seeds, default_aggregation, driver_panel, members_mean, model_members, process_both, run_choices,
+    DRIVERS, SEED_MEAN, SPACES, _population, chosen_seeds, default_aggregation, driver_panel, members_mean, model_members, process_both,
+    run_choices,
     run_elsewhere, run_seeds, run_variables, seed_spread, shared_span, validation_parts, validation_windows,
 )
 from .calibration_progress import DOING, DONE, TODO, anchor, progress_column
@@ -30,8 +32,8 @@ from .calibration_run_ui import (
     typed_validation,
 )
 from .calibration_steps import (
-    AGGREGATE_PERIODS, COMBINATIONS, EDGE, EDGE_ERROR, EDGES, FILTER_MISSING, FILTERS, OPERATIONS, PREPARING, RECIPES, SELECTIONS,
-    STATISTICS, STEP_KINDS, TIME_UNITS, TRANSFORMS, apply_steps, default_step, describe, recipe_steps,
+    AGGREGATE_PERIODS, COMBINATIONS, EDGE, EDGE_ERROR, EDGES, FILTER_MISSING, FILTERS, IN_CASES, OPERATIONS, POPULATION, PREPARING,
+    RECIPES, SELECTIONS, STATISTICS, STEP_KINDS, TIME_UNITS, TRANSFORMS, apply_steps, default_step, describe, recipe_steps,
 )
 from .config import ConfigError
 from .layout import OPTUNA_URL, flags_of, output_label, output_switch_id, with_tip
@@ -181,7 +183,14 @@ def _comparison_card():
                 ui.div(ui.input_action_button("cal_recipe_apply", "Apply to both boxes", class_="btn-sm"), class_="pt-4"),
                 col_widths=(5, 7), fill=False,
             ),
+            ui.panel_conditional(f"{LOGGED_RECIPES!r}.includes(input.cal_recipe)", ui.input_radio_buttons(
+                "cal_recipe_log", with_tip("The log, in both boxes", "Chosen each time a recipe is applied, the same for the "
+                                           "model and the data. Per person, the offset is added to the cases per person; in "
+                                           "cases, it is divided by the population N of each month first. Another offset can "
+                                           "be set afterwards in the log step."),
+                {choice: label for choice, (_, label) in RECIPE_LOGS.items()}, selected=[])),
             ui.output_ui("cal_recipe_note"),
+            ui.tags.script(ui.HTML(OFFSET_FOLLOWS)),
             ui.layout_columns(
                 ui.input_text("cal_objective_name", "Name", placeholder="e.g. timing", width="100%"),
                 ui.input_select("cal_objective_metric", "Metric", {key: text.split(":")[0] + (" (observational model)" if key in ENSEMBLE
@@ -297,9 +306,10 @@ def _span(observations):
     return None, None
 
 
-def step_controls(step, number, count, before, others, prefix=DATA):
+def step_controls(step, number, count, before, others, prefix=DATA, model_population=None):
     """The card of one step: its number and kind, its buttons, and its choices, filled with its values. before is the
-    observations the step applies to (after the steps above it), for the choices that depend on them."""
+    observations the step applies to (after the steps above it), for the choices that depend on them. model_population:
+    for the Model box, whether the observations have a population N (for a log's offset in cases); None in the Data box."""
     uid, kind = step["uid"], step["kind"]
     sid = lambda name: step_id(prefix, uid, name)
     when = lambda name, value, *children: ui.panel_conditional(f"input.{sid(name)} === '{value}'", *children)
@@ -349,7 +359,8 @@ def step_controls(step, number, count, before, others, prefix=DATA):
     elif kind == "transform":
         body = [ui.input_select(sid("transform"), None, TRANSFORMS, selected=step["transform"]),
                 ui.panel_conditional(f"['log', 'log10'].includes(input.{sid('transform')})",
-                                     ui.input_numeric(sid("offset"), with_tip("Offset", "Added before the log: 1 for counts with zeros."), value=step["offset"])),
+                                     ui.input_numeric(sid("offset"), with_tip("Offset", "Added before the log: 1 for counts with zeros."), value=step["offset"]),
+                                     offset_unit_control(step, sid, before, model_population)),
                 when("transform", "moving_average", ui.input_numeric(sid("window"), "Values in the window", value=step["window"], min=2, step=1))]
     elif kind == "filter":
         body = [ui.input_select(sid("type"), with_tip("Filter", "A Butterworth filter of order 4, run forward and backward, so "
@@ -396,6 +407,78 @@ def step_controls(step, number, count, before, others, prefix=DATA):
     return ui.div(header, *body, class_="border rounded px-2 pt-1 pb-0 mb-2")
 
 
+# The offset of a log, written in the labels of its Offset in, follows the Offset as it is typed
+OFFSET_FOLLOWS = """
+document.addEventListener('input', function(event) {
+  if (!event.target.id) return;
+  const typed = Number(event.target.value);
+  if (event.target.value === '' || !isFinite(typed)) return;
+  document.querySelectorAll(`[data-offset-of="${event.target.id}"]`).forEach(span => { span.textContent = String(typed); });
+});
+"""
+
+
+# The log of a recipe, chosen each time it is applied (no default), the same in both boxes: {choice: (offset, label)}
+RECIPE_LOGS = {"value": (1e-5, "log(cases/N + 1e-5): the offset per person, in the values' units (1e-5)"),
+               IN_CASES: (1.0, "log((cases + 1)/N): the offset in cases (1)")}
+LOGGED_RECIPES = [key for key in RECIPES if any(step["kind"] == "transform" and step["transform"] in ("log", "log10")
+                                                for step in recipe_steps(key, []))]
+
+
+def with_recipe_log(steps, choice):
+    """The steps of a recipe with its own log (those without an uid: not kept from the box) set to the choice of
+    RECIPE_LOGS, whatever log the box had before."""
+    offset = RECIPE_LOGS[choice][0]
+    chosen = lambda step: {**{key: value for key, value in step.items() if key != "offset_unit"}, "offset": offset,
+                           **({"offset_unit": IN_CASES} if choice == IN_CASES else {})}
+    return [chosen(step) if "uid" not in step and step["kind"] == "transform" and step["transform"] in ("log", "log10") else step
+            for step in steps]
+
+
+def recipe_cases_problems(data_at_log, observation_on, population):
+    """Why a recipe's log in cases cannot go in both boxes, or []: the Data box needs a population N in the values its
+    log applies to (data_at_log, or None if they cannot be made); the Model box the observational model and
+    observations with N (population, or None)."""
+    found = []
+    if data_at_log is None or POPULATION not in data_at_log.extra:
+        found.append("Data box: the values the log applies to have no population N (a column N) to divide the offset by")
+    if not observation_on:
+        found.append("Model box: the observational model is off (Calibration with Optuna, below); it gives the model's series "
+                     "the population of the observations")
+    elif population is None:
+        found.append("Model box: the observations have no population N")
+    return found
+
+
+def offset_unit_control(step, sid, before, model_population=None):
+    """The unit of a log's offset: the values' units, or cases (÷ N: the offset over the population of each value). In the
+    Data box, offered when the values the step applies to have a column N; in the Model box (model_population not None),
+    when the observational model is on (it gives the model's series the population of the observations) and the
+    observations have N. A step already in cases keeps the choice, with what it needs in red."""
+    offset = f"{float(step.get('offset') or 0):g}"
+    shown = lambda: ui.tags.span(offset, **{"data-offset-of": sid("offset")})  # Follows the Offset as it is typed
+    labels = {"value": ui.TagList(f"{step['transform']}(value + ", shown(), "): the offset in the values' units (", shown(), ")"),
+              IN_CASES: ui.TagList(f"{step['transform']}((cases + ", shown(), ")/N): the offset in cases (", shown(), ")")}
+    choice = ui.input_radio_buttons(sid("offset_unit"), with_tip("Offset in", "In the values' units, the offset is added to "
+                                    "each value. In cases, it is divided by the population N of each value first, for cases "
+                                    "per person: an offset of 1 is then the usual log(y + 1) of counts, made per person."),
+                                    labels, selected=IN_CASES if in_cases(step) else "value")
+    needs = lambda text: ui.p(text, class_="small text-danger mb-1")
+    if model_population is None:  # Data box: its own column N
+        if before is not None and POPULATION in before.extra:
+            return choice
+        return ui.div(choice, needs("An offset in cases needs the population of each value, a column N: these values "
+                                    "have none.")) if in_cases(step) else None
+    if not model_population:
+        return ui.div(choice, needs("An offset in cases needs the observations' population, a column N: load "
+                                    "observations with one.")) if in_cases(step) else None
+    if in_cases(step):
+        return ui.div(choice, ui.panel_conditional("!input.cal_observation", needs(
+            "An offset in cases on the model's side needs the observational model (Calibration with Optuna, below): it "
+            "gives the model's series the population of the observations. Turn it on, or take the offset in the values' units.")))
+    return ui.panel_conditional("input.cal_observation", choice)
+
+
 def read_step(step, value):
     """A step with its choices as the controls give them; value(name) is the value of a control, or None if absent."""
     kind, result = step["kind"], dict(step)
@@ -419,7 +502,9 @@ def read_step(step, value):
     elif kind == "climatology":
         take("by")
     elif kind == "transform":
-        take("transform"), take("offset", lambda v: v or 0.0), take("window", lambda v: int(v) if v else 0)
+        take("transform"), take("offset", lambda v: v or 0.0), take("window", lambda v: int(v) if v else 0), take("offset_unit")
+        if result.get("offset_unit") != IN_CASES or result["transform"] not in ("log", "log10"):
+            result.pop("offset_unit", None)  # The values' units, as before: not written
     elif kind == "filter":
         take("type"), take("short", lambda v: v or 0.0), take("long", lambda v: v or 0.0), take("unit")
         take("missing"), take("max_gap", lambda v: int(v) if v else 0)
@@ -443,17 +528,43 @@ def summary_text(observations):
             f"{f', {missing} missing' if missing else ''}{', with uncertainty' if observations.sd is not None else ''}.")
 
 
-def steps_before(raw, steps, others):
-    """The observations each step applies to: raw, then after each step in turn (None after a step that fails)."""
+def steps_before(raw, steps, others, population=None):
+    """The observations each step applies to: raw, then after each step in turn (None after a step that fails). With
+    population (observations with a column N), a log in cases gets N first, as in peopled."""
     result, current = [], raw
     for step in steps:
         result.append(current)
         if current is not None:
             try:
-                current = apply_steps(current, [without_uid(step)], others)
+                current = apply_steps(with_population(current, step, population), [without_uid(step)], others)
             except DataError:
                 current = None
     return result
+
+
+def in_cases(step):
+    """Whether a step is a log whose offset is in cases: the offset over the population N of each value."""
+    return step.get("kind") == "transform" and step.get("transform") in ("log", "log10") and step.get("offset_unit") == IN_CASES
+
+
+def with_population(observations, step, population):
+    """The observations, with the population N of `population` (observations as loaded, with a column N) for each of
+    their values if the step is a log in cases and they have none: the population the observational model makes the
+    model's reported series per person by (calibration_model._population, matched by month). Raises DataError if it
+    cannot be matched."""
+    if population is None or not in_cases(step) or POPULATION in observations.extra:
+        return observations
+    return replace(observations, extra={**observations.extra, POPULATION: _population(observations, population)})
+
+
+def peopled(members, steps, others, population):
+    """For the Model box: (the members processed up to the first log in cases, each then given the population N of
+    `population` as with_population does; the steps left), so that the box shows what the trials compare with the
+    observational model. The members and the steps as they are without such a log or without population."""
+    first = next((i for i, step in enumerate(steps) if in_cases(step)), None)
+    if first is None or population is None:
+        return members, steps
+    return [with_population(apply_steps(member, steps[:first], others), steps[first], population) for member in members], steps[first:]
 
 
 def metrics_table(values, model, data, parts=()):
@@ -488,7 +599,7 @@ def calibration_server(input, output, session, setup, setup_state):
     saved = reactive.value(None)
     uids = itertools.count()
 
-    def pipeline(prefix, raw, others, name, members=lambda: [], span=lambda: None):
+    def pipeline(prefix, raw, others, name, members=lambda: [], span=lambda: None, population=None):
         """The steps of one box, with their cards, the comparison with an earlier stage and the plot. raw() is the
         observations before the steps (or None), already cut to span() (the years the model and the data both cover, or
         None), others() the observations to combine with, name() the title. With several members() (the seeds of a seed
@@ -515,13 +626,16 @@ def calibration_server(input, output, session, setup, setup_state):
             if observations is None:
                 return None
             current, other = steps(), others()
-            befores = steps_before(observations, current, other)
+            people = population() if population else None
+            befores = steps_before(observations, current, other, people)
+            model_population = None if population is None else people is not None
             return ui.div(
                 ui.tags.strong("Processing", class_="small"),
                 ui.p("Steps applied in order. Add, change, move or remove them; the plot follows.", class_="small text-muted mb-1"),
                 ui.p(f"Cut to {span()[0]} to {span()[1]}, the years the model and the data both cover, before the steps.",
                      class_="small mb-1", style="color: #2563eb;") if span() else None,
-                *[step_controls(step, i + 1, len(current), befores[i], other, prefix) for i, step in enumerate(current)],
+                *[step_controls(step, i + 1, len(current), befores[i], other, prefix, model_population)
+                  for i, step in enumerate(current)],
                 ui.div(ui.input_select(f"{prefix}_add_kind", None, STEP_KINDS, width="24rem"),
                        ui.input_action_button(f"{prefix}_add_step", "Add step", class_="btn-sm ms-2 mb-3"),
                        class_="d-flex align-items-start"),
@@ -573,10 +687,12 @@ def calibration_server(input, output, session, setup, setup_state):
             if observations is None:
                 return None, None
             try:
-                seeds = members()
+                seeds, people = members(), population() if population else None
                 if len(seeds) > 1:
-                    return seed_spread(seeds, [without_uid(s) for s in live()], others(), observations.notes[0]), None
-                return apply_steps(observations, [without_uid(s) for s in live()], others()), None
+                    seeds, rest = peopled(seeds, [without_uid(s) for s in live()], others(), people)
+                    return seed_spread(seeds, rest, others(), observations.notes[0]), None
+                [observations], rest = peopled([observations], [without_uid(s) for s in live()], others(), people)
+                return apply_steps(observations, rest, others()), None
             except DataError as error:
                 return None, str(error)
 
@@ -607,7 +723,9 @@ def calibration_server(input, output, session, setup, setup_state):
             if k > len(current) - 1:
                 return None, ""
             try:
-                stage = apply_steps(observations, [without_uid(s) for s in current[:k]], others())
+                [observations], rest = peopled([observations], [without_uid(s) for s in current[:k]], others(),
+                                               population() if population else None)
+                stage = apply_steps(observations, rest, others())
             except DataError:
                 return None, ""
             return stage, "Before the steps" if k == 0 else f"After step {k}"
@@ -945,8 +1063,15 @@ def calibration_server(input, output, session, setup, setup_state):
         return (Path(folder).name if folder not in (None, "", NONE) else "",
                 model_raw_or_error()[1] or "Choose a run and an output.")
 
+    def observed_population():
+        """The observations as loaded, cut to the years shared, if they have a population N: what a log in cases in the
+        Model box takes the population from, as the observational model does; None without."""
+        observations = cut(data_raw())
+        return observations if observations is not None and POPULATION in observations.extra else None
+
     model = pipeline(MODEL, lambda: cut(model_raw_or_error()[0]), dict, model_name,
-                     lambda: [cut(member) for member in model_members_or_error()[0]], span=common_span)
+                     lambda: [cut(member) for member in model_members_or_error()[0]], span=common_span,
+                     population=observed_population)
 
     def draw_model_status():
         shown = status(*model.processed(), model_name()[0])
@@ -1152,12 +1277,32 @@ def calibration_server(input, output, session, setup, setup_state):
             recipe_note.set(("Choose a recipe first.", True))
             return
         title, metric, what = RECIPES[recipe]
-        kept, boxes = [], []
+        choice = input.cal_recipe_log() if recipe in LOGGED_RECIPES else None
+        if recipe in LOGGED_RECIPES and choice not in RECIPE_LOGS:
+            recipe_note.set(("Choose the log under the recipe, log(cases/N + 1e-5) or log((cases + 1)/N), before applying: it "
+                             "goes in both boxes.", True))
+            return
+        made = []  # (box, label, steps before, steps after) of both boxes, set only if both can take them
         for box, label in ((model, "Model"), (data, "Data")):
             box.snapshot()
             with reactive.isolate():
                 before = box.steps()
                 steps = recipe_steps(recipe, before)
+            made.append((box, label, before, with_recipe_log(steps, choice) if choice else steps))
+        if choice == IN_CASES:
+            with reactive.isolate():
+                data_steps = made[1][3]
+                at = next(i for i, step in enumerate(data_steps) if in_cases(step))
+                raw = cut(data_raw())
+                data_at_log = steps_before(raw, data_steps, others_for(chosen()))[at] if raw is not None else None
+                problems = recipe_cases_problems(data_at_log, "cal_observation" in input and input.cal_observation(),
+                                                 observed_population())
+            if problems:
+                recipe_note.set(("log((cases + 1)/N) cannot go in both boxes: " + "; ".join(problems) + ". Nothing was "
+                                 "changed: choose log(cases/N + 1e-5), or fix this first.", True))
+                return
+        kept, boxes = [], []
+        for box, label, before, steps in made:
             box.steps.set([step if "uid" in step else {"uid": str(next(uids)), **step} for step in steps])
             kept.append(sum(step["kind"] in PREPARING for step in steps))
             said = lambda found: "; ".join(f"{i}. {describe(without_uid(step))}" for i, step in found) or "none"
@@ -1169,9 +1314,8 @@ def calibration_server(input, output, session, setup, setup_state):
         log = next((step for step in steps if step["kind"] == "transform" and step["transform"] == "log"), None)
         text = f"{title}: {what}. Metric: {METRICS[metric].split(':')[0]}. {' '.join(boxes)}"
         if log is not None:
-            text += (f" The log adds {log['offset']:g} on both sides, in the units of the values (1e-5 suits cases per person; "
-                     f"for counts, e.g. 1). Against a model far too low it weighs: the low values sink towards the offset, so the "
-                     f"shape is penalised too, not only the level.")
+            text += (f" The log, in both boxes: {RECIPE_LOGS[choice][1]}. Against a model far too low it weighs: the low values "
+                     f"sink towards the offset, so the shape is penalised too, not only the level.")
         if not all(kept):
             text += (" A box has no step preparing the values: the model and the data must be in the same periods and units "
                      "before these steps (e.g. aggregate into months, divide by the population).")

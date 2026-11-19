@@ -293,7 +293,13 @@ The **Data** box:
    - **Climatology** by calendar month or by season: the mean over the years, with their spread as error bars. From
      monthly values a season is the mean month of the season; for seasonal totals, aggregate into seasons (sum) first.
    - **Transform**: natural log or log10 (with an offset, e.g. 1 for counts with zeros), standardise, anomaly from the
-     mean, moving average.
+     mean, moving average. A log's **Offset in** is written as its formula with the offset typed: **log(value +
+     offset)**, the offset in the values' units, or **log((cases + offset)/N)**, the offset in cases, divided by the
+     population N of each value, for cases per person: an offset of 1 is then the usual log(y + 1) of counts, made per
+     person (the step reads e.g. "log (offset 1 cases)"). In the Data box the second is offered when the values have a
+     column N. In the Model box it needs the observational model (Calibration with Optuna) and observations with N: the
+     model's series takes the observations' population of each month, as the observational model makes its reported
+     series per person, and Create only and Run refuse it with the switch off.
    - **Frequency filter**: low, high or band pass, with the cut-off periods in days, months or years (a Butterworth filter
      of order 4, run forward and backward, so nothing shifts in time). The cut-off is gradual: half the amplitude is kept
      at the cut-off period, so to remove the annual cycle cut at about 2 years. Missing
@@ -398,8 +404,11 @@ be changed.
 | Decadal tendency, scale-free | low pass 5 years | Correlation | the timing of the rises and falls, blind to their size |
 
 In log space RMSE² = bias² + RMSE² of the anomalies, so the decadal shape and level split the RMSE of the low-pass series
-without counting the shape twice. The log adds an offset on both sides (that of a log already among the steps, else
-1e-5, in the units of the values: it suits cases per person; for counts, e.g. 1). Against a model far too low it
+without counting the shape twice. The log, the same in both boxes, is chosen under the recipe each time it is applied,
+with nothing chosen at first: **log(cases/N + 1e-5)**, the offset per person, in the values' units, or **log((cases +
+1)/N)**, the offset in cases. Apply refuses without a choice, and refuses the second unless both boxes can take it
+(the Data box's values a column N; the Model box the observational model on and observations with N), changing
+nothing. Another offset can be set afterwards in the log step. Against a model far too low it
 weighs: its low values sink towards the offset and flatten, so the shape is penalised too, not only the level. On
 synthetic monthly cases per person (1980–2003, about 1e-4 to 2e-3), the decadal shape's RMSE was 0.04 for the model
 right, 0.06 for 10 times too many cases and 0.23 for 10 times too few; the seasonal shape's correlation and the decadal
