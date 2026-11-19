@@ -30,7 +30,7 @@ from .calibration_data import DataError, period_kind, read_observations
 from .calibration_metrics import DIRECTIONS, ENSEMBLE, pair
 from .calibration_model import DRIVER_PERIODS, DRIVERS, PEOPLE_OUTPUTS, driver_panel, validation_parts, validation_windows
 from .calibration_results import FIGURES, ResultsError, beyond_limits, died_out, figure_help, results_figure
-from .calibration_steps import STATISTICS
+from .calibration_steps import IN_CASES, STATISTICS
 from .calibration_progress import DOING, DONE, TODO, anchor
 from .cluster_ui import cluster_section, cluster_server
 from .config import ConfigError
@@ -648,6 +648,10 @@ def observation_problems(observation, objectives):
         if crps:
             found.append(f"{', '.join(crps)}: CRPS scores the reported series of the observational model: turn it on, or "
                          "choose another metric.")
+        cases = [o["name"] for o in objectives if any(step.get("offset_unit") == IN_CASES for step in o.get("steps") or [])]
+        if cases:
+            found.append(f"{', '.join(cases)}: a log offset in cases on the model's side needs the observational model (the "
+                         "model's reported cases and their population): turn it on, or take the offset in the values' units.")
         return found
     numbers = lambda pair: all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in pair)
     rho, k, draws = observation["rho"], observation["k"], observation["draws"]

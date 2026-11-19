@@ -4965,6 +4965,106 @@ class TestTrendInTheCard(unittest.TestCase):
         self.assertEqual([row["number"] for row in sort_rows(front, TREND, False, {})], [2, 0, 1])
 
 
+class TestLogOffsetInCasesInTheGui(unittest.TestCase):
+    """Handover item 35: a log's offset in cases in the step editor (the values' units, as before, or cases ÷ N), the
+    Model box taking the observations' N as the observational model does, and the card refusing it on the model's side
+    without the observational model, as the engine does."""
+
+    @staticmethod
+    def monthly(values, population=None, first="1990-01"):
+        from mobile.calibration_data import Observations
+        start = pd.date_range(first, periods=len(values), freq="MS")
+        index = pd.DataFrame({"start": start.values.astype("datetime64[D]"),
+                              "end": (start + pd.offsets.MonthEnd(0)).values.astype("datetime64[D]")})
+        extra = {} if population is None else {"N": np.asarray(population, float)}
+        return Observations(shape="dated", values=np.asarray(values, float), index=index, units="cases per person",
+                            name="cases", aggregation="sum", extra=extra)
+
+    def test_read_step_writes_the_unit_only_for_a_log_in_cases(self):
+        from mobile.calibration_ui import read_step
+        log = {"uid": "1", "kind": "transform", "transform": "log", "offset": 1e-5, "window": 3}
+        typed = lambda **values: (lambda name: values.get(name))
+        self.assertEqual(read_step(log, typed(offset=1.0, offset_unit="case"))["offset_unit"], "case")
+        self.assertNotIn("offset_unit", read_step(log, typed(offset=1e-5, offset_unit="value")))  # Control: as before
+        self.assertNotIn("offset_unit", read_step({**log, "offset_unit": "case"}, typed(transform="anomaly", offset_unit="case")))
+        # Not drawn (e.g. the choice is not offered): the step keeps what it had
+        self.assertEqual(read_step({**log, "offset_unit": "case"}, typed())["offset_unit"], "case")
+
+    def test_the_choice_where_it_applies(self):
+        from mobile.calibration_ui import offset_unit_control
+        log = {"uid": "1", "kind": "transform", "transform": "log", "offset": 1.0, "window": 3}
+        cases = {**log, "offset_unit": "case"}
+        sid = lambda name: f"data_step_1_{name}"
+        peopled, plain = self.monthly([1.0, 2.0], [1000, 1000]), self.monthly([1.0, 2.0])
+        offered = str(offset_unit_control(log, sid, peopled))  # Data box with N: offered, the formulas with the offset typed
+        self.assertIn('log(value + <span data-offset-of="data_step_1_offset">1</span>): the offset in the values', offered)
+        self.assertIn('log((cases + <span data-offset-of="data_step_1_offset">1</span>)/N): the offset in cases (', offered)
+        self.assertIsNone(offset_unit_control(log, sid, plain))  # Control: without N, not offered
+        self.assertIn("these values have none", str(offset_unit_control(cases, sid, plain)))  # Already in cases: said
+        model = str(offset_unit_control(log, sid, plain, model_population=True))
+        self.assertIn("input.cal_observation", model)  # Model box: offered with the observational model on
+        self.assertIsNone(offset_unit_control(log, sid, plain, model_population=False))
+        self.assertIn("needs the observational model", str(offset_unit_control(cases, sid, plain, model_population=True)))
+        self.assertIn("load observations with one", str(offset_unit_control(cases, sid, plain, model_population=False)))
+
+    def test_model_box_takes_the_observations_population(self):
+        """The Model box gives log(m + 1/N) for a model per person m and the observations' N of each month; control: per
+        value, log(m + 1); without the observations' N, the engine's own error."""
+        from mobile.calibration_data import DataError
+        from mobile.calibration_steps import apply_steps
+        from mobile.calibration_ui import peopled, steps_before
+        model = self.monthly([0.0, 1e-4, 2e-3])
+        data = self.monthly([0.0, 1.0, 20.0], [10000.0, 10000.0, 12000.0])
+        log = {"kind": "transform", "transform": "log", "offset": 1.0, "window": 3, "offset_unit": "case"}
+        steps = [{"kind": "arithmetic", "operation": "multiply", "operand": "number", "column": None, "number": 1.0, "units": ""}, log]
+        [member], rest = peopled([model], steps, {}, data)
+        np.testing.assert_allclose(apply_steps(member, rest, {}).values, np.log(model.values + 1 / data.extra["N"]))
+        np.testing.assert_allclose(apply_steps(model, [{**log, "offset_unit": "value"}], {}).values, np.log(model.values + 1))
+        with self.assertRaisesRegex(DataError, "a column N"):
+            apply_steps(*peopled([model], steps, {}, None)[0], steps, {})
+        self.assertEqual(steps_before(model, steps, {}, data)[1].values.tolist(), model.values.tolist())
+        # The Data box: its own N, the same log of (cases + 1) / N
+        cases = self.monthly(data.values / data.extra["N"], data.extra["N"])
+        np.testing.assert_allclose(apply_steps(cases, [log], {}).values, np.log((data.values + 1) / data.extra["N"]))
+
+    def test_recipe_log_chosen_each_time(self):
+        """A recipe's log: chosen each time, no default; set on the recipe's own log whatever the box had; in cases only
+        where both boxes can take it; a recipe without a log asks nothing (control)."""
+        from mobile.calibration_steps import RECIPES, recipe_steps
+        from mobile.calibration_ui import LOGGED_RECIPES, RECIPE_LOGS, recipe_cases_problems, with_recipe_log
+        self.assertEqual(set(LOGGED_RECIPES), {"seasonal_shape", "decadal_shape", "decadal_level"})
+        self.assertEqual(set(RECIPES) - set(LOGGED_RECIPES), {"decadal_tendency"})
+        self.assertEqual([label for _, label in RECIPE_LOGS.values()],
+                         ["log(cases/N + 1e-5): the offset per person, in the values' units (1e-5)",
+                          "log((cases + 1)/N): the offset in cases (1)"])
+        kept = {"uid": "7", "kind": "transform", "transform": "log", "offset": 1.0, "window": 3, "offset_unit": "case"}
+        steps = recipe_steps("decadal_level", [kept])
+        [log] = [step for step in with_recipe_log(steps, "value") if step["kind"] == "transform"]
+        self.assertEqual((log["offset"], "offset_unit" in log), (1e-5, False))  # Not the box's earlier 1 in cases
+        [log] = [step for step in with_recipe_log(recipe_steps("decadal_level", []), "case") if step["kind"] == "transform"]
+        self.assertEqual((log["offset"], log["offset_unit"]), (1.0, "case"))
+        with_n, without = self.monthly([1.0, 2.0], [1000, 1000]), self.monthly([1.0, 2.0])
+        self.assertEqual(recipe_cases_problems(with_n, True, with_n), [])
+        self.assertEqual([p.split(":")[0] for p in recipe_cases_problems(without, False, None)], ["Data box", "Model box"])
+        self.assertIn("observational model is off", recipe_cases_problems(with_n, False, with_n)[0])
+        self.assertIn("observations have no population N", recipe_cases_problems(with_n, True, None)[0])
+        self.assertIn("have no population N", recipe_cases_problems(None, True, with_n)[0])
+
+    def test_card_refuses_it_without_the_observational_model_as_the_engine(self):
+        from mobile.calibration_engine import CalibrationError, _observation
+        from mobile.calibration_run_ui import observation_problems
+        log = {"kind": "transform", "transform": "log", "offset": 1.0, "window": 3}
+        objective = {"name": "Decadal_level", "metric": "rmse", "steps": [{**log, "offset_unit": "case"}],
+                     "data_steps": [{**log, "offset_unit": "case"}]}
+        [said] = observation_problems(None, [objective])
+        self.assertIn("Decadal_level: a log offset in cases on the model's side needs the observational model", said)
+        with self.assertRaisesRegex(CalibrationError, "a log offset in cases needs the observational model"):
+            _observation(None, [objective])
+        plain = {**objective, "steps": [log]}  # Control: per value on the model's side, in cases on the data's: accepted
+        self.assertEqual(observation_problems(None, [plain]), [])
+        self.assertIsNone(_observation(None, [plain]))
+
+
 class TestObservationModelInTheGui(unittest.TestCase):
     """The observational model in the card, the Pareto table and the trial plots; checked against the engine's own checks."""
 
