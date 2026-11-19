@@ -26,7 +26,7 @@ from .calibration_engine import (
     trial_band, trial_comparison,
     trial_folder, trials_table,
 )
-from .calibration_data import DataError, read_observations
+from .calibration_data import DataError, period_kind, read_observations
 from .calibration_metrics import DIRECTIONS, ENSEMBLE, pair
 from .calibration_model import DRIVER_PERIODS, DRIVERS, PEOPLE_OUTPUTS, driver_panel, validation_parts, validation_windows
 from .calibration_results import FIGURES, ResultsError, beyond_limits, died_out, figure_help, results_figure
@@ -344,14 +344,18 @@ def typed_validation(input, extra):
 
 
 def next_window(windows, span):
-    """(start, end) dates of a window added to the card: the five years before the earliest of the windows typed (each
-    (first, last)), within span (the period the model and the data share); the first year of span if there is no room
-    before them; None without span."""
+    """(start, end) dates of a window added to the card: up to five years after the latest of the windows typed (each
+    (first, last)), within span (the period the runs simulate); if there is no room after them, the five years before
+    the earliest; the first year of span if there is no room before them either; None without span."""
     if span is None:
         return None
-    first = pd.Timestamp(span[0])
-    earliest = min((pd.Timestamp(window[0]) for window in windows), default=pd.Timestamp(span[1]) + pd.Timedelta(days=1))
-    end = earliest - pd.Timedelta(days=1)
+    first, last, day = pd.Timestamp(span[0]), pd.Timestamp(span[1]), pd.Timedelta(days=1)
+    if windows:
+        start = max(pd.Timestamp(window[1]) for window in windows) + day
+        if start <= last:
+            return start.date(), min(last, start + pd.DateOffset(years=5) - day).date()
+    earliest = min((pd.Timestamp(window[0]) for window in windows), default=last + day)
+    end = earliest - day
     if end < first:
         return first.date(), min(pd.Timestamp(span[1]), first + pd.DateOffset(years=1) - pd.Timedelta(days=1)).date()
     return max(first, end - pd.DateOffset(years=5) + pd.Timedelta(days=1)).date(), end.date()
@@ -411,6 +415,29 @@ def split_windows(data, period, validation):
             "across": int((touched & ~inside & finite).sum())}
 
 
+COMPARED_UNITS = {"month": "months", "year": "years", "week": "weeks", "day": "days"}
+
+
+def compared_parts(validation):
+    """[(part, label)] of the parts a calibration with these validation windows scores: ("calibration", "calibration"),
+    then ("validation", "validation") for one window, or ("validation_1", "validation 1"), … in date order; [] without."""
+    if not validation:
+        return []
+    return [("calibration", "calibration"), *[(part, part.replace("_", " ")) for part in validation_parts(validation)]]
+
+
+def compared_said(parts, unit="values"):
+    """e.g. 'Compared: calibration 150 months (1982-06 to 2003-12) · validation 1: 60 months (1989-01 to 1993-12)' of
+    [(label, labels of the values compared)], the labels as calibration_metrics.pair gives them, in order (the
+    calibration's first and last around the windows); '' without parts. A filter's unreliable ends, cut, are not
+    among them, which is why a part can start or end later than its window."""
+    said = []
+    for k, (label, labels) in enumerate(parts):
+        what = f"{len(labels)} {unit} ({labels[0]} to {labels[-1]})" if labels else "none"
+        said.append(f"{label} {what}" if k == 0 else f"{label}: {what}")
+    return f"Compared: {' · '.join(said)}" if said else ""
+
+
 def _years(parts):
     return sum((pd.Timestamp(last) - pd.Timestamp(first)).days + 1 for first, last, _ in parts) / 365.25
 
@@ -421,7 +448,8 @@ def windows_said(objectives, period, validation):
     for all; text e.g. 'Calibration: 1980-01 to 1995-12 (16 years, 192 values) · Validation: 1996-01 to 2003-12 (8
     years, 96 values)', with several windows 'Validation 1: …' in date order; warnings for the user to check; problems
     that stop the calibration. validation: one window (first, last), several [(first, last), ...], or None."""
-    count = len(validation_windows(list(validation) if validation else None))
+    typed = sorted(validation_windows(list(validation) if validation else None))
+    count = len(typed)
     said = {}
     for objective in objectives:
         if not objective.get("data_raw"):
@@ -454,8 +482,14 @@ def windows_said(objectives, period, validation):
                 text += f" · {label}: {_period_text(*window[:2])} ({_years([window]):.3g} years, {window[2]} values)"
             else:
                 text += f" · {label}: none"
-                problems.append(f"{', '.join(names)}: no values within the validation window{f' {k + 1}' if count > 1 else ''}, "
-                                "in the period simulated.")
+                name = f"the validation window{f' {k + 1}' if count > 1 else ''}"
+                start, end = (pd.Timestamp(day) for day in typed[k])
+                if period and (start > pd.Timestamp(period[1]) or end < pd.Timestamp(period[0])):
+                    problems.append(f"{name[0].upper()}{name[1:]} ({start.date()} to {end.date()}) lies outside the period simulated "
+                                    f"({period[0]} to {period[1]}): extend the period (tab 1. Setup) to cover it, or move "
+                                    f"the window.")
+                else:
+                    problems.append(f"{', '.join(names)}: no values within {name}, in the period simulated.")
         held = _years([window for window in windows if window])
         if held > years > 0:
             warnings.append(("The validation window is longer than the calibration window: is this the right way round? The dates "
@@ -1224,13 +1258,20 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
     @reactive.effect
     @reactive.event(input.cal_validation_add)
     def add_window():
-        """One more validation window under the others, at first the five years before the earliest."""
+        """One more validation window under the others, at first up to five years after the latest (else before the
+        earliest), within the period the runs simulate."""
         with reactive.isolate():
             typed = [input.cal_validation_dates()]
             for id_, start in extra_windows():
                 name = f"cal_validation_dates_{id_}"
                 typed.append(input[name]() if name in input else start)
-            extra_windows.set([*extra_windows(), (next(window_ids), next_window([t for t in typed if t and None not in t], span()))])
+            extra_windows.set([*extra_windows(), (next(window_ids), next_window([t for t in typed if t and None not in t],
+                                                                                window_bounds()))])
+
+    def window_bounds():
+        """(first, last) dates the validation windows can take: the period the calibration's runs simulate (tab 1), or,
+        without one (all the driving data), the period the run loaded and the observations share; None if neither."""
+        return period_of(setup().period) or span()
 
     @reactive.effect
     @reactive.event(input.cal_validation_remove)
@@ -1243,7 +1284,7 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         """The validation windows added under the first, each with its dates as typed (kept when one is removed)."""
         rows, added = [], extra_windows()
         with reactive.isolate():  # The dates as typed, read only to draw the windows again as they are
-            bounds = span()
+            bounds = window_bounds()
             for id_, start in added:
                 name = f"cal_validation_dates_{id_}"
                 dates = input[name]() if name in input and input[name]() else start
@@ -1994,9 +2035,9 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
             await send_new("cal_best_plot", key, lambda: message_figure(figure))
             return
         row = next((row for row in found[2] if row["number"] == number), {})
-        figure.update_layout(title=f"Trial {number}, against {comparison_name(found[0], kind, index)} "
-                                   f"{reporting_said(found[0], row, index if kind == OBJECTIVE else None)}"
-                                   f"{validation_scores(found[0], row)}")
+        with_compared(figure, f"Trial {number}, against {comparison_name(found[0], kind, index)} "
+                              f"{reporting_said(found[0], row, index if kind == OBJECTIVE else None)}"
+                              f"{validation_scores(found[0], row)}")
         await send_new("cal_best_plot", key, figure)
 
     best_problem = reactive.value(None)
@@ -2037,9 +2078,28 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
             elif window:
                 figure.add_annotation(x=0, y=1, xref="paper", yref="paper", text="calibration window only", showarrow=False,
                                       xanchor="left", yanchor="bottom", font={"size": 11, "color": "#64748b"})
+            # The values each part really compared (a filter's cut ends are not), for the title: see with_compared
+            parts = []
+            for name, label in compared_parts(window):
+                try:
+                    parts.append((label, trial_comparison(folder, number, index, name, kind=kind)[4]))
+                except (DataError, OSError, KeyError, ValueError):
+                    parts.append((label, []))
+            unit = COMPARED_UNITS.get(period_kind(data), "values") if data.shape == "dated" else "values"
+            figure.update_layout(meta={**(figure.layout.meta or {}), "compared": compared_said(parts, unit)})
             comparisons[key] = (figure, "; ".join(problems) or None)
         figure, problem = comparisons[key]
         return go.Figure(figure), problem
+
+    def with_compared(figure, title):
+        """Title a trial's figure, with a second line saying what each part compared (trial_figure), if it has one."""
+        compared = (figure.layout.meta or {}).get("compared")
+        if not compared:
+            figure.update_layout(title=title)
+            return
+        margin = figure.layout.margin.to_plotly_json()
+        figure.update_layout(title=f"{title}<br><span style='font-size: 0.85em'>{compared}</span>",
+                             margin={**margin, "t": (margin.get("t") or 44) + 18})
 
     def reporting_said(record, row, index=None):
         """How the model of a trial is drawn, for a title: scaled to the mean of the data, or, with the observational model,
@@ -2099,10 +2159,10 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
             return
         what = "no temperature offset" if start else "the first trial (none without offsets)"
         values = ", ".join(f"{o['name']} {value:.3g}" for o, value in zip(record["objectives"], row["values"]))
-        figure.update_layout(title=f"Start: trial {row['number']}, {what} ({values}), against {comparison_name(record, kind, index)}"
-                                   + (f" {reporting_said(record, row, index if kind == OBJECTIVE else None)}"
-                                      if record.get("observation") else "")
-                                   + f"{validation_scores(record, row)}")
+        with_compared(figure, f"Start: trial {row['number']}, {what} ({values}), against {comparison_name(record, kind, index)}"
+                              + (f" {reporting_said(record, row, index if kind == OBJECTIVE else None)}"
+                                 if record.get("observation") else "")
+                              + f"{validation_scores(record, row)}")
         await send_new("cal_start_plot", key, figure)
 
     @render.ui

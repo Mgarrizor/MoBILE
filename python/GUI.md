@@ -417,14 +417,16 @@ together (the Pareto front):
   - the **calibration window**, the rest of the period. The calibration uses only the data of these years: each trial
     is scored on them, and Optuna chooses the next trials from those scores.
 
-  **Add a validation window**, under the dates, adds one more window at a time (at first the five years before the
-  earliest), each with **Remove**: to hold out more than one stretch, e.g. an episode the calibration should not be
+  **Add a validation window**, under the dates, adds one more window at a time (at first up to five years after the
+  latest, or, with no room after it, the five years before the earliest), each with **Remove**; its dates can be any
+  within the period the setup simulates (tab 1), which a window after the run loaded in Model and data needs: to hold out more than one stretch, e.g. an episode the calibration should not be
   pressed to fit and the last years. The calibration window is then the period without any of them, and each trial is
   scored on each window on its own; the windows may not overlap, and are numbered in date order (**Validation 1**,
   **Validation 2**, …) wherever they are said or shown.
 
-  Both are cut before the steps of the Model and Data boxes, so e.g. a climatology objective is that of the
-  calibration window only. With the switch on, the Model and data card gives the metrics of all the years and of each
+  A side whose steps have a time filter (e.g. a 5-year low pass) is filtered over the whole period first and only
+  then split, so its unreliable ends, cut, are only those of the whole period; other steps (e.g. a climatology) are
+  applied to each window on its own, so a climatology objective is that of the calibration window only. With the switch on, the Model and data card gives the metrics of all the years and of each
   window, and marks both windows on its plot with the bars described below. It needs objectives that keep the observations as loaded (those added since the cut to the common period:
   add older ones again).
 
@@ -435,7 +437,8 @@ together (the Pareto front):
   observations split differently get a line each. It warns
   when the validation window is longer than the calibration window (*is this the right way round?*: the dates given
   are those of the validation window) and when values straddle an end of the window (they are in neither); it stops
-  Create only and Run when a window would have no values. The same line is repeated in the messages of Create only,
+  Create only and Run when a window would have no values, and says to extend the period (tab 1. Setup) or move the
+  window when it lies outside the period simulated. The same line is repeated in the messages of Create only,
   Run calibration and Use as template (with the setup now), and in the description of a calibration chosen under
   Calibrations.
 - **Observational model** (a switch, off at first) compares the data with the cases a trial's model would have had
@@ -523,7 +526,10 @@ together (the Pareto front):
   only when what it shows changes, and the menus keep the choice made: a zoom or a choice is not undone by the next
   reading. The number of trials completed, in the list of calibrations, is counted in its study, so it follows a job
   on a cluster at each Refresh. With a validation window, semi-transparent bars along the top of these plots mark the calibration window
-  (green) and each validation window (purple), and their titles give the trial's validation scores on each. With the
+  (green) and each validation window (purple), and their titles give the trial's validation scores on each, and in a
+  second line the values each part really compared, e.g. **Compared:** calibration 127 months (1982-06 to 1997-12) ·
+  validation 1: 60 months (1989-01 to 1993-12) · validation 2: 23 months (1998-01 to 1999-11): a filter's cut ends are
+  not among them, so a part may start or end inside its bar. With the
   observational model the model is drawn as the median of its reported series, not scaled, with the band of the middle
   95 % of them shaded (whiskers on bars for a climatology), and the title gives its ρ̄, k and coverage; an objective that
   is not a dated series, e.g. a climatology, is drawn for the calibration window only, as scored.

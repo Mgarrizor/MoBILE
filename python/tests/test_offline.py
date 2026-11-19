@@ -2703,7 +2703,8 @@ class TestCalibrationWindows(unittest.TestCase):
         self.assertIn("Validation: 1990-02 to 1994-12 (4.91 years, 59 values)", text)
         self.assertIn("1 value across an end of the validation window is in neither window.", warnings)
         [(_, _, _, problems)] = self.said(("2010-01-01", "2011-12-31"))
-        self.assertIn("no values within the validation window", problems[0])
+        self.assertEqual(problems[0], "The validation window (2010-01-01 to 2011-12-31) lies outside the period simulated "
+                                      "(1980-01-01 to 2003-12-31): extend the period (tab 1. Setup) to cover it, or move the window.")
         [(_, _, _, problems)] = self.said(("1970-01-01", "2010-12-31"))
         self.assertIn("leaves no values to calibrate on", problems[0])
         # Without a validation window, the whole period; a shorter period simulated cuts the calibration window
@@ -2758,7 +2759,10 @@ class TestSeveralValidationWindows(TestCalibrationWindows):
         [(_, _, warnings, _)] = self.said([("1982-01-01", "1993-12-31"), self.LAST])
         self.assertIn("together are longer", warnings[0])
         [(_, _, _, problems)] = self.said([self.HUMP, ("2010-01-01", "2011-12-31")])
-        self.assertIn("no values within the validation window 2", problems[0])
+        self.assertIn("The validation window 2 (2010-01-01 to 2011-12-31) lies outside the period simulated", problems[0])
+        # Control: inside the period but without data there, the old message (the data, not the period, lack it)
+        [(_, _, _, problems)] = self.said([self.HUMP, ("2004-01-01", "2007-12-31")], period=("1980-01-01", "2010-12-31"))
+        self.assertEqual(problems, ["Correlation, Low_pass: no values within the validation window 2, in the period simulated."])
         [(_, _, warnings, _)] = self.said([("1989-01-15", "1993-12-31"), self.LAST])
         self.assertIn("1 value across an end of a validation window is in no window.", warnings)
 
@@ -2806,11 +2810,52 @@ class TestSeveralValidationWindows(TestCalibrationWindows):
             typed_validation(typed, [(2, None)])
         typed["cal_validation"] = False
         self.assertIsNone(typed_validation(typed, [(2, None)]))
-        # A window added: the five years before the earliest, within the period shared; the first year if no room
+        # A window added: up to five years after the latest, within the period simulated (item 34: 2004-2007 after the
+        # hump and 1998-2003, with runs to 2010); with no room after, the five years before the earliest; the first year
+        # if no room before either
+        self.assertEqual(next_window([list(self.HUMP), list(self.LAST)], ("1980-01-01", "2010-12-31")),
+                         (day("2004-01-01"), day("2008-12-31")))
+        self.assertEqual(next_window([list(self.HUMP)], self.period), (day("1994-01-01"), day("1998-12-31")))
+        self.assertEqual(next_window([(day("1999-01-01"), day("2001-12-31"))], self.period), (day("2002-01-01"), day("2003-12-31")))
         self.assertEqual(next_window([(day("1999-01-01"), day("2003-12-31"))], self.period), (day("1994-01-01"), day("1998-12-31")))
         self.assertEqual(next_window([(day("1982-01-01"), day("2003-12-31"))], self.period), (day("1980-01-01"), day("1981-12-31")))
         self.assertEqual(next_window([(day("1980-01-01"), day("2003-12-31"))], self.period), (day("1980-01-01"), day("1980-12-31")))
         self.assertIsNone(next_window([], None))
+
+    def test_compared_in_the_title(self):
+        """Item 29: the values each part of a trial compared, as the engine pairs them: with a 5-year low pass the filter's
+        ends are cut, so the calibration starts after 1980-01; control: monthly values without a filter, every month."""
+        from mobile.calibration_data import Observations
+        from mobile.calibration_metrics import pair
+        from mobile.calibration_model import process_both
+        from mobile.calibration_run_ui import compared_parts, compared_said
+        validation = [list(self.HUMP), list(self.LAST)]
+        self.assertEqual(compared_parts(validation), [("calibration", "calibration"), ("validation_1", "validation 1"),
+                                                      ("validation_2", "validation 2")])
+        self.assertEqual(compared_parts(list(self.LAST)), [("calibration", "calibration"), ("validation", "validation")])
+        self.assertEqual(compared_parts(None), [])
+        self.assertEqual(compared_said([]), "")
+        days = pd.date_range(*self.period, freq="D")
+        model = Observations(shape="dated", values=np.ones(len(days)), units="cases", name="cases",
+                             index=pd.DataFrame({"start": days.values.astype("datetime64[D]"), "end": days.values.astype("datetime64[D]")}))
+        monthly = [{"kind": "aggregate", "period": "month", "how": "sum", "complete": True, "days": 7}]
+
+        def said(model_steps, data_steps):
+            parts = [(label, pair(*process_both([model], model_steps, self.data, data_steps, validation=validation, part=part)[:2])[2])
+                     for part, label in compared_parts(validation)]
+            return compared_said(parts, "months")
+
+        # Control: no filter, every month of each part (the last month of the data is missing)
+        self.assertEqual(said(monthly, []), "Compared: calibration 156 months (1980-01 to 1997-12) · validation 1: 60 months "
+                                            "(1989-01 to 1993-12) · validation 2: 71 months (1998-01 to 2003-11)")
+        from mobile.calibration_steps import DECADES, EDGE_ERROR
+        low = {"kind": "filter", "type": "low", "short": 1.0, "long": DECADES, "unit": "years", "missing": "interpolate",
+               "max_gap": 3, "edges": "cut", "edge_error": EDGE_ERROR}  # The decadal recipes' low pass
+        filtered = said([*monthly, low], [low])
+        first, last = re.search(r"calibration (\d+) months \((\S+) to", filtered).group(1, 2)
+        self.assertLess(int(first), 156)
+        self.assertGreater(last, "1980-01")  # The filter's start cut: not compared
+        self.assertIn("validation 1: 60 months (1989-01 to 1993-12)", filtered)  # Mid-period: nothing cut
 
     def test_pareto_table(self):
         from mobile.calibration_run_ui import (
