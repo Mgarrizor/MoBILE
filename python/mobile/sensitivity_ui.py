@@ -315,8 +315,10 @@ def _clock(seconds):
     return f"{seconds // 3600}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
 
 
-def sensitivity_server(input, output, session, setup, slider_setup, overrides, selected_output, single_run_running, agents, ha):
-    """The server side of the card. Returns running() and cancel() for the rest of the app."""
+def sensitivity_server(input, output, session, setup, slider_setup, overrides, selected_output, not_applied, single_run_running,
+                       agents, ha):
+    """The server side of the card. overrides() and selected_output() are the parameters and outputs applied; not_applied()
+    says why they cannot be used, or None. Returns running() and cancel() for the rest of the app."""
     state = StudyState()
     studies_changed = reactive.value(0)
     last = reactive.value(None)  # The record of the last analysis run in this session, or an error
@@ -426,6 +428,8 @@ def sensitivity_server(input, output, session, setup, slider_setup, overrides, s
         elif ha() < 1:
             # More agents than people: the model stops at once, so every run would fail
             problems.append(HA_BELOW_ONE)
+        if not_applied():
+            problems.append(not_applied())
         name = input.sa_name().strip()
         folder = studies_dir(setup().runs_dir)
         if name and (folder / name).exists():

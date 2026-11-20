@@ -11,10 +11,11 @@ import yaml
 from .parameters import run_parameters, shown_parameters
 from .period import period_days, period_problems, spin_up_problem
 from .region import region_problems
+from .shapes import choice_problems as shape_problems
 from .worldpop import choice_problems, resolve_choice
 
 # The keys of a configuration file. Parameters, outputs and sliders are set in the GUI.
-CONFIG_KEYS = {"mobile", "runs_dir", "project", "run", "inputs", "region", "period", "age_structure"}
+CONFIG_KEYS = {"mobile", "runs_dir", "project", "run", "inputs", "region", "period", "age_structure", "shapes"}
 RUN_KEYS = {"disID", "mob", "nstep", "spin_up", "nagent", "seed", "threads"}
 REQUIRED_INPUTS = {"rain_file", "temp_file", "pop_file"}
 # A parameter file is no longer an input: the parameters, their defaults and ranges are in parameters.yaml
@@ -26,15 +27,47 @@ NO_AGE = ("inputs: age_file is no longer used: the age structure comes from Worl
           "product and year. Remove `age_file` and set e.g. `age_structure: {country: SEN}`.")
 NO_AGE_STRUCTURE = "age_structure: missing; choose a country of WorldPop, e.g. {country: SEN}, and optionally product and year"
 OPTIONAL_INPUTS = {"mortality_file", "birthrate_file", "mortality_time_file", "imm_forcing"}
-OPTIONAL_DEFAULTS = {"counterfactual": 0}
+OPTIONAL_DEFAULTS = {"counterfactual": 0, "growth": 0}  # growth: the population's annual growth factor (mobile.sh -G); 0 = off
 
 # character(len=200) in mo_control.f90; a namelist read truncates longer paths silently
 MAX_PATH_LENGTH = 200
+MAX_THREADS = 32  # The model's random-number streams allow no more threads per run
 
 
 def example_config():
     """Path of the configuration shipped with the package: the example bundled with MoBILE."""
     return Path(str(resources.files("mobile") / "configs" / "test_run.yaml"))
+
+
+def _shapes(raw, resolve):
+    """The shapes of a configuration, {file, name, merge}, with the file as a full path; None without."""
+    if not raw:
+        return None
+    if isinstance(raw, str):
+        raw = {"file": raw}
+    if not isinstance(raw, dict) or "file" not in raw:
+        raise ConfigError("shapes: give the shapefile, e.g. shapes: {file: districts.shp, name: NAME, merge: null}")
+    return {"file": str(resolve(raw["file"])), "name": raw.get("name"), "merge": raw.get("merge")}
+
+
+def growth_problems(inputs):
+    """What is wrong with the population growth of a setup's inputs: a factor out of range, or with rate files or the
+    counterfactual mode, which set the rates otherwise."""
+    from .growth import GROWTH_RANGE
+
+    growth = inputs.get("growth", 0)
+    if isinstance(growth, bool) or not isinstance(growth, (int, float)):
+        return ["inputs: growth is the annual growth factor of the population, e.g. 1.0213 for 2.13% a year (0 = off)"]
+    if not growth:
+        return []
+    found = []
+    if not GROWTH_RANGE[0] <= growth <= GROWTH_RANGE[1]:
+        found.append(f"inputs: growth {growth:g} is out of {GROWTH_RANGE[0]:g} to {GROWTH_RANGE[1]:g} (an annual factor, e.g. 1.0213)")
+    if inputs.get("counterfactual") == 1 or any(inputs.get(key, "NONE") not in ("NONE", "", None)
+                                               for key in ("mortality_file", "birthrate_file", "mortality_time_file")):
+        found.append("inputs: growth sets the birth and mortality rates itself: not with mortality_file, birthrate_file, "
+                     "mortality_time_file or counterfactual")
+    return found
 
 
 class ConfigError(ValueError):
@@ -77,6 +110,7 @@ class Config:
     region: dict | None = None  # {north, west, south, east} to simulate; None for the whole grid
     period: dict | None = None  # {start, end} days to simulate, as YYYY-MM-DD; None for all the driving data
     age_structure: dict | None = None  # {product, country, year} of WorldPop; year None for that of the period (worldpop.py)
+    shapes: dict | None = None  # {file, name, merge} of a shapefile of areas drawn on the maps (shapes.py); not for the model
 
     @classmethod
     def load(cls, path=None, mobile=None):
@@ -112,6 +146,7 @@ class Config:
             region=raw.get("region"),
             period=raw.get("period"),
             age_structure=raw.get("age_structure"),
+            shapes=_shapes(raw.get("shapes"), resolve),
         )
         config.validate()
         return config
@@ -162,6 +197,9 @@ class Config:
         for key, value in self.run.items():
             if not isinstance(value, int) or isinstance(value, bool):
                 errors.append(f"run: {key} must be an integer, got {value!r}")
+        threads = self.run.get("threads")
+        if isinstance(threads, int) and not isinstance(threads, bool) and threads > MAX_THREADS:
+            errors.append(f"run: threads must be at most {MAX_THREADS}, got {threads}: the model's random numbers allow no more")
 
         errors += region_problems(self.region)
         problems = period_problems(self.period)
@@ -179,6 +217,7 @@ class Config:
         if "age_file" in self.inputs:
             errors.append(NO_AGE)
         errors += [NO_AGE_STRUCTURE] if self.age_structure is None else choice_problems(self.age_structure)
+        errors += shape_problems(self.shapes)
         allowed = REQUIRED_INPUTS | OPTIONAL_INPUTS | set(OPTIONAL_DEFAULTS) | {"const", "area_file", "age_file"}
         unknown = set(self.inputs) - allowed
         if unknown:
@@ -198,6 +237,7 @@ class Config:
             for key in ("mortality_file", "birthrate_file", "mortality_time_file")
         ):
             errors.append("inputs: counterfactual needs mortality_file, birthrate_file or mortality_time_file")
+        errors += growth_problems(self.inputs)
 
         # The scripts expand these unquoted, and mobile.sh refuses to run inside the repository
         for path in [self.mobile, self.runs_dir, *self.inputs.values()]:

@@ -35,6 +35,20 @@ def axis_edges(data, name, axis):
     return centre_edges(variable[:], axis)
 
 
+def cell_steps(path):
+    """(latitude, longitude) size in degrees of the first cell of a file, from the cell bounds or the centres as the model
+    takes them; None for a single coordinate without bounds, whose size cannot be known."""
+    steps = []
+    with netCDF4.Dataset(path) as data:
+        for names, axis in ((LAT_NAMES, "latitude"), (LON_NAMES, "longitude")):
+            try:
+                lower, upper = axis_edges(data, first_name(names, data.variables), axis)
+                steps.append(abs(float(upper[0]) - float(lower[0])))
+            except (CellSizeError, KeyError, IndexError):
+                steps.append(None)
+    return tuple(steps)
+
+
 def file_edges(path):
     """{"lat": (lower, upper), "lon": (lower, upper)} of the cells of a population file."""
     with netCDF4.Dataset(path) as data:

@@ -134,6 +134,17 @@ def _read_seed_band(band_dir):
     return {**manifests[0], "date": record["date"], "seeds": record["seeds"]}
 
 
+def read_run(folder):
+    """Manifest of a finished run or seed band (that of its first seed, plus the list `seeds`) that still has its
+    output, otherwise None: also for a folder that cannot be read."""
+    folder = Path(folder)
+    try:
+        band = (folder / "seed_band.json").exists()
+    except OSError:  # E.g. a folder without the permission to read it, next to the runs
+        return None
+    return _read_seed_band(folder) if band else _read_finished(folder)
+
+
 def list_runs(runs_dir, pop_file=None):
     """Finished runs and seed bands that still have their output, newest first: {folder: manifest}.
 
@@ -143,7 +154,7 @@ def list_runs(runs_dir, pop_file=None):
     runs = {}
     root = Path(runs_dir)
     for folder in root.iterdir() if root.is_dir() else []:
-        manifest = _read_seed_band(folder) if (folder / "seed_band.json").exists() else _read_finished(folder)
+        manifest = read_run(folder)
         if manifest is None:
             continue
         if pop_file is not None and manifest.get("inputs", {}).get("pop_file") != pop_file:
@@ -161,8 +172,9 @@ def age_record(config, run_dir):
     return {**config.age_choice(), "weights": weights}
 
 
-def write_manifest(config, result):
-    """Record what is needed to compare or repeat the run (see "Comparing runs" in MoBILE's LLM.md)."""
+def write_manifest(config, result, prebuilt=None):
+    """Record what is needed to compare or repeat the run (see "Comparing runs" in MoBILE's LLM.md). prebuilt: the
+    model run, if it was built beforehand (mobile.sh -E), not in the run folder."""
     mobile = config.mobile
     manifest = {
         "status": result.status,
@@ -173,13 +185,15 @@ def write_manifest(config, result):
         "mobile": str(mobile),
         "commit": _git(mobile, "rev-parse", "HEAD"),
         "dirty": bool(_git(mobile, "status", "--porcelain")),
-        "binary_md5": _md5(result.run_dir / "output" / "mobile.out"),
+        "binary_md5": _md5(Path(prebuilt) if prebuilt else result.run_dir / "output" / "mobile.out"),
+        "prebuilt": str(prebuilt) if prebuilt else None,
         "run": config.run,
         "inputs": config.inputs,
         "region": config.region,
         "period": config.period,
         "age_structure": config.age_structure,
         "age_used": age_record(config, result.run_dir),
+        "shapes": config.shapes,
         "param_overrides": config.params,
         "params": config.final_params(),
         "output": list(config.output) if config.output is not None else None,

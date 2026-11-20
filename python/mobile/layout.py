@@ -26,7 +26,7 @@ USER_DOCS_URL = "https://mobile-ictp.readthedocs.io/en/latest/"  # Sphinx, on Re
 SALIB_URL = "https://salib.readthedocs.io/"
 VECTRI_DOCS_URL = "https://users.ictp.it/~tompkins/vectri/documentation/"  # The VECTRI model, which VECTRI-ABM builds on
 OPTUNA_URL = "https://optuna.org/"
-GUI_OUTPUT = ("out_EIR", "out_vect")  # What a run writes unless changed in the Outputs tab
+GUI_OUTPUT = ()  # What a run writes unless ticked in the Outputs card: nothing but rainfall and temperature (always written)
 
 
 # The flags of &OUTPUT: (flag, label, compiled-in default), by the group of the output file they write to
@@ -67,6 +67,52 @@ OUTPUT_FLAGS = {
 }
 
 
+# The output flags each variable of the output file needs, as the model names them (src/mo_netcdf.f90): the "_bulk"
+# variables are those written when the same output is also asked for by age
+VARIABLE_FLAGS = {
+    "pop": ("out_pop",), "Age": ("out_age",), "Nagent": ("out_N",), "HA": ("out_HA",), "S": ("out_S",), "E": ("out_E",),
+    "I": ("out_I",), "I_bulk": ("out_I", "out_Ia"), "Inew": ("out_I_new",), "Inew_bulk": ("out_I_new", "out_Ia_new"),
+    "A": ("out_A",), "A_bulk": ("out_A", "out_Aa"), "R": ("out_R",), "EIR": ("out_EIR",), "P1": ("out_P1",),
+    "hbr": ("out_hbr",), "imm": ("out_imm",), "imm_bulk": ("out_imm", "out_imm_a"), "V": ("out_vect",),
+    "Vinf": ("out_vecinfc",), "L": ("out_larv",), "wpond": ("out_wpond",), "wperm": ("out_wperm",), "wurbn": ("out_wurbn",),
+    "rain": (), "t2m": (),  # Always written
+}
+AGE_FLAGS = {"I": "out_Ia", "A": "out_Aa", "imm": "out_imm_a", "Inew": "out_Ia_new", "Na": "out_N_a"}  # e.g. Inew_5-14
+OUTPUT_LABELS = {flag: label for flags in OUTPUT_FLAGS.values() for flag, label, _ in flags}
+
+
+def tab_title(text, tab):
+    """The name of a tab after a dot that says its state (TAB_DOTS): grey until the server says."""
+    return ui.TagList(ui.span(id=f"tab_dot_{tab}", role="img", style="display: inline-block; width: 0.65rem; height: 0.65rem; "
+                              "border-radius: 50%; margin-right: 0.4rem; background: #adb5bd; vertical-align: middle;"), text)
+
+
+def flags_of(variable):
+    """The output flags a variable of the output file needs, or None if it is not one the model writes by a flag."""
+    if variable in VARIABLE_FLAGS:
+        return VARIABLE_FLAGS[variable]
+    prefix, _, band = str(variable).partition("_")
+    return (AGE_FLAGS[prefix],) if prefix in AGE_FLAGS and band[:1].isdigit() else None
+
+
+def needed_outputs(objectives):
+    """({flag: [names of the objectives that need it]}, [names of the objectives whose variable no flag gives])."""
+    needed, unknown = {}, []
+    for objective in objectives:
+        flags = flags_of(objective["variable"])
+        if flags is None:
+            unknown.append(objective["name"])
+        for flag in flags or ():
+            needed.setdefault(flag, []).append(objective["name"])
+    return needed, unknown
+
+
+def output_label(flag):
+    """e.g. 'New symptomatic cases', 'Symptomatic (by age)'."""
+    group = next(group for group, flags in OUTPUT_FLAGS.items() for name, _, _ in flags if name == flag)
+    return f"{OUTPUT_LABELS[flag]}{' (by age)' if group.startswith('Human, by age') else ''}"
+
+
 # More agents than people: the model stops at once ("More agents than people! --> STOP")
 HA_BELOW_ONE = "HA is below 1: more agents than people, and the model stops at once. Use HA = 1 or more."
 
@@ -81,7 +127,8 @@ def quick_start():
     strong = ui.tags.strong
     return ui.tags.ol(
         ui.tags.li(strong("Setup"), ": choose the model, the period to simulate and the driving files, then press ", strong("Apply setup"), "."),
-        ui.tags.li(strong("Parameters"), ": move the sliders to change, and choose the outputs. Sliders you do not move keep their value."),
+        ui.tags.li(strong("Parameters"), ": move the sliders to change, tick the outputs, then press ", strong("Apply parameters & outputs"),
+                   ". Sliders you do not move keep their value."),
         ui.tags.li("In the sidebar, set the number of agents and the seed, and press ", strong("Run"),
                    ". The model is compiled, then simulated: the example takes minutes."),
         ui.tags.li(strong("Results"), ": choose a variable and a day, and click a cell on the map for its time series."),

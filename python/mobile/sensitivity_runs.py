@@ -3,10 +3,13 @@
   sa.json      what was sampled, how, with which setup, and how far the runs got
   samples.txt  the parameter values, one row per sample, in the order SALib expects their outputs back
   inputs/      the driving files cut to the region and period of the setup, once for all the runs, if it has either
+  bin/mobile.out  the model, built by the first run and run as it is by all the others (mobile.sh -E)
   runs/seed_<seed>/sample_<index>/   one run folder per sample and seed, as made by run_MOBILE.sh
 
 The same samples are run for every seed. Finished runs are kept, so that a cancelled analysis resumes where it
-stopped and its outputs can be analysed again in other ways without running again.
+stopped and its outputs can be analysed again in other ways without running again. The model is built once, by the
+first run, and kept with the analysis: the other runs, and those of a resumed analysis, go on side by side without
+building (which takes turns, runner.py), all with the same model.
 """
 
 import datetime
@@ -25,7 +28,8 @@ from .grid import pop_coordinates
 from .parameters import to_model
 from .region import cut_inputs
 from .rundir import OUTPUT_NAME, new_run_id, period_steps
-from .runner import RunCancelled, Runner
+from .results import _md5
+from .runner import BuildOnce, RunCancelled, Runner
 from .sensitivity import DISTRIBUTIONS, SampledParameter, run_count, sample
 
 STUDIES_FOLDER = "sensitivity"
@@ -33,6 +37,7 @@ RECORD = "sa.json"
 SAMPLES = "samples.txt"
 RUNS = "runs"
 INPUTS = "inputs"
+BINARY = Path("bin") / "mobile.out"
 ATTEMPTS = 2  # A failed run is tried once more before it counts as failed
 FAIL_FAST = 3  # The analysis stops if this many runs fail before any finishes: they would all fail alike
 
@@ -202,6 +207,14 @@ def run_study(folder, state, parallel=1, threads=None):
     state.begin(len(jobs), len(jobs) - len(todo))
     write_study(folder, {**record, "status": "running"})
 
+    # The first run builds the model; the others wait for it, then run it as it is. If it could not be built, they
+    # build their own as before, and fail as it did. A resumed analysis has its model already.
+    def record_model(binary):
+        with state.lock:
+            write_study(folder, {**read_study(folder), "binary_md5": _md5(binary)})
+
+    once = BuildOnce(folder / BINARY, record_model)
+
     def one(job):
         seed, index = job
         run_config = replace(
@@ -215,15 +228,22 @@ def run_study(folder, state, parallel=1, threads=None):
             run_dir = config.runs_dir / run_name(seed, index)
             if run_dir.exists():
                 shutil.rmtree(run_dir)  # Left by a cancelled or failed attempt
-            runner = Runner(run_config)
+            prebuilt = once.acquire(lambda: state.cancelled)
+            if prebuilt is False:
+                return
+            runner = Runner(run_config, prebuilt)
             if not state.add_runner(runner):
+                if prebuilt is None:
+                    once.release()
                 return
             try:
-                result = runner.run(run_name(seed, index), wait=True)
+                result = runner.run(run_name(seed, index), wait=True, on_built=once.keep if prebuilt is None else None)
             except RunCancelled:
                 return
             finally:
                 state.remove_runner(runner)
+                if prebuilt is None:
+                    once.release()
             if result.status == "cancelled":
                 return
             if result.ok:

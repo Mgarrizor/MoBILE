@@ -38,6 +38,12 @@ def open_field(path, key):
     for axis in ("lat", "lon"):
         if not field.indexes[axis].is_monotonic_increasing:
             field = field.sortby(axis)
+    # The size of the cells, which a single coordinate cannot tell: for the maps (plots.cell_size)
+    from .cells import cell_steps  # Not at the top: cells imports this module
+    try:
+        field.attrs["cell_steps"] = cell_steps(path)
+    except (OSError, ValueError, KeyError, StopIteration, RuntimeError):
+        pass
     return field
 
 

@@ -16,30 +16,36 @@ from .driving import climatology, field_limits, open_field
 from .cells import CellSizeError
 from .grid import extent_key, load_grid, mask_like, read_grid
 from .layout import (
-    ANALYSIS_TABS, ASSETS, GUI_OUTPUT, HA_BELOW_ONE, OPTUNA_URL, OUTPUT_FLAGS, funders, help_tab, no_run_yet, output_groups, output_switch_id,
-    page_header, page_title, player_controls, slider_grid, slider_tabs, with_tip,
+    ANALYSIS_TABS, ASSETS, GUI_OUTPUT, HA_BELOW_ONE, OUTPUT_FLAGS, funders, help_tab, needed_outputs, no_run_yet, output_groups,
+    output_label, output_switch_id, page_header, page_title, player_controls, slider_grid, slider_tabs, tab_title, with_tip,
 )
 from .outcome import RunState, load_outcome, run_label, run_model, run_name_problem
 from .parameters import shown_parameters, slider_start, to_model, to_shown
 from .plots import (
     BOX, COLOUR_MAPS, LAND, age_cumulative_figure, age_fit_figure, age_heterogeneity_figure, age_sex_figure, cell_figure, envelope_figure, grid_figure, map_figure, message_figure,
-    MAX_DOTS, DOT_COLOURS, add_dot, default_dot, dot_label, move_dot, next_cells, remove_dot, send_figure, sig,
+    MAX_DOTS, DOT_COLOURS, add_dot, default_dot, dot_label, move_dot, next_cells, remove_dot, send_figure, sig, snap_to_cell,
 )
 from .checks import driving_days, driving_problems
 from .period import length_text, parse_day, period_days, spin_up_problem
 from .region import region_problems
 from .results import list_runs
+from .calibration_progress import progress_server
+from .calibration_run_ui import calibration_run_server, observation_outputs
+from .calibration_ui import calibration_server, calibration_tab
 from .sensitivity_ui import sensitivity_card, sensitivity_server
 from .scripts import (
-    BROWSER_HANDLER, CLOSED_HANDLER, DOTS_HANDLER, PARAMETER_MARKS, PARAMETER_STYLE, PLAYER, PLOT_HANDLER, SIDEBAR_FIT, SLIDER_FORMAT, THEME, PAGE_STYLE,
+    BROWSER_HANDLER, CLOSED_HANDLER, DOTS_HANDLER, PARAMETER_MARKS, PARAMETER_STYLE, PLAYER, PLOT_HANDLER, SIDEBAR_FIT, SLIDER_FORMAT, TAB_DOTS, THEME,
+    PAGE_STYLE,
 )
+from .shapes import ShapeError, areas, name_field, outlines, read_shapes
 from .setup import (
     OPTIONAL_FILES, REQUIRED_FILES, from_fields, from_manifest, create_folder, list_folder, region_from_fields, region_mode,
-    save_setup, start_folder, typed_path,
+    save_setup, start_folder, typed_path, usable_shapes,
 )
+from .growth import GrowthError, ceiling_needed, fit_growth, growth_over, percent, read_population
 from .setup_ui import (
     DAILY_FILES, EXAMPLE_FOLDER, PREVIEW_FILES, PREVIEW_STYLE, REGION_BOXES, REGION_LAYERS, REGION_MONTHS, SUFFIX_NAMES, available_model, example_note_box, region_values,
-    AUTO, age_values, country_choices, period_values, setup_problems, setup_tab, setup_value, year_choices,
+    AUTO, age_values, country_choices, growth_percent, period_values, setup_problems, setup_tab, setup_value, year_choices,
 )
 from .worldpop import COUNTRIES, PRODUCTS, WorldPopError, cached_summary, describe, fitted_mortality, prepare, resolve_choice, year_label
 from .variables import (
@@ -49,11 +55,22 @@ from .variables import (
 
 STATIC_MESSAGE = "This variable does not change over time: see the map."
 HUMANS_PER_AGENT_RANGE = (0.5, 2)  # Outside it, the sidebar suggests a number of agents
+FEW_AGENTS = 1000  # Below it, with HA above 1, the sidebar warns that the results will be noisy
 REGION_MAP_TITLES = {
     "all": "The whole grid is simulated",
     "box": "Drag a rectangle to choose the subregion",
     "point": "Click a cell to choose the point",
 }
+
+
+def selected_flags(flags):
+    """The output flags given, in the order of the Outputs card."""
+    return tuple(flag for group in OUTPUT_FLAGS.values() for flag, _, _ in group if flag in flags)
+
+
+def comparable(config):
+    """A setup without the agents and seed, which the sidebar sets for each run: to tell whether the Setup tab is applied."""
+    return replace(config, run={**config.run, "nagent": 0, "seed": 0})
 
 
 def create_app(config):
@@ -106,12 +123,13 @@ def create_app(config):
             ui.tags.script(ui.HTML(BROWSER_HANDLER)),
             ui.tags.script(ui.HTML(SIDEBAR_FIT)),
             ui.tags.script(ui.HTML(DOTS_HANDLER)),
+            ui.tags.script(ui.HTML(TAB_DOTS)),
         ),
         ui.output_ui("status"),
         ui.navset_tab(
-            ui.nav_panel("1. Setup", setup_tab(config), value="setup"),
+            ui.nav_panel(tab_title("1. Setup", "setup"), setup_tab(config), value="setup"),
             ui.nav_panel(
-                "2. Parameters & SA",
+                tab_title("2. Parameters & SA", "parameters"),
                 ui.layout_columns(
                     ui.card(
                         ui.card_header("Parameters for single runs"),
@@ -121,12 +139,19 @@ def create_app(config):
                     ),
                     ui.card(
                         ui.card_header("Outputs"),
-                        ui.p("What the next run writes. Rainfall and temperature are always written; fields by age give large files.",
-                             class_="small text-muted mb-1"),
+                        ui.p("What the next run writes: only what is ticked. Rainfall and temperature are always written; fields by "
+                             "age give large files.", class_="small text-muted mb-1"),
+                        ui.output_ui("outputs_needed"),
                         *output_groups(initial_output),
                     ),
                     col_widths=(7, 5),
                     class_="mt-3",
+                ),
+                ui.div(
+                    ui.input_action_button("apply_parameters", with_tip("Apply parameters & outputs", "Runs, sensitivity analyses "
+                                           "and calibrations use the parameters and outputs applied."), class_="btn-primary btn-lg"),
+                    ui.output_ui("parameters_state"),
+                    class_="mt-3 text-center",
                 ),
                 sensitivity_card(),
                 value="parameters",
@@ -155,7 +180,7 @@ def create_app(config):
                                 ui.div(ui.input_action_button("auto_range", "Automatic range", class_="btn-sm"), class_="pt-4"),
                                 col_widths=(2, 2, 2, 2, 3),
                             ),
-                            ui.input_switch("terrain", with_tip("Terrain", "Shaded relief under the map. Downloaded the first time it is used."), value=False),
+                            ui.input_switch("terrain", with_tip("Terrain", "The relief, as a shading over the map: slopes facing away from the light (northwest) darker, those facing it lighter. Downloaded the first time it is used for an area."), value=False),
                             ui.output_ui("terrain_status"),
                         ),
                         open=False,
@@ -172,16 +197,14 @@ def create_app(config):
                 "Analysis (to come)",
                 *[ui.nav_panel(name, ui.p(text, class_="text-muted mt-3")) for name, text in ANALYSIS_TABS],
             ),
-            ui.nav_panel("Calibration (to come)",
-                         ui.p("Calibration of model parameters against observations, with the ", ui.a("Optuna", href=OPTUNA_URL, target="_blank"),
-                              " parameter optimisation suite: to come.", class_="text-muted mt-3"),
-                         value="calibration"),
+            ui.nav_panel("Calibration (in development)", calibration_tab(), value="calibration"),
             ui.nav_panel("Help", help_tab(), value="help"),
             id="tab",
             selected="setup",
         ),
         funders(),
         title=page_title(ui.output_ui("header")),
+        window_title="MoBILE - GUI",  # Else the browser takes it from the title above: only the theme switch has text then
     )
 
     def server(input, output, session):
@@ -229,8 +252,7 @@ def create_app(config):
             return page_header(setup())
 
         def selected_output():
-            flags = [flag for group in OUTPUT_FLAGS.values() for flag, _, _ in group]
-            return tuple(flag for flag in flags if input[output_switch_id(flag)]())
+            return selected_flags({flag for group in OUTPUT_FLAGS.values() for flag, _, _ in group if input[output_switch_id(flag)]()})
 
         def overrides():
             """Sliders moved from their start, in the units of the model; the others keep the compiled default."""
@@ -249,8 +271,143 @@ def create_app(config):
         def grid_key():
             return extent_key(grid()["lon"], grid()["lat"])
 
+        # The parameters and outputs applied: what runs, analyses and calibrations use (Apply parameters & outputs)
+        applied = reactive.value({"overrides": {}, "output": selected_flags(initial_output)})
+
+        def applied_overrides():
+            return applied()["overrides"]
+
+        def applied_output():
+            return applied()["output"]
+
+        @reactive.calc
+        def parameters_problems():
+            """What makes the parameters and outputs shown invalid: an output an objective or the observational model needs
+            not ticked; with population growth in the setup applied, a growth_ratio_ceiling too low for it."""
+            needed, _ = needed_outputs([*calibration.objectives(), *calibration.views()])
+            for flag, names in observation_outputs(input.cal_observation()).items():
+                needed.setdefault(flag, []).extend(names)
+            shown = set(selected_output())
+            found = [f"Tick {output_label(flag)}: needed by {', '.join(names)}" for flag, names in needed.items() if flag not in shown]
+            growth = setup().inputs.get("growth") or 0
+            period = period_values(setup())
+            if growth and period is not None:
+                need, ceiling = ceiling_needed(growth, period[2], period[3]), shown_ceiling()
+                if ceiling < need:
+                    found.append(f"growth_ratio_ceiling (Demography) is {ceiling:g}: with the population growing {percent(growth)}, "
+                                 f"×{growth_over(growth, period[2], period[3]):.3f} over the period, it needs {need:g} or more "
+                                 f"(room for the agents born)")
+            return found
+
+        def shown_ceiling():
+            """growth_ratio_ceiling as the slider shows it (its compiled default if not moved), or 1 without the slider."""
+            name = "growth_ratio_ceiling"
+            if name in overrides():
+                return overrides()[name]
+            default = slider_setup()["defaults"].get(name)
+            return 1.0 if default is None else to_model(name, default)
+
+        @reactive.calc
+        def parameters_changed():
+            return overrides() != applied_overrides() or selected_output() != applied_output()
+
+        def not_applied():
+            """Why nothing can run with the parameters and outputs shown, or None."""
+            if parameters_problems() or parameters_changed():
+                return ("The parameters & outputs shown are not applied: press Apply parameters & outputs (tab 2. Parameters & SA) "
+                        "first.")
+            return None
+
+        @reactive.effect
+        @reactive.event(input.apply_parameters)
+        def apply_parameters():
+            if parameters_problems():
+                ui.notification_show(". ".join(parameters_problems()) + ".", type="error")
+                return
+            applied.set({"overrides": overrides(), "output": selected_output()})
+            ui.notification_show("Parameters & outputs applied.", type="message", duration=3)
+            ui.update_navs("tab", selected="results")
+
+        @render.ui
+        def parameters_state():
+            if parameters_problems():
+                return ui.p("Invalid: " + ". ".join(parameters_problems()) + ".", class_="small text-danger mt-1 mb-0")
+            if parameters_changed():
+                return ui.p("Changed set, not applied.", class_="small text-warning-emphasis mt-1 mb-0")
+            moved, written = len(applied_overrides()), [output_label(flag) for flag in applied_output()]
+            return ui.p(f"Applied set: {moved} parameter{'s' * (moved != 1)} changed from the default; outputs: "
+                        f"{', '.join(written) or 'none'} (and rainfall and temperature).", class_="small text-muted mt-1 mb-0")
+
+        @render.ui
+        def outputs_needed():
+            needed, unknown = needed_outputs([*calibration.objectives(), *calibration.views()])
+            if not needed and not unknown:
+                return None
+            shown = set(selected_output())
+            lines = [ui.tags.li(f"{output_label(flag)}: needed by {', '.join(names)}",
+                                class_="text-danger" if flag not in shown else None) for flag, names in needed.items()]
+            lines += [ui.tags.li(f"{name}: its variable is not written by any of these outputs", class_="text-danger") for name in unknown]
+            return ui.div(ui.tags.strong("For the calibration's objectives and views", class_="small"), ui.tags.ul(*lines, class_="small mb-1"))
+
+        @reactive.calc
+        def setup_state():
+            """("applied", "changed" or "problem", what it means) of the Setup tab: its boxes against the setup applied."""
+            new, problems = typed_setup()
+            if problems:
+                return "problem", "Problem in setup"
+            return ("applied", "Applied setup") if comparable(new) == comparable(setup()) else ("changed", "Not applied")
+
+        @reactive.effect
+        async def send_tab_dots():
+            setup_dot = list(setup_state())
+            parameters = (["problem", "Invalid"] if parameters_problems() else
+                          ["changed", "Changed set, not applied"] if parameters_changed() else ["applied", "Applied set"])
+            await session.send_custom_message("tab_dots", {"setup": setup_dot, "parameters": parameters})
+
+        pending_agents = reactive.value(None)  # The agents of a template, for HA once its setup is applied
+
+        def load_template(record):
+            """Fill tab 1 with the setup of a calibration, the sliders with its fixed parameters, and HA for its number of
+            agents (now if its grid is that of the setup applied, else once its setup is applied). [What it says]."""
+            notes, stored = [], record["setup"]
+            try:
+                config = from_fields(setup().mobile, stored["project"], stored["runs_dir"], stored["run"], stored["inputs"],
+                                     stored.get("region"), stored.get("period"), stored.get("age_structure"),
+                                     usable_shapes(stored.get("shapes")))
+            except ConfigError as error:
+                config = None
+                notes.append(f"its setup cannot be filled in tab 1: {'; '.join(setup_problems(error))}")
+            if config is not None:
+                show_setup_fields(config)
+                if comparable(config) != comparable(setup()):
+                    notes.append("its setup is in the boxes of tab 1: press Apply setup there")
+            calibrated = {parameter["name"] for parameter in record.get("parameters", [])}
+            pending_sliders.set({name: float(value) for name, value in record.get("params", {}).items() if name not in calibrated})
+            notes.append("its fixed parameters are on the sliders and the outputs its objectives need ticked, the others off: "
+                         "press Apply parameters & outputs in tab 2")
+            nagent = stored["run"].get("nagent")
+            pending_agents.set(None)
+            if nagent and config is not None:
+                if (config.inputs["pop_file"], config.region) == (setup().inputs["pop_file"], setup().region):
+                    ui.update_numeric("ha", value=ha_for(nagent))
+                    notes.append(f"HA set for its {nagent:,} agents")
+                else:
+                    pending_agents.set(nagent)
+                    notes.append(f"HA will be set for its {nagent:,} agents when its setup is applied")
+            return notes
+
+        @reactive.effect
+        @reactive.event(setup)
+        def take_pending_agents():
+            nagent = pending_agents()
+            if nagent:
+                pending_agents.set(None)
+                ui.update_numeric("ha", value=ha_for(nagent))
+                ui.notification_show(f"HA set for the template's {nagent:,} agents.", type="message", duration=6)
+
         analysis = sensitivity_server(
-            input, output, session, setup, slider_setup, overrides, selected_output, lambda: run_task.status() == "running",
+            input, output, session, setup, slider_setup, applied_overrides, applied_output, not_applied,
+            lambda: run_task.status() == "running" or calibrating.running(),  # calibrating is defined further down
             lambda: agents(), lambda: input.ha(),  # agents is defined further down
         )
 
@@ -340,11 +497,14 @@ def create_app(config):
             if input.ha() < 1:
                 ui.notification_show(HA_BELOW_ONE, type="error")
                 return
-            if analysis.running():
-                ui.notification_show("A sensitivity analysis is running: wait for it, or cancel it, before a single run.", type="warning")
+            if not_applied():
+                ui.notification_show(not_applied(), type="error")
+                return
+            if analysis.running() or calibrating.running():
+                ui.notification_show("An analysis or calibration is running: wait for it, or cancel it, before a single run.", type="warning")
                 return
             try:
-                run_config = replace(setup(), params={**setup().params, **overrides()}, output=selected_output()).with_run(nagent=nagent, seed=seed)
+                run_config = replace(setup(), params={**setup().params, **applied_overrides()}, output=applied_output()).with_run(nagent=nagent, seed=seed)
             except ConfigError as error:
                 ui.notification_show(str(error), type="error")
                 return
@@ -372,8 +532,9 @@ def create_app(config):
                 state.runner.cancel()
 
         async def close_app():
-            """Stop any run or analysis, tell the browser, then stop the server as Ctrl+C does."""
+            """Stop any run, analysis or calibration, tell the browser, then stop the server as Ctrl+C does."""
             analysis.cancel()
+            calibrating.cancel()
             state.update(cancelled=True)
             if state.runner is not None:
                 state.runner.cancel()
@@ -383,12 +544,13 @@ def create_app(config):
         @reactive.effect
         @reactive.event(input.close)
         async def ask_to_close():
-            if run_task.status() != "running" and not analysis.running():
+            if run_task.status() != "running" and not analysis.running() and not calibrating.running():
                 await close_app()
                 return
             ui.modal_show(
                 ui.modal(
-                    "A run or sensitivity analysis is in progress. Closing the GUI will cancel it; an analysis can be resumed later.",
+                    "A run, sensitivity analysis or calibration is in progress. Closing the GUI will cancel it; an analysis or a "
+                    "calibration can be resumed later.",
                     title="Close the GUI?",
                     footer=ui.TagList(ui.modal_button("Keep running"), ui.input_action_button("close_confirmed", "Cancel run and close")),
                 )
@@ -472,6 +634,8 @@ def create_app(config):
             for group in OUTPUT_FLAGS.values():
                 for flag, _, _ in group:
                     ui.update_switch(output_switch_id(flag), value=flag in written)
+            # Applied as the setup is: the parameters and outputs the results shown were made with
+            applied.set({"overrides": dict(outcome.overrides), "output": selected_flags(written)})
 
         @reactive.effect
         @reactive.event(input.reset)
@@ -532,22 +696,20 @@ def create_app(config):
             for key, value in values.items():
                 ui.update_numeric(f"setup_{key}", value=value)
             ui.update_switch("setup_counterfactual", value=config.inputs.get("counterfactual") == 1)
+            ui.update_text("setup_shapes_file", value=(config.shapes or {}).get("file", ""))
+            ui.update_switch("setup_growth", value=bool(config.inputs.get("growth")))
+            ui.update_numeric("setup_growth_percent", value=growth_percent(config))
 
-        @reactive.effect
-        @reactive.event(input.apply_setup)
-        def apply_setup():
-            if run_task.status() == "running" or analysis.running():
-                ui.notification_show("Wait for the run or analysis to finish, or cancel it, before changing the setup.", type="warning")
-                return
+        @reactive.calc
+        def typed_setup():
+            """(the setup as the boxes of the Setup tab say, or None, and what stops it being applied)."""
             typed = typed_days()
             if typed is not None and typed[2]:
-                setup_problem.set([f"Period: {typed[2]}"])
-                return
+                return None, [f"Period: {typed[2]}"]
             # Also the whole driving data, which the configuration does not count
             spin_up = spin_up_problem(int(input.setup_spin_up()), typed and (typed[1] - typed[0]).days + 1)
             if spin_up:
-                setup_problem.set([f"Period: {spin_up}"])
-                return
+                return None, [f"Period: {spin_up}"]
             period = None
             if typed is not None and (typed[0], typed[1]) != tuple(parse_day(day) for day in driving_span()):
                 period = {"start": typed[0].isoformat(), "end": typed[1].isoformat()}
@@ -562,15 +724,27 @@ def create_app(config):
             }
             files = {key: input[f"setup_{key}"]() for key, _, _ in (*REQUIRED_FILES, *OPTIONAL_FILES)}
             files["counterfactual"] = 1 if input.setup_counterfactual() else 0
+            files["growth"] = typed_growth()
             try:
                 new = from_fields(setup().mobile, input.setup_project(), input.setup_runs_dir(), run, files, typed_region(), period,
-                                  typed_age())
+                                  typed_age(), typed_shapes())
             except ConfigError as error:
-                setup_problem.set(setup_problems(error))
-                return
+                return None, setup_problems(error)
             problem = typed_region_grid()[2]
             if new.region is not None and problem:
-                setup_problem.set([f"Region: {problem}"])
+                return None, [f"Region: {problem}"]
+            return new, []
+
+        @reactive.effect
+        @reactive.event(input.apply_setup)
+        def apply_setup():
+            if run_task.status() == "running" or analysis.running() or calibrating.running():
+                ui.notification_show("Wait for the run, analysis or calibration to finish, or cancel it, before changing the setup.",
+                                     type="warning")
+                return
+            new, problems = typed_setup()
+            if problems:
+                setup_problem.set(problems)
                 return
             problems = driving_problems(new.inputs)
             if problems:
@@ -791,6 +965,54 @@ def create_app(config):
             ui.update_date("setup_start", value=span[0])
             ui.update_date("setup_end", value=span[1])
 
+        def typed_growth():
+            """The annual growth factor in the boxes of the Setup tab: 1 + % / 100, or 0 if off or not a number."""
+            value = input.setup_growth_percent() if input.setup_growth() else None
+            return round(1 + float(value) / 100, 8) if isinstance(value, (int, float)) else 0
+
+        growth_fit = reactive.value(None)  # The last fit to a population series: its result, or what went wrong
+
+        @reactive.effect
+        @reactive.event(input.setup_growth_fit)
+        def fit_growth_to_series():
+            typed = typed_days()
+            path = typed_path(input.setup_growth_file()) if input.setup_growth_file().strip() else None
+            if path is None or typed is None or typed[2]:
+                growth_fit.set({"problem": "Choose a population series, and a valid period above." if path is None else
+                                "The period above is not valid yet."})
+                return
+            try:
+                found = fit_growth(read_population(path), typed[0], typed[1])
+            except GrowthError as error:
+                growth_fit.set({"problem": str(error)})
+                return
+            growth_fit.set({**found, "path": str(path), "period": (typed[0], typed[1])})
+            ui.update_numeric("setup_growth_percent", value=round(100 * (found["g"] - 1), 4))
+
+        @render.ui
+        def setup_growth_note():
+            fitted = growth_fit()
+            if fitted is not None and "problem" in fitted:
+                return ui.p(fitted["problem"], class_="small text-danger mb-1")
+            growth, typed = typed_growth(), typed_days()
+            if not growth or typed is None or typed[2]:
+                return None
+            over, need = growth_over(growth, typed[0], typed[1]), ceiling_needed(growth, typed[0], typed[1])
+            lines = [f"{percent(growth)}: ×{over:.3f} over the period ({typed[0]} to {typed[1]}). growth_ratio_ceiling "
+                     f"(Parameters, Demography) must then be {need:g} or more, for the agents born."]
+            if fitted is not None and fitted.get("period") == (typed[0], typed[1]):
+                lines.append(f"Fitted to {os.path.basename(fitted['path'])}, {fitted['first']:%Y-%m} to {fitted['last']:%Y-%m}: "
+                             f"{percent(fitted['g'])}, the values within {100 * fitted['departure']:.1f}% of the line"
+                             + ("" if fitted["covers"] else "; the series does not cover the whole period") + ".")
+                grid_ = typed_region_grid()[1]
+                if grid_ is not None and grid_.get("people"):
+                    people, start = grid_["people"], fitted["start"]
+                    gap = people / start - 1
+                    lines.append(f"The population file gives {people:,.0f} people; the series {start:,.0f} at "
+                                 f"{fitted['first']:%Y-%m}" + (f" ({100 * gap:+.0f}%): set the file to the population of the "
+                                 "start of the period, which the growth starts from." if abs(gap) > 0.02 else "."))
+            return ui.div(*[ui.p(line, class_="small text-muted mb-1") for line in lines])
+
         @reactive.calc
         def typed_days():
             """(start, end, problem) as dates, of the period in the boxes of the Setup tab; None without driving days."""
@@ -826,6 +1048,79 @@ def create_app(config):
             if any(value and typed_path(value).is_relative_to(example) for value in typed):
                 return example_note_box()
             return None
+
+        @reactive.calc
+        def typed_shapes_file():
+            """(path, Shapes, problem) of the shapefile in its box, before Apply; (None, None, None) without one."""
+            value = input.setup_shapes_file()
+            if not value or not value.strip():
+                return None, None, None
+            path = typed_path(value)
+            try:
+                return path, read_shapes(path), None
+            except (ShapeError, OSError) as error:
+                return path, None, str(error)
+
+        @render.ui
+        def setup_shapes_fields():
+            path, shapes, problem = typed_shapes_file()
+            if problem is not None:
+                return ui.p(f"Shapefile: {problem}.", class_="small text-danger")
+            if shapes is None:
+                return None
+            # The fields chosen for this file in the setup, else a guess at the field that names the areas
+            chosen = setup().shapes if setup().shapes and setup().shapes["file"] == str(path) else {}
+            fields = {field: field for field in shapes.fields}
+            return ui.div(
+                ui.layout_columns(
+                    ui.input_select("setup_shapes_name", "Areas named by", fields,
+                                    selected=chosen.get("name") or name_field(shapes)),
+                    ui.input_select("setup_shapes_merge", with_tip(
+                        "Merged by", "Areas with the same value of this field are drawn as one, named by it: e.g. "
+                                     "villages merged into their districts."),
+                                    {"": "Not merged", **fields}, selected=chosen.get("merge") or ""),
+                    col_widths=(6, 6),
+                ),
+                ui.p(f"{len(shapes.geometries):,} areas, in {shapes.crs}"
+                     + (", converted to longitude and latitude" if shapes.converted else "")
+                     + ". Drawn on the region map now, and on the results map after Apply.",
+                     class_="small text-muted mb-1"),
+                ui.p(shapes.note, class_="small text-warning-emphasis mb-1") if shapes.note else None,
+                class_="mb-3",
+            )
+
+        def typed_shapes():
+            """The shapes of the boxes of the Setup tab, {file, name, merge}; None without a shapefile."""
+            path, shapes, _ = typed_shapes_file()
+            if path is None:
+                return None
+            name = input.setup_shapes_name() if "setup_shapes_name" in input else None
+            merge = input.setup_shapes_merge() if "setup_shapes_merge" in input else None
+            return {"file": str(path), "name": name or (name_field(shapes) if shapes else None), "merge": merge or None}
+
+        def drawn_shapes(choice):
+            """The outlines of the areas of a setup's shapes, for the maps; None without, or if they cannot be drawn."""
+            if not choice:
+                return None
+            try:
+                return outlines(areas(read_shapes(choice["file"]), choice.get("name"), choice.get("merge")))
+            except (ShapeError, OSError):
+                return None
+
+        @reactive.calc
+        def typed_drawn():
+            return drawn_shapes(typed_shapes())
+
+        def shown_shapes(switch):
+            """The outlines of the shapefile in its box on a map of the Setup tab, if its switch is on."""
+            return typed_drawn() if switch in input and input[switch]() else None
+
+        def region_shapes():
+            return shown_shapes("region_shapes")
+
+        @reactive.calc
+        def applied_drawn():
+            return drawn_shapes(setup().shapes)
 
         def typed_region():
             """The region in the boxes of the Setup tab, before Apply."""
@@ -1001,7 +1296,7 @@ def create_app(config):
             if wanted is None:
                 title = "Population density"
                 figure = map_figure(data, None, (title, data.attrs.get("units", "")), 1, field_limits(data, log=True),
-                                    (), region_basemap(), colour_map="Reds", log=True)
+                                    (), region_basemap(), colour_map="Reds", log=True, shapes=region_shapes())
             else:
                 region_climates_added()
                 name = REGION_LAYERS[wanted[1]].lower()
@@ -1014,7 +1309,7 @@ def create_app(config):
                     return
                 title = region_climate_title(wanted, field)
                 figure = map_figure(field, None, (title, field.attrs.get("units", "")), 1, field_limits(field),
-                                    (), region_basemap(), colour_map=PREVIEW_STYLE[wanted[1]][0])
+                                    (), region_basemap(), colour_map=PREVIEW_STYLE[wanted[1]][0], shapes=region_shapes())
             outline = region_outline()
             if outline is not None:
                 west, east, south, north = outline
@@ -1029,9 +1324,11 @@ def create_app(config):
                 margin={"t": 66},  # Two lines of title
                 dragmode="drawrect" if mode == "box" else "zoom",
                 newshape={"line": {"color": BOX, "width": 2, "dash": "dot"}},
-                # The zoom is kept while the grid is the same
-                uirevision=str(region_map_extent()),
+                # The zoom is kept while the grid and the shapefile are the same
+                uirevision=str((region_map_extent(), region_shapes() is not None and typed_shapes())),
             )
+            # The colour bar just right of the map, which keeps its shape and so does not fill the plot
+            figure.layout.meta = {**(figure.layout.meta or {}), "colourBarBeside": True}
             await send_figure(session, "region_map", figure)
 
         @render.ui
@@ -1067,6 +1364,18 @@ def create_app(config):
                 open_browser(field, kind)
 
         browse_button("setup_runs_dir", "folder")
+        browse_button("cal_data_file", "data")
+        browse_button("cal_model_folder", "folder")
+        browse_button("setup_shapes_file", "shape")
+        browse_button("setup_growth_file", "text")
+        calibration = calibration_server(input, output, session, setup, setup_state)
+        calibrating = calibration_run_server(
+            input, output, session, setup, calibration.objectives, applied_overrides, applied_output, not_applied, load_template,
+            lambda: run_task.status() == "running" or analysis.running(), lambda: agents(), lambda: input.ha(), slider_setup,
+            calibration.views, calibration.extra_windows, calibration.span,
+        )
+        progress_server(input, calibration.prepared, calibrating.what, calibrating.stored, calibration.activity,
+                        lambda: input.cal_previous())
         for key, _, kind in (*REQUIRED_FILES, *OPTIONAL_FILES):
             browse_button(f"setup_{key}", kind)
 
@@ -1162,6 +1471,11 @@ def create_app(config):
                 text += f". HA = 1 would be {max(round(people), 1):,} agents."
             if input.ha() < 1:
                 return ui.TagList(text, ui.div(HA_BELOW_ONE, class_="text-danger"))
+            if nagent < FEW_AGENTS and input.ha() > 1:
+                # E.g. an HA left from an earlier setup: the run would still go, but not unnoticed
+                return ui.TagList(text, ui.div(
+                    f"Only {nagent:,} agents (HA {input.ha():,.8g}): results will be very noisy, or meaningless. "
+                    f"Lower HA for more agents.", class_="text-warning-emphasis"))
             return text
 
         @render.ui
@@ -1341,25 +1655,34 @@ def create_app(config):
         async def draw_map():
             outcome = current()
             if outcome is None or not outcome.seeds:
-                await send_figure(session, "map", grid_figure(grid(), basemap(), terrain()))
+                figure = grid_figure(grid(), basemap(), terrain(), applied_drawn())
+                # A new shapefile shows its areas; otherwise the zoom is kept
+                figure.update_layout(uirevision=f"grid {setup().shapes}")
+                await send_figure(session, "map", figure)
                 return
             name = shown_variable(outcome)
             data = outcome.fields(name)[shown_member(outcome)]
             day = min(input.day(), outcome.days)
-            await send_figure(
-                session, "map",
-                map_figure(
-                    data, grid(), outcome.describe(name), day, shown_limits(), selected_cells(), basemap(), terrain(),
-                    input.colour_map(), input.scale() == "log",
-                ),
+            figure = map_figure(
+                data, grid(), outcome.describe(name), day, shown_limits(), selected_cells(), basemap(), terrain(),
+                input.colour_map(), input.scale() == "log", shapes=applied_drawn(),
             )
+            figure.update_layout(uirevision=f"map {setup().shapes}")
+            await send_figure(session, "map", figure)
 
         @reactive.effect
         @reactive.event(input.cell)
         def select_cell():
             with reactive.isolate():
                 cell = input.cell()
-                selected_cells.set(next_cells(selected_cells(), cell["lon"], cell["lat"]))
+                outcome = current()
+                if outcome is None or not outcome.seeds:
+                    return
+                data = outcome.fields(shown_variable(outcome))[shown_member(outcome)]
+                # Marked at the centre of the cell whose series is drawn, wherever the click landed
+                snapped = snap_to_cell(data["lat"].values, data["lon"].values, cell["lon"], cell["lat"], grid().get("steps") if grid() else None)
+                if snapped is not None:
+                    selected_cells.set(next_cells(selected_cells(), *snapped))
 
         @reactive.effect
         async def draw_cell_plot():
@@ -1525,9 +1848,11 @@ def create_app(config):
             figure = map_figure(
                 data, None, preview_description(), day, preview_limits(), preview_cells(), preview_basemap(),
                 colour_map=input.preview_colour_map(), log=input.preview_scale() == "log", selected=preview_selected(),
+                shapes=shown_shapes("preview_shapes"),
             )
-            # The zoom is kept while the grid is the same
-            figure.update_layout(meta={"date": figure.layout.meta["date"], "view": str(preview_extent())})
+            # The zoom is kept while the grid and the shapefile shown are the same
+            figure.update_layout(meta={"date": figure.layout.meta["date"],
+                                       "view": str((preview_extent(), shown_shapes("preview_shapes") is not None and typed_shapes()))})
             await send_figure(session, "preview_map", figure)
 
         @reactive.effect
@@ -1566,9 +1891,14 @@ def create_app(config):
         @reactive.event(input.preview_cell)
         def select_preview_cell():
             with reactive.isolate():
-                if preview_map_data() is None:
+                data = preview_map_data()
+                if data is None:
                     return
                 cell = input.preview_cell()
+                snapped = snap_to_cell(data["lat"].values, data["lon"].values, cell["lon"], cell["lat"], data.attrs.get("cell_steps"))
+                if snapped is None:
+                    return
+                cell = {"lon": snapped[0], "lat": snapped[1]}
                 dots = preview_cells()
                 if preview_adding() or not dots:
                     added = add_dot(dots, cell["lon"], cell["lat"])

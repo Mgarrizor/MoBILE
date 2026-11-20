@@ -14,7 +14,7 @@ from .setup import OPTIONAL_FILES, REGION_MODES, REQUIRED_FILES, region_mode
 from .worldpop import COUNTRIES, PRODUCTS, product_countries, year_label
 
 
-SUFFIX_NAMES = {"netcdf": ("netCDF (.nc)",), "text": ("text (.txt, .csv)",), "folder": ()}
+SUFFIX_NAMES = {"netcdf": ("netCDF (.nc)",), "text": ("text (.txt, .csv)",), "data": ("netCDF (.nc)", "tables (.csv, .txt)"), "shape": ("shapefiles (.shp, .zip)",), "folder": ()}
 
 
 FILE_LABELS = {key: label for key, label, _ in (*REQUIRED_FILES, *OPTIONAL_FILES)}
@@ -42,6 +42,59 @@ def _model_select(selected):
             tag.attrs["disabled"] = ""
         pending.extend(getattr(tag, "children", []))
     return menu
+
+
+def _shapes_inputs(config):
+    """A shapefile of areas, such as districts, drawn on the maps; its fields are chosen once it is read."""
+    return ui.div(
+        _path_input("setup_shapes_file", with_tip(
+            "Shapefile of areas (optional)",
+            "Areas such as districts or villages, drawn on the maps of the region and of the results: a .shp with its "
+            ".shx, .dbf and .prj next to it, or a .zip holding them. Any coordinates: they are converted to longitude and "
+            "latitude with the .prj. The model does not use them."),
+            (config.shapes or {}).get("file", ""), "shape"),
+        ui.output_ui("setup_shapes_fields"),
+    )
+
+
+def growth_percent(config):
+    """The growth of a setup in % a year, for its box; 2 when it has none (the box is shown only when growth is on)."""
+    growth = config.inputs.get("growth") or 0
+    return round(100 * (growth - 1), 4) if growth else 2.0
+
+
+def _growth_inputs(config):
+    """Population growth: a rate a year, typed or fitted to a population series over the period."""
+    return ui.div(
+        ui.input_switch("setup_growth", with_tip(
+            "Population growth",
+            "The population grows by this rate a year from the end of the spin-up (which does not grow), keeping the age "
+            "structure: the model derives the birth and age-specific mortality rates from it (its growth mode). The "
+            "population file is then that of the start of the period. The agents need room to grow: growth_ratio_ceiling "
+            "(Parameters, Demography) must be above the growth over the period. Not with the optional demography files."),
+            value=bool(config.inputs.get("growth"))),
+        ui.panel_conditional(
+            "input.setup_growth",
+            ui.input_numeric("setup_growth_percent", "Growth (% a year)", value=growth_percent(config), step=0.01, width="12rem"),
+            _path_input("setup_growth_file", with_tip(
+                "Or fit it to a population series",
+                "A table (text: comma, tab, semicolon or spaces between columns) with a column named date, written YYYY-MM-DD (e.g. 1975-01-15), and a population column "
+                "named N, pop, population or people, e.g. the population column of the case data. The growth is that of a "
+                "straight line through the log of the population within the period."), "", "text"),
+            ui.input_action_button("setup_growth_fit", "Fit to the period", class_="btn-sm mb-2"),
+        ),
+        ui.output_ui("setup_growth_note"),
+        class_="border-top pt-2 mb-2",
+    )
+
+
+HAS_SHAPES = "input.setup_shapes_file && input.setup_shapes_file.trim() !== ''"
+
+
+def shapes_switch(id):
+    """Outlines of the shapefile of Driving files on a map of the Setup tab; shown while a shapefile is in its box."""
+    return ui.panel_conditional(HAS_SHAPES, ui.input_switch(id, with_tip(
+        "Shapefile", "Outlines of the areas of the shapefile in Driving files, as named and merged there."), value=False))
 
 
 def _path_input(id, label, value, kind):
@@ -100,6 +153,8 @@ def setup_tab(config):
         ui.output_ui("example_note"),
         *[_path_input(f"setup_{key}", label, setup_value(config, key), kind) for key, label, kind in REQUIRED_FILES],
         _age_inputs(config),
+        _shapes_inputs(config),
+        _growth_inputs(config),
         ui.accordion(
             ui.accordion_panel(
                 ui.TagList("Optional files ", ui.tags.span("(Beta release - do not use)", class_="text-danger ms-1")),
@@ -391,6 +446,7 @@ def _region_card(config):
                     ),
                     ui.panel_conditional("input.region_layer !== 'pop_file'",
                                          ui.input_select("region_month", "Mean over", REGION_MONTH_MENU, width="15rem")),
+                    shapes_switch("region_shapes"),
                     class_="d-flex flex-wrap align-items-end gap-4",
                 ),
                 ui.div(id="region_map", style="height: 480px;"),
@@ -419,7 +475,7 @@ def _preview_box():
             class_="small text-muted mb-1",
         ),
         ui.layout_columns(
-            ui.input_select("preview_file", "File", PREVIEW_FILES),
+            ui.div(ui.input_select("preview_file", "File", PREVIEW_FILES), shapes_switch("preview_shapes")),
             ui.panel_conditional(
                 daily,
                 ui.input_slider("preview_day", ui.TagList("Day ", ui.tags.span(id="preview_day_date", class_="ms-1")), min=1, max=2, value=1, step=1, width="100%"),

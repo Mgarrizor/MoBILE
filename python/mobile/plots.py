@@ -2,13 +2,17 @@
 
 import json
 import re
+from dataclasses import replace
 
 import numpy as np
+import pandas as pd
 import plotly.graph_objects as go
 import xarray as xr
+from plotly.colors import sample_colorscale
 from plotly.subplots import make_subplots
 
 from .basemap import PADDING_DEGREES, cell_size
+from .calibration_steps import EDGE
 from .grid import mask_like
 
 
@@ -19,6 +23,14 @@ COLOUR_MAPS = {
     # matplotlib's coolwarm, at 11 points
     "Coolwarm": ["#3b4cc0", "#5977e3", "#7b9ff9", "#9ebeff", "#c0d4f5", "#dddcdc", "#f2cbb7", "#f7ac8e", "#ee8468", "#d65244", "#b40426"],
 }
+# Plotly's own scales, sampled at 11 points
+COLOUR_MAPS.update({
+    name: sample_colorscale(name, 11, colortype="rgb")
+    for name in ("Viridis", "Plasma", "Inferno", "Magma", "Cividis", "YlOrRd", "YlGnBu", "Greens", "Purples", "Greys", "Spectral_r", "RdBu_r")
+})
+# Population density as NASA SEDAC maps it: white (unpopulated), light yellow, light green, green, yellow, orange, red,
+# dark red, purple, black (very dense)
+COLOUR_MAPS["nasa_sedac"] = ["#ffffff", "#ffffe0", "#c8f0a0", "#78c878", "#f0f000", "#ffa500", "#ff0000", "#990000", "#660066", "#000000"]
 GRID_STEPS = (0.05, 0.1, 0.2, 0.25, 0.5, 1, 2, 5, 10, 20)
 GRATICULE = "rgba(11, 11, 11, 0.3)"
 AXIS_FONT = 14
@@ -35,10 +47,21 @@ OCEAN = "#97b6e1"
 LAND = "#efefdb"
 COAST = "#a9a8a2"
 RIVER = "#7f97a8"
-TERRAIN_DATA_OPACITY = 0.7
 BORDER = "#52514e"
 TEXT = "#52514e"
 GRID = "#e6e5e0"
+
+
+def snap_to_cell(lat, lon, at_lon, at_lat, steps=None):
+    """(lon, lat) of the centre of the cell of a grid nearest to a point clicked on a map, so that the cell is marked where
+    it is, whatever the click landed on (e.g. the outline of an area of a shapefile); None for a point more than a cell
+    outside the grid. lat, lon: the centres of the grid; steps: its cell size, if known (basemap.cell_size)."""
+    lat, lon = np.asarray(lat, dtype="f8"), np.asarray(lon, dtype="f8")
+    size_lat, size_lon = cell_size(lat, lon, known=steps)
+    i, j = int(np.argmin(np.abs(lat - at_lat))), int(np.argmin(np.abs(lon - at_lon)))
+    if abs(lat[i] - at_lat) > 1.5 * size_lat or abs(lon[j] - at_lon) > 1.5 * size_lon:
+        return None
+    return float(lon[j]), float(lat[i])
 
 
 def next_cells(cells, lon, lat):
@@ -152,11 +175,11 @@ def _base_layout(**layout):
 
 
 def _add_basemap(figure, basemap, terrain=None):
-    """Land, relief and lakes under the data, rivers and borders over it. Nothing without a basemap."""
+    """Land and lakes under the data, rivers and borders over it, and the shading of the relief over all of them (so that
+    it shows where there are data too). Nothing without a basemap."""
     if basemap is None:
         return
-    # Layout images are drawn under layout shapes, so with relief the land is only its outline
-    land_fill = "rgba(0,0,0,0)" if terrain else LAND
+    land_fill = LAND
     below = {"type": "path", "xref": "x", "yref": "y", "layer": "below"}
     figure.update_layout(
         plot_bgcolor=OCEAN,
@@ -172,27 +195,48 @@ def _add_basemap(figure, basemap, terrain=None):
     if terrain:
         figure.update_layout(images=[{
             "source": terrain.image, "xref": "x", "yref": "y", "x": terrain.west, "y": terrain.north,
-            "sizex": terrain.width, "sizey": terrain.height, "sizing": "stretch", "layer": "below",
+            "sizex": terrain.width, "sizey": terrain.height, "sizing": "stretch", "layer": "above",
         }])
     for lines, color, width in ((basemap.rivers, RIVER, 0.8), (basemap.borders, BORDER, 1)):
         figure.add_trace(go.Scatter(x=lines["x"], y=lines["y"], mode="lines", line={"color": color, "width": width}, hoverinfo="skip", showlegend=False))
 
 
-def _cells(lat, lon):
+SHAPE_LINE, SHAPE_HALO = "#1f1f1f", "rgba(255, 255, 255, 0.85)"  # Dark on a light halo: reads over any colour of the data
+
+
+def _add_shapes(figure, drawn):
+    """The outlines of the areas of a shapefile over the data, each named on hovering a point inside it. drawn is the
+    (lines, points) of shapes.outlines, or None."""
+    if drawn is None:
+        return
+    lines, points = drawn
+    for colour, width in ((SHAPE_HALO, 3), (SHAPE_LINE, 1.2)):
+        figure.add_trace(go.Scatter(x=lines["x"], y=lines["y"], mode="lines", line={"color": colour, "width": width},
+                                    hoverinfo="skip", showlegend=False))
+    figure.add_trace(go.Scatter(x=points["x"], y=points["y"], text=points["text"], mode="markers", showlegend=False,
+                                marker={"size": 12, "opacity": 0}, hovertemplate="%{text}<extra></extra>"))
+
+
+def _cells(lat, lon, steps=None):
     """The coordinates of a heatmap of the grid. A stripe one cell wide gives its single coordinate as a start and a cell
-    size, as Plotly would otherwise make that cell one degree wide."""
-    size = dict(zip("yx", cell_size(lat, lon)))
+    size (from the bounds of its file, steps, if any), as Plotly would otherwise make that cell one degree wide."""
+    size = dict(zip("yx", cell_size(lat, lon, known=steps)))
     return {key: value for axis, values in (("y", lat), ("x", lon))
             for key, value in ({axis: values} if len(values) > 1 else {f"{axis}0": float(values[0]), f"d{axis}": size[axis]}).items()}
 
 
-def _grid_step(lat, lon):
-    return grid_step(max(float(lon.max() - lon.min()), float(lat.max() - lat.min())))
+def _grid_step(lat, lon, shapes=None):
+    """The step of the coordinate lines, from the extent of the grid and of the areas of a shapefile."""
+    spans = []
+    for values, drawn in ((lon, shapes[0]["x"] if shapes else []), (lat, shapes[0]["y"] if shapes else [])):
+        values = [float(values.min()), float(values.max()), *[value for value in drawn if value is not None]]
+        spans.append(max(values) - min(values))
+    return grid_step(max(spans))
 
 
-def _add_graticule(figure, lat, lon):
+def _add_graticule(figure, lat, lon, shapes=None):
     """Coordinate lines over the data, where the lines of the axes, drawn under it, cannot be seen."""
-    step = _grid_step(lat, lon)
+    step = _grid_step(lat, lon, shapes)
     west, east = float(lon.min()) - PADDING_DEGREES, float(lon.max()) + PADDING_DEGREES
     south, north = float(lat.min()) - PADDING_DEGREES, float(lat.max()) + PADDING_DEGREES
     x, y = [], []
@@ -205,46 +249,53 @@ def _add_graticule(figure, lat, lon):
     figure.add_trace(go.Scatter(x=x, y=y, mode="lines", line={"color": GRATICULE, "width": 0.7}, hoverinfo="skip", showlegend=False))
 
 
-def _axes(figure, lat, lon):
-    """Show the grid. The view cannot leave the area of the basemap, and the plot, not the view,
-    takes the shape that keeps degrees of longitude and latitude equal. Ticks fall on the coordinate lines."""
+def _axes(figure, lat, lon, shapes=None, steps=None):
+    """Show the grid, and the areas of a shapefile if any (shapes.outlines). The view cannot leave the area of the
+    basemap, and the plot, not the view, takes the shape that keeps degrees of longitude and latitude equal. Ticks fall
+    on the coordinate lines."""
     def allowed(values):
         return {"minallowed": float(values.min()) - PADDING_DEGREES, "maxallowed": float(values.max()) + PADDING_DEGREES}
 
-    def shown(values, size):
-        """From the first to the last cell centre; a stripe one cell wide, that cell."""
+    def shown(values, size, drawn):
+        """From the first to the last cell centre; a stripe one cell wide, that cell; and all the areas."""
         half = 0 if len(values) > 1 else size / 2
-        return [float(values.min()) - half, float(values.max()) + half]
+        first, last = float(values.min()) - half, float(values.max()) + half
+        drawn = [value for value in drawn if value is not None]
+        return [min(first, *drawn), max(last, *drawn)] if drawn else [first, last]
 
-    size_lat, size_lon = cell_size(lat, lon)
-    ticks = {"tick0": 0, "dtick": _grid_step(lat, lon), "tickfont": {"size": AXIS_FONT}, "showgrid": False, "zeroline": False}
+    lines = shapes[0] if shapes is not None else {"x": [], "y": []}
+
+    size_lat, size_lon = cell_size(lat, lon, known=steps)
+    ticks = {"tick0": 0, "dtick": _grid_step(lat, lon, shapes), "tickfont": {"size": AXIS_FONT}, "showgrid": False, "zeroline": False}
     figure.update_xaxes(
-        title_text="Longitude [°E]", range=shown(lon, size_lon),
+        title_text="Longitude [°E]", range=shown(lon, size_lon, lines["x"]),
         constrain="domain", constraintoward="center", **ticks, **allowed(lon),
     )
     figure.update_yaxes(
-        title_text="Latitude [°N]", range=shown(lat, size_lat),
+        title_text="Latitude [°N]", range=shown(lat, size_lat, lines["y"]),
         scaleanchor="x", scaleratio=1, constrain="domain", **ticks, **allowed(lat),
     )
 
 
-def grid_figure(grid, basemap=None, terrain=None):
+def grid_figure(grid, basemap=None, terrain=None, shapes=None):
     """The fixed grid before the first run."""
     z = np.where(grid["mask"], 1.0, np.nan)
     figure = go.Figure(
-        go.Heatmap(**_cells(grid["lat"], grid["lon"]), z=z, colorscale=[[0, SEQUENTIAL[1]], [1, SEQUENTIAL[1]]], showscale=False, hoverinfo="skip"),
+        go.Heatmap(**_cells(grid["lat"], grid["lon"], grid.get("steps")), z=z, colorscale=[[0, SEQUENTIAL[1]], [1, SEQUENTIAL[1]]], showscale=False, hoverinfo="skip"),
         layout=_base_layout(title="Simulated cells (red) on the fixed grid. Press Run to see results."),
     )
     _add_basemap(figure, basemap, terrain)
-    _add_graticule(figure, grid["lat"], grid["lon"])
-    _axes(figure, grid["lat"], grid["lon"])
+    _add_graticule(figure, grid["lat"], grid["lon"], shapes)
+    _add_shapes(figure, shapes)
+    _axes(figure, grid["lat"], grid["lon"], shapes, grid.get("steps"))
     figure.update_layout(uirevision="grid")
     return figure
 
 
 def map_figure(data, grid, description, day, limits, cells=(), basemap=None, terrain=None, colour_map="Reds", log=False,
-               selected=None):
-    """A day of a field. With a grid, only its simulated cells; without, every cell of the field, as for a driving file."""
+               selected=None, shapes=None):
+    """A day of a field. With a grid, only its simulated cells; without, every cell of the field, as for a driving file.
+    shapes: the outlines of the areas of a shapefile, from shapes.outlines."""
     label, units = description
     if "time" in data.dims:
         date = str(data["time"].values[day - 1])[:10]
@@ -253,17 +304,18 @@ def map_figure(data, grid, description, day, limits, cells=(), basemap=None, ter
         date, data_now = "", data
     if grid is not None:
         data_now = data_now.where(mask_like(data, grid))
+    # The size of a single cell: from the bounds of the population file with a grid, else of the file of the field
+    steps = grid.get("steps") if grid is not None else data.attrs.get("cell_steps")
     values = data_now.values.astype("float64")
     z, zmin, zmax, ticks = colour_values(values, limits, log)
     colours = COLOUR_MAPS[colour_map]
     figure = go.Figure(
         go.Heatmap(
-            **_cells(data["lat"].values, data["lon"].values),
+            **_cells(data["lat"].values, data["lon"].values, steps),
             z=z,
             customdata=values,
             zmin=zmin,
             zmax=zmax,
-            opacity=TERRAIN_DATA_OPACITY if terrain else 1,
             colorscale=[[i / (len(colours) - 1), colour] for i, colour in enumerate(colours)],
             colorbar={
                 "title": {"text": units_label(units) + (" (log scale)" if log else ""), "side": "right"},
@@ -276,13 +328,14 @@ def map_figure(data, grid, description, day, limits, cells=(), basemap=None, ter
         layout=_base_layout(
             title=label
             + ("" if basemap else ". Grey: not simulated" if grid is not None else ". Grey: no data")
-            + (". Terrain on: colours do not match the colour bar exactly" if terrain else "")
+            + (". Terrain on: its shading darkens or lightens the colours" if terrain else "")
         ),
     )
     # Shown next to the Day slider when this map is drawn, so that the two stay together
     figure.update_layout(meta={"date": date})
     _add_basemap(figure, basemap, terrain)
-    _add_graticule(figure, data["lat"].values, data["lon"].values)
+    _add_graticule(figure, data["lat"].values, data["lon"].values, shapes)
+    _add_shapes(figure, shapes)
     for index, cell in enumerate(cells):
         # A black box with a white fill shows over any colour of the data, and so does the X
         # inside it, which has the colour of the cell's lines; the selected dot is larger
@@ -294,7 +347,7 @@ def map_figure(data, grid, description, day, limits, cells=(), basemap=None, ter
                     marker={"symbol": symbol, "size": size, "color": fill, "line": {"width": 2.5, "color": line}},
                 )
             )
-    _axes(figure, data["lat"].values, data["lon"].values)
+    _axes(figure, data["lat"].values, data["lon"].values, shapes, steps)
     figure.update_layout(uirevision="map")
     return figure
 
@@ -463,6 +516,334 @@ def age_fit_figure(summary, name):
         name=f"Mean age of the fit, 1/γ = {mean:.1f} years", hovertemplate=f"1/γ = {mean:.1f} years<extra></extra>",
     ))
     return _plain_axes(figure, "Age [year]", "Weight of the year of age")
+
+
+OBSERVED = "#2a78d6"  # The first categorical colour: observations
+
+
+COMPARED = "#8a8984"  # The stage compared with: a neutral grey, behind the result
+X_TITLES = {"dated": "Time (each value at the middle of its period)", "climatology": "Calendar month", "season": "Season",
+            "yearly": "Year", "age": "Age band [years]", "single": ""}
+ONE_PANEL, TWO_PANELS = 380, 640  # Heights of the observations figure, in pixels
+
+
+def _rgba(colour, alpha):
+    colour = colour.lstrip("#")
+    return f"rgba({int(colour[0:2], 16)}, {int(colour[2:4], 16)}, {int(colour[4:6], 16)}, {alpha})"
+
+
+def _band(x, lower, upper, colour, label, what, factor=1.0):
+    """A shaded band between lower and upper, as two traces: its top, then its bottom filled up to it."""
+    return [go.Scatter(x=x, y=upper * factor, mode="lines", line={"width": 0}, hoverinfo="skip", showlegend=False, legendgroup=label),
+            go.Scatter(x=x, y=lower * factor, mode="lines", line={"width": 0}, fill="tonexty", fillcolor=_rgba(colour, 0.2),
+                       hoverinfo="skip", name=f"{label}: {what}", legendgroup=label)]
+
+
+def _spread(observations, rows=None):
+    """(lower, upper, what) of the uncertainty of observations, for a band: the range of a seed band (lowest to highest
+    seed), else ±1 standard deviation; None if they have none. rows picks some of the values."""
+    pick = (lambda values: values) if rows is None else (lambda values: values[rows])
+    if "lowest" in observations.extra and "highest" in observations.extra:
+        return pick(observations.extra["lowest"]), pick(observations.extra["highest"]), "range across seeds"
+    if observations.sd is not None:
+        values, sd = pick(observations.values), pick(observations.sd)
+        return values - sd, values + sd, "±1 standard deviation"
+    return None
+
+
+CUT_FILL = "rgba(214, 40, 40, 0.10)"  # Behind the values a filter cut at its ends: shown, not compared
+CUT_TEXT = "#b42318"
+CUT_HOVER = ("Cut: here the frequency filter starts up, and its error exceeds the share<br>of a cycle's amplitude set in "
+             "the step (the notes give how far and why).<br>Shown, but not compared with the model.")
+
+
+def _edge_trace(observations, colour, label, x, labels):
+    """The values a filter cut at the ends of the series, dotted, in the colour of the series; None if there are none."""
+    ends = observations.extra.get(EDGE)
+    if ends is None or not np.isfinite(ends).any():
+        return None
+    return go.Scatter(x=x, y=ends, mode="lines+markers", line={"color": colour, "width": 1.2, "dash": "dot"},
+                      marker={"size": 3}, opacity=0.75, customdata=labels, name=f"{label}: cut at the ends", legendgroup=label,
+                      hovertemplate=f"{label}, %{{customdata}}: %{{y:.4g}} (cut: filter start-up)<extra></extra>")
+
+
+def cut_spans(observations):
+    """[(first day, day after the last)] of each run of values a filter cut at the ends (dated values only)."""
+    ends = observations.extra.get(EDGE)
+    if observations.shape != "dated" or ends is None:
+        return []
+    start, end = pd.to_datetime(observations.index["start"]), pd.to_datetime(observations.index["end"])
+    edges = np.diff(np.r_[0, np.isfinite(ends).astype(int), 0])
+    return [(start.iloc[a], end.iloc[b - 1] + pd.Timedelta(days=1)) for a, b in zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1))]
+
+
+def mark_cut(figure, *series, row=None, names=None):
+    """Shade in red, behind the traces, the periods a filter cut at the ends of any of series, each with a small 'cut'
+    at its top that says why on hover. names: what each series is (e.g. "model", "data"), for a label saying whose
+    values were cut ("model cut", "data cut"; "cut" where all of them were), the first at the top, the next below it, so
+    that spans drawn over each other stay apart."""
+    whose = {}
+    for k, observations in enumerate(series):
+        for span in cut_spans(observations):
+            whose.setdefault(span, []).append(k)
+    where = {"row": row, "col": 1} if row else {}
+    for (x0, x1), cut in sorted(whose.items()):
+        figure.add_vrect(x0=x0, x1=x1, fillcolor=CUT_FILL, line_width=0, layer="below", **where)
+        alone = names is not None and len(cut) < len(series)
+        text = f"{names[cut[0]]} cut" if alone else "cut"
+        hover = (f"{names[cut[0]].capitalize()}: " + CUT_HOVER[0].lower() + CUT_HOVER[1:]) if alone else CUT_HOVER
+        # A side's own label at the start of its span, where it begins: centred, it could sit over the other side's
+        figure.add_annotation(x=x0 if alone else x0 + (x1 - x0) / 2, xanchor="left" if alone else "center", xshift=3 if alone else 0,
+                              y=1, yref=f"{'y' if not row or row == 1 else f'y{row}'} domain",
+                              xref="x" if not row or row == 1 else f"x{row}", text=text, showarrow=False, yanchor="top",
+                              yshift=-14 * cut[0] if alone else 0, font={"size": 10, "color": CUT_TEXT}, hovertext=hover)
+    return figure
+
+
+def _observations_traces(observations, colour, label, faint=False):
+    """The traces of observations: a line over time for dated values, with their uncertainty as a shaded band and the
+    values a filter cut at the ends dotted; bars for the other shapes, with error bars."""
+    n = len(observations)
+    labels = [observations.label(i) for i in range(n)]
+    if observations.shape == "dated":
+        start = pd.to_datetime(observations.index["start"]).to_numpy()
+        end = pd.to_datetime(observations.index["end"]).to_numpy()
+        x = start + (end - start) / 2
+        spread = None if faint else _spread(observations)
+        band = _band(x, spread[0], spread[1], colour, label, spread[2]) if spread else []
+        ends = None if faint else _edge_trace(observations, colour, label, x, labels)
+        return [*band, *([ends] if ends else []),
+                go.Scatter(x=x, y=observations.values, mode="lines+markers",
+                           line={"color": colour, "width": 1 if faint else 1.5}, marker={"size": 3 if faint or n > 60 else 6},
+                           customdata=labels, name=label, opacity=0.8 if faint else 1,
+                           hovertemplate=f"{label}, %{{customdata}}: %{{y:.4g}}<extra></extra>")]
+    error = None if observations.sd is None or faint else {"type": "data", "array": observations.sd, "color": INTERVAL, "thickness": 1.5}
+    return [go.Bar(x=labels, y=observations.values, marker={"color": colour}, error_y=error, name=label,
+                   hovertemplate=f"{label}, %{{x}}: %{{y:.4g}}<extra></extra>")]
+
+
+def observations_figure(observations, name, compare=None, compare_label=""):
+    """Observations of any shape: over time for dated values (each at the middle of its period), by calendar month or
+    season, by year, by age band, or a single value; with their uncertainty as error bars.
+
+    With compare, an earlier stage of their processing (compare_label, e.g. 'Values loaded'): overlaid in grey if it
+    has the same shape and units, else in a second panel below (sharing the time axis if both are dated), so that
+    values in different units never share an axis."""
+    title = f"{observations.name}: {name}"
+    if compare is None:
+        figure = go.Figure(_observations_traces(observations, OBSERVED, observations.name), layout=_base_layout(title=title))
+        figure = _plain_axes(figure, X_TITLES[observations.shape], observations.units)
+        figure.update_layout(showlegend=False, height=ONE_PANEL, meta={"view": "observations"})
+        if observations.shape != "dated":
+            figure.update_xaxes(type="category")
+        return mark_cut(figure, observations)
+    if compare.shape == observations.shape and compare.units == observations.units:
+        figure = go.Figure([*_observations_traces(compare, COMPARED, compare_label, faint=True),
+                            *_observations_traces(observations, OBSERVED, "After all steps")], layout=_base_layout(title=title))
+        figure = _plain_axes(figure, X_TITLES[observations.shape], observations.units)
+        # The legend below the axis title: above the plot it would cover the title
+        figure.update_layout(showlegend=True, height=ONE_PANEL + 40, barmode="group", meta={"view": "observations"},
+                             margin={"l": 70, "r": 30, "t": 44, "b": 90},
+                             legend={"orientation": "h", "x": 0.5, "xanchor": "center", "y": -0.22, "yanchor": "top"})
+        if observations.shape != "dated":
+            figure.update_xaxes(type="category")
+        return mark_cut(figure, observations)
+    shared = observations.shape == compare.shape == "dated"
+    figure = make_subplots(rows=2, cols=1, shared_xaxes=shared, vertical_spacing=0.16 if not shared else 0.1,
+                           subplot_titles=[f"After all steps: {observations.name}", f"{compare_label}: {compare.name}"])
+    for trace in _observations_traces(observations, OBSERVED, "After all steps"):
+        figure.add_trace(trace, row=1, col=1)
+    for trace in _observations_traces(compare, COMPARED, compare_label):
+        figure.add_trace(trace, row=2, col=1)
+    figure.update_layout(_base_layout(title=title), plot_bgcolor="white", showlegend=False, height=TWO_PANELS,
+                         margin={"l": 70, "r": 30, "t": 70, "b": 50}, meta={"view": "observations"})
+    for row, data in ((1, observations), (2, compare)):
+        figure.update_yaxes(title_text=data.units, gridcolor=GRID, tickfont={"size": AXIS_FONT}, row=row, col=1)
+        figure.update_xaxes(gridcolor=GRID, tickfont={"size": AXIS_FONT}, row=row, col=1,
+                            title_text=X_TITLES[data.shape] if row == 2 or not shared else None,
+                            type="category" if data.shape != "dated" else None)
+    figure.update_annotations(font={"size": 12})
+    mark_cut(figure, observations, row=1)
+    return mark_cut(figure, compare, row=2)
+
+
+MODELLED = "#e34948"  # The second categorical colour: the model, beside the observations in the first
+
+
+# Teal for rainfall, ochre for temperature, violet for the vector density and magenta for the infective ones (twin axis)
+DRIVER_COLOURS = {"rain": "#0f9aa8", "t2m": "#d99a0b", "vectors": ("#6d5bd0", "#be185d")}
+
+
+def _panel(observations):
+    """[(label, observations)] of a driver: a list of them as given, or a single one."""
+    return observations if isinstance(observations, list) else [(None, observations)]
+
+
+def _driver_trace(observations, colour, label):
+    if observations.shape == "dated":
+        start = pd.to_datetime(observations.index["start"]).to_numpy()
+        end = pd.to_datetime(observations.index["end"]).to_numpy()
+        x = start + (end - start) / 2
+    else:
+        x = [observations.label(i) for i in range(len(observations))]
+    kind = go.Bar if observations.aggregation == "sum" else go.Scatter
+    style = {"marker": {"color": colour}} if kind is go.Bar else {"mode": "lines+markers", "line": {"color": colour, "width": 1.5}, "marker": {"size": 3}}
+    return kind(x=x, y=observations.values, name=label, hovertemplate=f"{label}: %{{y:.4g}} {observations.units}<extra></extra>", **style)
+
+
+CALIBRATION_WINDOW = "#2e9e6b"  # Green and purple: apart from the blue of the data and the red of the model
+VALIDATION_WINDOW = "#8e5bd0"
+WINDOW_BAR = 16  # Height of the bars of the windows, in pixels
+
+
+def mark_windows(figure, span, validation):
+    """Semi-transparent bars along the top of a time-series figure, each across the dates of a window and named in it:
+    the calibration window in green (span, the period the model and the data share, without the validation windows: a
+    bar for each stretch between them), each validation window in purple ("Validation window", or numbered in date
+    order when there are several). span is (first, last) dates, validation one window (first, last) or several
+    [(first, last), ...] (as calibration_model.validation_windows reads them); the bars sit just above the first panel,
+    whose x axis all the panels share."""
+    from .calibration_model import validation_windows
+
+    first, last = pd.Timestamp(span[0]), pd.Timestamp(span[1])
+    windows = sorted((pd.Timestamp(start), pd.Timestamp(end)) for start, end in validation_windows(list(validation)))
+    day = pd.Timedelta(days=1)
+    bars, edge = [], first
+    for k, (start, end) in enumerate(windows):
+        bars.append((edge, min(last, start - day), "Calibration window", CALIBRATION_WINDOW))
+        bars.append((max(first, start), min(last, end), "Validation window" + (f" {k + 1}" if len(windows) > 1 else ""),
+                     VALIDATION_WINDOW))
+        edge = max(edge, end + day)
+    bars.append((edge, last, "Calibration window", CALIBRATION_WINDOW))
+    top = max((axis.domain[1] for axis in figure.select_yaxes() if axis.domain), default=1.0)
+    for annotation in figure.layout.annotations:  # The title of the first panel goes above the bars
+        if annotation.yref == "paper" and annotation.y is not None and annotation.y >= top - 1e-6:
+            annotation.yshift = (annotation.yshift or 0) + WINDOW_BAR + 4
+    for x0, x1, name, colour in bars:
+        if x0 > x1:
+            continue
+        figure.add_shape(type="rect", xref="x", yref="paper", ysizemode="pixel", yanchor=top, x0=x0, x1=x1, y0=3, y1=3 + WINDOW_BAR,
+                         fillcolor=colour, opacity=0.45, line_width=0, layer="above")
+        figure.add_annotation(x=x0 + (x1 - x0) / 2, y=top, yshift=3 + WINDOW_BAR / 2, xref="x", yref="paper", text=name,
+                              showarrow=False, font={"size": 10, "color": "#1f1f1f"}, yanchor="middle")
+    margin = figure.layout.margin.to_plotly_json()
+    figure.update_layout(margin={**margin, "t": (margin.get("t") or 44) + WINDOW_BAR + 8})
+    return figure
+
+
+REPORTED_BAND = "95 % of the reported series (observational model)"
+
+
+def comparison_figure(model, data, labels, model_values, data_values, scale=False, drivers=(), reported=None):
+    """The model and the observations: over time, each side over all its own values (the model where the data were cut
+    too, and the other way round), each side's values cut by a filter dotted and shaded as its own; other shapes (months,
+    seasons, years, age bands) as bars on the periods they share, as paired by calibration_metrics.pair. model_values and
+    data_values are the paired values, which the metrics compare. With scale, the model times the ratio of the means of
+    the paired values, to compare timing by eye; the legend says by how much. drivers are (name, label, observations) of
+    possible drivers such as rainfall, each drawn in a panel below, sharing the time (or month) axis when they are on it
+    too. reported: (low, high) of the band of reported series of the observational model, on the values of the model
+    series (as trial_band keeps it), the model then being their median (not scaled)."""
+    factor = float(np.mean(data_values) / np.mean(model_values)) if scale and reported is None and np.mean(model_values) > 0 else 1.0
+    middle = ", median across seeds" if "lowest" in model.extra else ""
+    model_label = f"Model{middle} × {factor:.3g} (scaled to the mean of the data)" if factor != 1.0 else f"Model: {model.name}{middle}"
+    if reported is not None:
+        model_label = "Model: median of the reported series (observational model)"
+    model_at = {model.label(i): i for i in range(len(model))}
+    if reported is not None and any(len(side) != len(model.values) for side in reported):
+        raise ValueError("the band of reported series does not match the model series")
+    if data.shape == "dated":
+        def middles(series):  # Each value at the middle of its period
+            start = pd.to_datetime(series.index["start"]).to_numpy()
+            return start + (pd.to_datetime(series.index["end"]).to_numpy() - start) / 2
+
+        data_x, model_x = middles(data), middles(model)
+        data_labels, model_labels = [data.label(i) for i in range(len(data))], list(model_at)
+        spread = []
+        found = _spread(model)
+        if found:  # A seed band: its spread over the seeds, wherever the model has values
+            spread = _band(model_x, found[0], found[1], MODELLED, "Model", found[2], factor)
+        if reported is not None:  # The band of the reported series instead
+            spread = _band(model_x, np.asarray(reported[0], dtype="f8"), np.asarray(reported[1], dtype="f8"), MODELLED, "Model",
+                           REPORTED_BAND)
+        traces = [go.Scatter(x=data_x, y=np.asarray(data.values, dtype="f8"), mode="lines+markers", line={"color": OBSERVED, "width": 1.5},
+                             marker={"size": 4}, name=f"Data: {data.name}", customdata=data_labels,
+                             hovertemplate="Data, %{customdata}: %{y:.4g}<extra></extra>"),
+                  *spread,
+                  go.Scatter(x=model_x, y=np.asarray(model.values, dtype="f8") * factor, mode="lines+markers",
+                             line={"color": MODELLED, "width": 1.5}, marker={"size": 4}, name=model_label, customdata=model_labels,
+                             hovertemplate="Model, %{customdata}: %{y:.4g}<extra></extra>")]
+        # The values a filter cut at the ends, of each: dotted, not compared
+        for series, colour, label, scaled in ((data, OBSERVED, "Data", 1.0), (model, MODELLED, "Model", factor)):
+            ends = series.extra.get(EDGE)
+            if ends is not None and np.isfinite(ends).any():
+                start = pd.to_datetime(series.index["start"]).to_numpy()
+                at = start + (pd.to_datetime(series.index["end"]).to_numpy() - start) / 2
+                traces.append(_edge_trace(replace(series, extra={EDGE: ends * scaled}), colour, label, at,
+                                          [series.label(i) for i in range(len(series))]))
+    else:
+        rows = [model_at[label] for label in labels]  # The band at the bars' periods
+        band = {} if reported is None else {"error_y": {  # The band of the reported series as whiskers
+            "type": "data", "symmetric": False, "array": np.asarray(reported[1], dtype="f8")[rows] - model_values,
+            "arrayminus": model_values - np.asarray(reported[0], dtype="f8")[rows], "color": "#475569", "thickness": 1.2}}
+        traces = [go.Bar(x=labels, y=data_values, marker={"color": OBSERVED}, name=f"Data: {data.name}"),
+                  go.Bar(x=labels, y=model_values * factor, marker={"color": MODELLED},
+                         name=model_label + (f"; whiskers: {REPORTED_BAND}" if reported is not None else ""), **band)]
+    title = "Model and data" if data.shape == "dated" else "Model and data, on the periods they share"
+    if not drivers:
+        figure = go.Figure(traces, layout=_base_layout(title=title))
+        figure = _plain_axes(figure, X_TITLES[data.shape], data.units)
+        figure.update_layout(showlegend=True, height=ONE_PANEL + 40, barmode="group", margin={"l": 70, "r": 30, "t": 44, "b": 90},
+                             legend={"orientation": "h", "x": 0.5, "xanchor": "center", "y": -0.22, "yanchor": "top"})
+        if data.shape != "dated":
+            figure.update_xaxes(type="category")
+        return mark_cut(figure, model, data, names=("model", "data"))
+    rows = 1 + len(drivers)
+    panels = [(name, label, _panel(observations)) for name, label, observations in drivers]
+    shared = all(series.shape == data.shape for _, _, panel in panels for _, series in panel)
+
+    def panel_title(label, panel):
+        if len(panel) == 1:
+            return f"{label} ({panel[0][1].units})"
+        return (f"{label}: {panel[0][0]} {units_label(panel[0][1].units)} at the left, {panel[1][0]} "
+                f"{units_label(panel[1][1].units)} at the right")
+
+    figure = make_subplots(rows=rows, cols=1, shared_xaxes=shared, vertical_spacing=0.06 if shared else 0.1,
+                           row_heights=[0.5] + [0.5 / len(drivers)] * len(drivers),
+                           specs=[[{}]] + [[{"secondary_y": len(panel) > 1}] for _, _, panel in panels],
+                           subplot_titles=[title, *[panel_title(label, panel) for _, label, panel in panels]])
+    for trace in traces:
+        figure.add_trace(trace, row=1, col=1)
+    def colours_of(name):
+        colours = DRIVER_COLOURS.get(name, INTERVAL)
+        return colours if isinstance(colours, tuple) else (colours,)
+
+    for row, (name, label, panel) in enumerate(panels, start=2):
+        colours = colours_of(name)
+        for k, (series_label, series) in enumerate(panel):
+            # A second series, e.g. the infective vectors, much smaller than the first: on its own scale, at the right
+            figure.add_trace(_driver_trace(series, colours[k % len(colours)], series_label or label), row=row, col=1,
+                             secondary_y=True if k else (False if len(panel) > 1 else None))
+    figure.update_layout(_base_layout(), plot_bgcolor="white", barmode="group", height=ONE_PANEL + 40 + 200 * len(drivers),
+                         margin={"l": 70, "r": 30, "t": 50, "b": 90}, showlegend=True,
+                         legend={"orientation": "h", "x": 0.5, "xanchor": "center", "y": -0.08, "yanchor": "top"})
+    figure.update_yaxes(title_text=data.units, row=1, col=1)
+    for row, (name, _, panel) in enumerate(panels, start=2):
+        if len(panel) == 1:
+            figure.update_yaxes(title_text=panel[0][1].units, row=row, col=1)
+            continue
+        colours = colours_of(name)
+        for k, (series_label, series) in enumerate(panel):
+            # Each axis in the colour of its series, so that which is which reads at a glance
+            # From zero, and the grid of the left axis only, so the two scales do not cross each other's lines
+            figure.update_yaxes(title_text=f"{series_label} {units_label(series.units)}", title_font={"color": colours[k % len(colours)]},
+                                rangemode="tozero", showgrid=not k, row=row, col=1, secondary_y=bool(k))
+    figure.update_xaxes(gridcolor=GRID, tickfont={"size": AXIS_FONT})
+    figure.update_yaxes(gridcolor=GRID, tickfont={"size": AXIS_FONT})
+    figure.update_xaxes(title_text=X_TITLES[data.shape], row=rows, col=1)
+    if data.shape != "dated":
+        figure.update_xaxes(type="category")
+    figure.update_annotations(font={"size": 12})
+    return mark_cut(figure, model, data, row=1, names=("model", "data"))
 
 
 def message_figure(text):
@@ -665,4 +1046,101 @@ def monthly_figure(result, name, key):
         yaxis={"title_text": f"{key}: share of the variance", "gridcolor": GRID, "zeroline": True, "zerolinecolor": INTERVAL,
                "range": [low - 0.02, high + 0.02]},
     )
+    return figure
+
+
+def calibration_history_figure(rows, objectives, log=()):
+    """The value of each objective in every completed trial of a calibration (dots), and the best so far (a line), one
+    panel per objective. Trials where transmission died out (infeasible) as grey rings, left out of the best so far.
+    rows are those of calibration_engine.trials_table, objectives those of its record; log: the indices of the
+    objectives drawn on a log scale."""
+    every = [row for row in rows if row["state"] == "COMPLETE"]
+    dead = [row for row in every if row.get("infeasible")]
+    done = [row for row in every if not row.get("infeasible")]
+    figure = make_subplots(rows=len(objectives), cols=1, shared_xaxes=True, vertical_spacing=0.08,
+                           subplot_titles=[f"{o['name']}: {o['metric'].replace('_', ' ')} ({'higher' if o['direction'] == 'maximize' else 'lower'} is better)"
+                                           for o in objectives])
+    numbers = [row["number"] for row in done]
+    for k, objective in enumerate(objectives):
+        values = np.array([row["values"][k] for row in done], dtype="f8")
+        better = np.fmax if objective["direction"] == "maximize" else np.fmin
+        best = better.accumulate(values) if len(values) else values
+        figure.add_trace(go.Scatter(x=numbers, y=values, mode="markers", marker={"color": COMPARED, "size": 6}, name="Trial",
+                                    showlegend=k == 0, legendgroup="trial",
+                                    hovertemplate=f"Trial %{{x}}: {objective['name']} %{{y:.4g}}<extra></extra>"), row=k + 1, col=1)
+        figure.add_trace(go.Scatter(x=numbers, y=best, mode="lines", line={"color": OBSERVED, "width": 2, "shape": "hv"},
+                                    name="Best so far", showlegend=k == 0, legendgroup="best", hoverinfo="skip"), row=k + 1, col=1)
+        if dead:
+            figure.add_trace(go.Scatter(x=[row["number"] for row in dead], y=[row["values"][k] for row in dead], mode="markers",
+                                        marker={"color": "rgba(0,0,0,0)", "size": 7, "line": {"color": "#9a9893", "width": 1.5}},
+                                        name="Transmission died out (infeasible)", showlegend=k == 0, legendgroup="dead",
+                                        text=[row["infeasible"] for row in dead],
+                                        hovertemplate="Trial %{x}: infeasible, %{text}<extra></extra>"), row=k + 1, col=1)
+        figure.update_yaxes(title_text=objective["metric"].replace("_", " ") + (" (log scale)" if k in log else ""), gridcolor=GRID,
+                            type="log" if k in log else "linear", row=k + 1, col=1)
+    figure.update_xaxes(gridcolor=GRID)
+    figure.update_xaxes(title_text="Trial", row=len(objectives), col=1)
+    figure.update_layout(_base_layout(title="Calibration: the objectives, trial by trial"), plot_bgcolor="white",
+                         height=ONE_PANEL + 220 * (len(objectives) - 1),
+                         legend={"orientation": "h", "x": 0.5, "xanchor": "center", "y": -0.12, "yanchor": "top"})
+    figure.update_annotations(font={"size": 12})
+    return figure
+
+
+UNTICKED = "#d4d3cf"  # A region not calibrated: its cells keep the temperatures of the file
+
+
+def regions_figure(cells, units, ticked, size=None, shapes=None):
+    """The simulated cells, each in the colour of its region (or of itself), in the order of the table (coolest first), grey
+    if not ticked; with the boxes of the regions and their numbers. cells: [{lat, lon, mean, people}]; units: the regions
+    (with members) or cells; ticked: whether each unit is calibrated; shapes: the outlines of the areas of a shapefile (shapes.outlines), or None."""
+    lats = np.array(sorted({cell["lat"] for cell in cells}))
+    lons = np.array(sorted({cell["lon"] for cell in cells}))
+    step = min([float(np.min(np.diff(axis))) for axis in (lats, lons) if len(axis) > 1] or [size or 0.1])
+    lat = np.arange(lats.min(), lats.max() + step / 2, step)
+    lon = np.arange(lons.min(), lons.max() + step / 2, step)
+    unit_of = {}
+    for k, unit in enumerate(units):
+        for member in unit.get("members") or [unit]:
+            unit_of[(round(member["lat"], 6), round(member["lon"], 6))] = k
+    z = np.full((len(lat), len(lon)), np.nan)
+    text = np.full((len(lat), len(lon)), "", dtype=object)
+    for cell in cells:
+        i, j = int(round((cell["lat"] - lat[0]) / step)), int(round((cell["lon"] - lon[0]) / step))
+        k = unit_of.get((round(cell["lat"], 6), round(cell["lon"], 6)))
+        if k is None:
+            continue
+        z[i, j] = k if ticked[k] else len(units)
+        text[i, j] = (f"{cell['lat']:g}°N, {cell['lon']:g}°E: {cell['mean']:.2f} °C, {cell['people']:,.0f} people<br>"
+                      f"{'region' if size else 'cell'} {k + 1}{'' if ticked[k] else ', not calibrated'}")
+    colours = [DOT_COLOURS[k % len(DOT_COLOURS)] for k in range(len(units))] + [UNTICKED]
+    n = len(colours)
+    scale = [[position, colour] for k, colour in enumerate(colours) for position in (k / n, (k + 1) / n)]
+    figure = go.Figure(go.Heatmap(x=lon, y=lat, z=z, zmin=-0.5, zmax=n - 0.5, colorscale=scale, showscale=False, xgap=1, ygap=1,
+                                  customdata=text, hovertemplate="%{customdata}<extra></extra>"),
+                       layout=_base_layout(title=("Regions" if size else "Cells") + " to offset, in the order of the table "
+                                           "(coolest first; grey: not calibrated)"))
+    for k, unit in enumerate(units):
+        if size:
+            figure.add_shape(type="rect", x0=unit["lon"] - size / 2, x1=unit["lon"] + size / 2, y0=unit["lat"] - size / 2,
+                             y1=unit["lat"] + size / 2, line={"color": TEXT, "width": 1.5})
+        # The number of the region in the middle of its cells, on a white tag that reads over any colour
+        inside = unit.get("members") or [unit]
+        figure.add_annotation(x=float(np.mean([m["lon"] for m in inside])), y=float(np.mean([m["lat"] for m in inside])),
+                              text=f"<b>{k + 1}</b>", showarrow=False, font={"size": 13 if size else 10, "color": TEXT},
+                              bgcolor="rgba(255,255,255,0.85)", borderpad=2)
+    # The view on the boxes (or the cells), degrees of latitude and longitude kept equal by the shape of the plot
+    half = (size or step) / 2
+    west = min(min(u["lon"] for u in units) - half, lon[0] - step / 2)
+    east = max(max(u["lon"] for u in units) + half, lon[-1] + step / 2)
+    south = min(min(u["lat"] for u in units) - half, lat[0] - step / 2)
+    north = max(max(u["lat"] for u in units) + half, lat[-1] + step / 2)
+    if shapes is not None:
+        _add_shapes(figure, shapes)
+        xs, ys = [x for x in shapes[0]["x"] if x is not None], [y for y in shapes[0]["y"] if y is not None]
+        west, east, south, north = min(west, *xs), max(east, *xs), min(south, *ys), max(north, *ys)
+    figure.update_xaxes(title_text="Longitude [°E]", showgrid=False, zeroline=False, range=[west, east], constrain="domain")
+    figure.update_yaxes(title_text="Latitude [°N]", showgrid=False, zeroline=False, range=[south, north], scaleanchor="x", scaleratio=1,
+                        constrain="domain")
+    figure.update_layout(plot_bgcolor="white", height=420)
     return figure

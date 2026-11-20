@@ -1,13 +1,16 @@
 """Checks that need no simulation: python -m unittest discover tests"""
 
 import datetime
+import hashlib
 import json
 import math
 import os
 import re
 import shutil
 import socket
+import sys
 import tempfile
+import time
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -15,6 +18,7 @@ from unittest import mock
 
 import netCDF4
 import numpy as np
+import pandas as pd
 
 from mobile.config import (
     Config,
@@ -157,7 +161,13 @@ class TestConfig(unittest.TestCase):
         parameters = all_parameters()
         # Every parameter of &CONST, and only those: one added to the model must be added here too
         self.assertEqual(set(parameters), namelist_names(MOBILE, "CONST"))
-        self.assertEqual(sum(spec["curated"] for spec in parameters.values()), 12)
+        self.assertEqual(sum(spec["curated"] for spec in parameters.values()), 19)
+        # The ranges of the pond scheme, set by hand from the source (Asare et al. 2016) and the physical bounds: e.g.
+        # wpond_max down to below VECTRI's original 0.2, soil infiltration from clay (50) to sand (700), wide enough to
+        # calibrate; the defaults (Senegal's) inside them
+        expected = {"wpond_max": (0.1, 1.0), "wpond_ratio": (0.1, 1.0), "wpond_shapep2": (0.25, 2.0), "wpond_depthref": (250.0, 350.0),
+                    "wpond_CN": (80.0, 90.0), "wpond_ref": (0.005, 0.02), "soilinfil_SA": (50.0, 750.0)}
+        self.assertEqual({name: (parameters[name]["min"], parameters[name]["max"]) for name in expected}, expected)
         for name, spec in parameters.items():
             self.assertIn(spec["group"], (*PARAMETER_GROUPS, "Cholera", "Mobility"), name)
             self.assertLess(spec["min"], spec["max"], name)
@@ -231,6 +241,11 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(base, final)
         with self.assertRaisesRegex(ConfigError, "not available for this model"):
             self.config.with_params(mu_B=0.3)
+
+    def test_threads_at_most_32(self):
+        Config.load(CONFIG).with_run(threads=32).validate()
+        with self.assertRaisesRegex(ConfigError, "threads must be at most 32"):
+            Config.load(CONFIG).with_run(threads=33).validate()
 
     def test_spin_up_needs_a_year(self):
         # mo_spinup.f90 stops with less than 365 simulated days (ndays_year): 364 must be refused, 365 accepted
@@ -566,6 +581,27 @@ class TestSetup(unittest.TestCase):
         saved.write_text(saved.read_text().replace("rain.nc", "moved.nc"))
         self.assertIsNone(load_setup(MOBILE))
 
+    def test_shapes_remembered_and_dropped_when_moved(self):
+        shapes = {"file": str(write_shapes(self.folder / "villages", TestShapes.SQUARES, "EPSG:32637")), "name": "village", "merge": None}
+        config = from_fields(MOBILE, "Study", "runs", self.run, self.files, age_structure=self.age, shapes=shapes)
+        save_setup(config)
+        self.assertEqual(load_setup(MOBILE).shapes, shapes)
+        with self.assertRaises(ConfigError) as caught:
+            from_fields(MOBILE, "Study", "runs", self.run, self.files, age_structure=self.age, shapes={**shapes, "name": "region"})
+        self.assertIn("no field 'region'", str(caught.exception))
+        # A moved shapefile only draws on the maps: the rest of the setup still loads, and a run made with it too
+        Path(shapes["file"]).rename(self.folder / "moved.shp")
+        self.assertIsNone(load_setup(MOBILE).shapes)
+        manifest = {"run": self.run, "inputs": self.files, "age_structure": self.age, "shapes": shapes}
+        self.assertIsNone(from_manifest(manifest, from_fields(MOBILE, "Study", "runs", self.run, self.files, age_structure=self.age)).shapes)
+        # In a configuration file, relative to it
+        Path(self.folder / "moved.shp").rename(shapes["file"])
+        yaml_file = self.folder / "with_shapes.yaml"
+        yaml_file.write_text(CONFIG.read_text().replace("$MOBILE", str(MOBILE)).replace("./", str(CONFIG.parent) + "/")
+                             + "shapes: {file: villages.shp, merge: district}\n")
+        loaded = Config.load(yaml_file, mobile=MOBILE)
+        self.assertEqual(loaded.shapes, {"file": str(Path(shapes["file"]).resolve()), "name": None, "merge": "district"})
+
     def test_restored_from_a_run(self):
         current = from_fields(MOBILE, "Study", "elsewhere", self.run, self.files, age_structure=self.age)
         manifest = {"run": {**self.run, "nagent": 5000}, "inputs": self.files, "age_structure": {**self.age, "product": "R2025A", "year": 2020}}
@@ -586,7 +622,9 @@ class TestSetup(unittest.TestCase):
         self.assertEqual(list_folder(self.folder, "text")[1], ["data.csv", "notes.txt"])
         self.assertEqual(list_folder(self.folder, "folder")[1], [])
         self.assertEqual(start_folder(str(self.folder / "b.nc")), self.folder.resolve())
-        self.assertEqual(start_folder(""), Path.home())
+        # Empty, or a path that does not exist: the folder the GUI was started in
+        self.assertEqual(start_folder(""), Path.cwd())
+        self.assertEqual(start_folder(str(self.folder / "nowhere" / "x.nc")), Path.cwd())
 
     def test_new_folder(self):
         path, problem = create_folder(self.folder, " kenya_2025 ")
@@ -602,6 +640,144 @@ class TestSetup(unittest.TestCase):
     def test_results_folder_inside_the_repository(self):
         with self.assertRaises(ConfigError):
             from_fields(MOBILE, "Study", str(Path(MOBILE) / "runs"), self.run, self.files, age_structure=self.age)
+
+
+def write_shapes(stem, squares, crs=None, kind="polygon"):
+    """A shapefile of squares {(west, south, size): {field: value}} in degrees, written in the coordinates of crs
+    (e.g. "EPSG:32637", UTM zone 37N, with its .prj), or in longitude and latitude without a .prj."""
+    import pyproj
+    import shapefile
+    to = pyproj.Transformer.from_crs("EPSG:4326", crs, always_xy=True) if crs else None
+    with shapefile.Writer(str(stem), shapeType=shapefile.POLYGON if kind == "polygon" else shapefile.POINT) as writer:
+        fields = list(next(iter(squares.values())))
+        for field in fields:
+            writer.field(field, "C")
+        for (west, south, size), record in squares.items():
+            ring = [(west, south), (west, south + size), (west + size, south + size), (west + size, south), (west, south)]
+            if to:
+                ring = [to.transform(x, y) for x, y in ring]
+            if kind == "polygon":
+                writer.poly([ring])
+            else:
+                writer.point(*ring[0])
+            writer.record(*[record[field] for field in fields])
+    if crs:
+        Path(f"{stem}.prj").write_text(pyproj.CRS(crs).to_wkt(pyproj.enums.WktVersion.WKT1_ESRI))
+    return Path(f"{stem}.shp")
+
+
+class TestShapes(unittest.TestCase):
+    # Made-up villages in two made-up districts, in the highlands of the Horn of Africa (UTM zone 37N)
+    SQUARES = {(38.8, 8.6, 0.1): {"village": "A", "district": "North"}, (38.9, 8.6, 0.1): {"village": "B", "district": "North"},
+               (38.8, 8.5, 0.1): {"village": "C", "district": "South"}}
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.folder = Path(folder.name)
+
+    def test_projected_shapefile_in_longitude_and_latitude(self):
+        import shapely
+        from mobile.shapes import read_shapes
+        shapes = read_shapes(write_shapes(self.folder / "villages", self.SQUARES, "EPSG:32637"))
+        self.assertEqual(shapes.crs, "WGS 84 / UTM zone 37N")
+        self.assertTrue(shapes.converted)
+        self.assertEqual(shapes.fields, ("village", "district"))
+        self.assertEqual([record["village"] for record in shapes.records], ["A", "B", "C"])
+        # The corners come back where they were, to about a millimetre
+        np.testing.assert_allclose(shapely.total_bounds(np.array(shapes.geometries, dtype=object)), [38.8, 8.5, 39.0, 8.7], atol=1e-8)
+
+    def test_zip_and_longitude_latitude_without_prj(self):
+        import zipfile
+        from mobile.shapes import ShapeError, read_shapes
+        shp = write_shapes(self.folder / "villages", self.SQUARES, "EPSG:32637")
+        with zipfile.ZipFile(self.folder / "villages.zip", "w") as archive:
+            for suffix in (".shp", ".shx", ".dbf", ".prj"):
+                archive.write(shp.with_suffix(suffix), f"inside/villages{suffix}")
+        self.assertEqual(len(read_shapes(self.folder / "villages.zip").geometries), 3)
+        # Without a .prj: longitude and latitude are taken as such, with a note; metres cannot be
+        plain = read_shapes(write_shapes(self.folder / "plain", self.SQUARES))
+        self.assertFalse(plain.converted)
+        self.assertIn("no .prj", plain.note)
+        shp.with_suffix(".prj").unlink()
+        with self.assertRaisesRegex(ShapeError, "no .prj"):
+            read_shapes(shp)
+        with self.assertRaisesRegex(ShapeError, "only areas"):
+            read_shapes(write_shapes(self.folder / "points", self.SQUARES, kind="point"))
+        shp.with_suffix(".dbf").unlink()
+        with self.assertRaisesRegex(ShapeError, "needs its .dbf"):
+            read_shapes(shp)
+
+    def test_named_merged_and_outlined(self):
+        from mobile.shapes import ShapeError, areas, choice_problems, name_field, outlines, read_shapes
+        path = write_shapes(self.folder / "villages", self.SQUARES, "EPSG:32637")
+        shapes = read_shapes(path)
+        self.assertEqual(name_field(shapes), "village")  # The most different values
+        self.assertEqual([label for label, _ in areas(shapes, "village")], ["A", "B", "C"])
+        merged = dict(areas(shapes, "village", "district"))
+        self.assertEqual(sorted(merged), ["North", "South"])
+        # North is the two squares joined: one ring of their outline, with the area of both
+        self.assertEqual(merged["North"].geom_type, "Polygon")
+        self.assertAlmostEqual(merged["North"].area, 0.02, places=6)
+        lines, points = outlines(areas(shapes, "village", "district"))
+        self.assertEqual(lines["x"].count(None), 2)
+        self.assertEqual(points["text"], ["North", "South"])
+        self.assertTrue(all(merged[label].contains(__import__("shapely").Point(x, y))
+                            for x, y, label in zip(points["x"], points["y"], points["text"])))
+        with self.assertRaisesRegex(ShapeError, "no field 'region'"):
+            areas(shapes, "region")
+        self.assertEqual(choice_problems({"file": str(path), "name": "village", "merge": None}), [])
+        self.assertIn("no file", choice_problems({"file": str(self.folder / "moved.shp")})[0])
+
+    def test_single_cell_drawn_at_its_size(self):
+        # One cell of 0.5°, with its bounds: drawn 0.5° wide, as the model takes it; without bounds, 0.05° as before
+        from mobile.driving import field_limits, open_field
+        from mobile.grid import read_grid
+        from mobile.plots import grid_figure
+        for bounds in (True, False):
+            path = self.folder / f"one_{bounds}.nc"
+            with netCDF4.Dataset(path, "w") as data:
+                for axis, centre in (("lat", 8.75), ("lon", 38.75)):
+                    data.createDimension(axis, 1)
+                    variable = data.createVariable(axis, "f8", (axis,))
+                    variable[:] = [centre]
+                    if bounds:
+                        data.createDimension("bnds", 2) if "bnds" not in data.dimensions else None
+                        data.createVariable(f"{axis}_bnds", "f8", (axis, "bnds"))[:] = [[centre - 0.25, centre + 0.25]]
+                        variable.bounds = f"{axis}_bnds"
+                data.createVariable("pop", "f4", ("lat", "lon"))[:] = [[0.001]]
+            size = 0.5 if bounds else 0.05
+            field = open_field(path, "pop_file")
+            region_map = map_figure(field, None, ("Population", ""), 1, field_limits(field, log=True), log=True)
+            for figure in (region_map, grid_figure(read_grid(path))):
+                self.assertEqual((figure.data[0].dx, figure.data[0].dy), (size, size))
+                np.testing.assert_allclose(figure.layout.xaxis.range, [38.75 - size / 2, 38.75 + size / 2])
+
+    def test_merged_without_slivers(self):
+        # Areas that do not quite meet leave slivers when merged: holes and pieces under 1,000 m² go, a real hole stays
+        import shapely
+        from mobile.shapes import _square_metres, _without_slivers
+        metre = 1 / 111_000  # About a metre, in degrees, near the equator
+        outer = [(39, 8), (39.1, 8), (39.1, 8.1), (39, 8.1)]
+        sliver = [(39.05, 8.05), (39.05 + 2 * metre, 8.05), (39.05 + 2 * metre, 8.05 + 2 * metre), (39.05, 8.05 + 2 * metre)]
+        hole = [(39.01, 8.01), (39.02, 8.01), (39.02, 8.02), (39.01, 8.02)]  # About 1.2 km²
+        crumb = shapely.box(39.2, 8, 39.2 + 3 * metre, 8 + 3 * metre)
+        cleaned = _without_slivers(shapely.MultiPolygon([shapely.Polygon(outer, [sliver, hole]), crumb]))
+        self.assertEqual(cleaned.geom_type, "Polygon")
+        self.assertEqual(len(cleaned.interiors), 1)
+        self.assertAlmostEqual(_square_metres(cleaned.interiors[0]) / 1e6, 1.2, delta=0.05)
+
+    def test_drawn_on_the_maps(self):
+        from mobile.shapes import areas, outlines, read_shapes
+        drawn = outlines(areas(read_shapes(write_shapes(self.folder / "villages", self.SQUARES, "EPSG:32637")), "village"))
+        grid = {"lat": np.array([8.55, 8.65]), "lon": np.array([38.85, 38.95]), "mask": np.ones((2, 2), bool)}
+        from mobile.plots import grid_figure
+        without, with_shapes = len(grid_figure(grid).data), grid_figure(grid, shapes=drawn)
+        self.assertEqual(len(with_shapes.data), without + 3)  # Halo, line, and the names on hovering
+        self.assertEqual(list(with_shapes.data[-1].text), ["A", "B", "C"])
+        # The view shows all the areas, also beyond a grid of one cell
+        one = grid_figure({"lat": np.array([8.55]), "lon": np.array([38.85]), "mask": np.ones((1, 1), bool)}, shapes=drawn)
+        np.testing.assert_allclose([*one.layout.xaxis.range, *one.layout.yaxis.range], [38.8, 39.0, 8.5, 8.7], atol=1e-5)
 
 
 class TestDrivingPreview(unittest.TestCase):
@@ -785,6 +961,81 @@ class TestBasemap(unittest.TestCase):
         with tempfile.TemporaryDirectory() as cache, mock.patch.dict(os.environ, {"MOBILE_CACHE_DIR": cache}):
             with mock.patch("urllib.request.urlopen", side_effect=OSError("no connection")):
                 self.assertIsNone(load_basemap([0.0, 1.0], [0.0, 1.0]))
+
+
+class TestCalibrationTemplate(unittest.TestCase):
+    """A calibration used as a template: its offset cells or regions found again on the cells of the setup now."""
+
+    CELLS = [{"lat": lat, "lon": lon, "mean": 15.0 + lat - 8, "people": 100.0}
+             for lat in (8.05, 8.15, 8.25, 8.35) for lon in (38.55, 38.65, 38.75, 38.85)]
+
+    def test_cells_and_regions(self):
+        from mobile.calibration_run_ui import regions, template_regions
+
+        # One offset per cell: the same cells
+        self.assertEqual(template_regions([{"lat": 8.05, "lon": 38.55}, {"lat": 8.25, "lon": 38.75}], self.CELLS),
+                         (None, {(8.05, 38.55), (8.25, 38.75)}))
+        # Regions with their size kept, and without it (calibrations made before): the size found from their boxes
+        boxes = regions(self.CELLS, 0.2)
+        recorded = [{"lat": b["lat"], "lon": b["lon"], "members": b["members"]} for b in boxes[:2]]
+        expected = {(round(b["lat"], 6), round(b["lon"], 6)) for b in boxes[:2]}
+        self.assertEqual(template_regions(recorded, self.CELLS, 0.2), (0.2, expected))
+        self.assertEqual(template_regions(recorded, self.CELLS), (0.2, expected))
+        # Not those of the setup now (another grid): nothing matched
+        self.assertIsNone(template_regions([{"lat": 10.05, "lon": 38.55}], self.CELLS))
+        moved = [{**recorded[0], "members": recorded[0]["members"][:1]}]  # A box of other cells than now
+        self.assertIsNone(template_regions(moved, self.CELLS))
+
+    def test_new_name(self):
+        from mobile.calibration_run_ui import unique_name
+
+        self.assertEqual(unique_name("look", {"look"}), "look_2")
+        self.assertEqual(unique_name("look", {"look", "look_2", "look_3"}), "look_4")
+
+
+class TestMapPointsAndRelief(unittest.TestCase):
+    def test_clicks_snap_to_the_cell_centres(self):
+        from mobile.plots import snap_to_cell
+
+        lat, lon = np.round(np.arange(8.05, 9.46, 0.1), 2), np.round(np.arange(38.55, 39.46, 0.1), 2)
+        self.assertEqual(snap_to_cell(lat, lon, 38.7312, 8.6687), (38.75, 8.65))  # Anywhere in a cell: its centre
+        self.assertEqual(snap_to_cell(lat, lon, 38.55, 8.05), (38.55, 8.05))
+        self.assertEqual(snap_to_cell(lat, lon, 38.47, 8.0), (38.55, 8.05))  # Just outside the corner: the corner cell
+        self.assertIsNone(snap_to_cell(lat, lon, 38.3, 8.6))  # More than a cell outside: nothing
+        self.assertEqual(snap_to_cell([8.75], [38.75], 38.9, 8.7, steps=(0.5, 0.5)), (38.75, 8.75))  # One cell, its size known
+
+    def test_relief_is_a_shading_over_the_data(self):
+        import base64
+        import io
+
+        import xarray as xr
+        from PIL import Image
+
+        from mobile.basemap import LIGHT_ALPHA, SHADOW_ALPHA, Basemap, _shading
+        from mobile.plots import map_figure
+
+        # Flat land, sea, and a ridge running north-south: its west slope faces the light (northwest), its east one not
+        lats, lons = np.arange(0.0, 1.0, 0.01), np.arange(0.0, 1.0, 0.01)
+        elevation = np.full((len(lats), len(lons)), 500.0)
+        elevation[:, :20] = -100.0  # Sea in the west
+        ridge = 3000.0 * np.exp(-((lons - 0.6) / 0.05) ** 2)
+        elevation[:, 20:] += ridge[20:]
+        terrain = _shading(elevation, lats, lons)
+        image = Image.open(io.BytesIO(base64.b64decode(terrain.image.split(",", 1)[1])))
+        self.assertEqual(image.mode, "LA")
+        grey, alpha = (np.asarray(image)[::-1][..., k] for k in (0, 1))  # Back to lat increasing
+        self.assertEqual(alpha[:, :20].max(), 0)  # Sea: transparent
+        self.assertEqual(alpha[50, 30], 0)  # Flat land: transparent, its colour as it is
+        lit, shaded = alpha[50, 57], alpha[50, 63]  # West and east slopes of the ridge
+        self.assertEqual((grey[50, 57], grey[50, 63]), (255, 0))  # Lighter on the lit slope, darker on the other
+        self.assertTrue(0 < lit <= LIGHT_ALPHA * 255 + 1 and 0 < shaded <= SHADOW_ALPHA * 255 + 1, (lit, shaded))
+        # Laid over the data, which keep their colours (full opacity)
+        data = xr.DataArray(np.ones((1, 2, 2)), dims=("time", "lat", "lon"),
+                            coords={"time": [np.datetime64("2000-01-01")], "lat": [0.25, 0.75], "lon": [0.25, 0.75]})
+        basemap = Basemap(land=[], lakes=[], rivers={"x": [], "y": []}, borders={"x": [], "y": []})
+        figure = map_figure(data, None, ("x", "1"), 1, (0.0, 2.0), basemap=basemap, terrain=terrain)
+        self.assertEqual(figure.layout.images[0].layer, "above")
+        self.assertIn(figure.data[0].opacity, (None, 1))
 
 
 class TestListRuns(unittest.TestCase):
@@ -1039,6 +1290,27 @@ echo 'Program finished successfully'
         self.assertLess(order["a build-end"], order["b build-start"])  # Builds do not overlap
         self.assertLess(order["b build-start"], order["a run-end"])   # The second built while the first ran
 
+    def test_prebuilt_run_needs_no_turn(self):
+        # A model built beforehand runs at once, also while another run builds and holds the lock
+        import time
+
+        _, first, _ = self.start("a", wait=True)
+        time.sleep(0.2)
+        binary = self.config.runs_dir.parent / "mobile.out"
+        binary.write_text("#!/bin/bash\n")
+        result = Runner(self.config, prebuilt=binary).run("p")  # Not RunnerBusy, without waiting
+        first.join(20)
+        order = {event: index for index, event in enumerate(self.events.read_text().split("\n"))}
+        self.assertLess(order["p build-start"], order["a build-end"])  # It started while a held the lock
+        script = (result.run_dir / "run_MOBILE.sh").read_text()
+        self.assertRegex(script, rf"(?m)^\s*prebuilt='{re.escape(str(binary))}'$")
+        manifest = json.loads((result.run_dir / "run.json").read_text())
+        self.assertEqual(manifest["prebuilt"], str(binary))
+        self.assertEqual(manifest["binary_md5"], hashlib.md5(binary.read_bytes()).hexdigest())
+        # Without one, the line keeps its default: the model is built, as by a MoBILE from before -E
+        plain = (self.config.runs_dir / "a" / "run_MOBILE.sh").read_text()
+        self.assertRegex(plain, r"(?m)^\s*prebuilt='NONE'$")
+
     def test_busy_or_cancelled_while_another_builds(self):
         import time
 
@@ -1143,6 +1415,75 @@ echo 'Program finished successfully'
         # Fixed: resuming runs them all
         record = run_study(folder, StudyState(), parallel=4)
         self.assertEqual((record["status"], record["finished"]), ("finished", 32))
+
+    # Builds the model unless given one with -E, and says which, with the name of its run folder
+    BUILDING = """#!/bin/bash
+prebuilt=""
+while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:i:l:M:B:T:C:G:O:E:" flag; do
+  case $flag in E) [ "$OPTARG" != "NONE" ] && prebuilt=$OPTARG ;; esac
+done
+if [ -n "$prebuilt" ]; then
+  echo "$(basename $PWD) prebuilt $prebuilt" >> $EVENTS
+else
+  echo "$(basename $PWD) build" >> $EVENTS
+  sleep ${FAKE_BUILD:-0.3}
+  mkdir -p output && printf '#!/bin/bash\\n' > output/mobile.out && chmod +x output/mobile.out
+fi
+echo '================= Running MoBILE ================='
+sleep ${FAKE_SLEEP:-0}
+mkdir -p output && touch output/output.nc
+echo 'Program finished successfully'
+"""
+
+    def building(self, **environ):
+        (self.config.mobile / "mobile.sh").write_text(self.BUILDING)
+        events = self.config.runs_dir.parent / "events.txt"
+        events.write_text("")
+        patch = mock.patch.dict(os.environ, {"EVENTS": str(events), **environ})
+        patch.start()
+        self.addCleanup(patch.stop)
+        return events
+
+    def test_model_built_once(self):
+        events = self.building(FAKE_SLEEP="0.3")
+        folder = create_study(self.config, self.parameters, 2, False, [1], name="once", sample_seed=1)  # 8 runs
+        started = time.time()
+        record = run_study(folder, StudyState(), parallel=4)
+        wall = time.time() - started
+        self.assertEqual((record["status"], record["finished"]), ("finished", 8))
+        lines = events.read_text().split()
+        binary = folder / "bin" / "mobile.out"
+        self.assertEqual(events.read_text().count(" build"), 1)
+        self.assertEqual(events.read_text().count(f" prebuilt {binary}"), 7)
+        self.assertEqual(record["binary_md5"], hashlib.md5(binary.read_bytes()).hexdigest())
+        manifest = json.loads((folder / "runs" / run_name(1, 7) / "run.json").read_text())
+        self.assertEqual((manifest["prebuilt"], manifest["binary_md5"]), (str(binary), record["binary_md5"]))
+        # Side by side: 0.3 s to build, then 8 runs of 0.3 s, 4 at a time, take well under 8 × 0.6 s
+        self.assertLess(wall, 3.5, lines)
+        # Resumed, the runs left use the model of the analysis: nothing is built again
+        for index in (2, 5):
+            shutil.rmtree(folder / "runs" / run_name(1, index))
+        events.write_text("")
+        record = run_study(folder, StudyState(), parallel=2)
+        self.assertEqual((record["status"], record["finished"]), ("finished", 8))
+        self.assertEqual(sorted(events.read_text().split("\n"))[1:], [f"{run_name(1, i).split('/')[-1]} prebuilt {binary}" for i in (2, 5)])
+
+    def test_cancelled_while_the_model_is_built(self):
+        import threading
+
+        events = self.building(FAKE_BUILD="2")
+        folder = create_study(self.config, self.parameters, 2, False, [1], name="cancel", sample_seed=1)
+        state = StudyState()
+        outcome = {}
+        worker = threading.Thread(target=lambda: outcome.update(record=run_study(folder, state, parallel=4)))
+        worker.start()
+        time.sleep(0.5)
+        state.cancel()
+        worker.join(10)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(outcome["record"]["status"], "cancelled")
+        # Only the run that built started; those waiting for its model never did
+        self.assertEqual(len(events.read_text().split("\n")) - 1, 1)
 
     def test_cancel_and_resume(self):
         import threading
@@ -1822,6 +2163,3248 @@ class TestDrivingFilesHelp(unittest.TestCase):
         # What the GUI does not need is said, and no file for it is asked
         self.assertIn("Not needed in the GUI", html)
         self.assertNotIn("area.nc", html)
+
+
+class TestCalibrationData(unittest.TestCase):
+    """Observations for calibration: tables of every shape, the standard netCDF file, checks and processing."""
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.folder = Path(folder.name)
+
+    def daily(self, first="2001-01-01", last="2001-12-31", value=None):
+        """A dated table of daily counts, value i on day i (from 0) unless given."""
+        import pandas as pd
+        days = pd.date_range(first, last, freq="D")
+        return pd.DataFrame({"day": days.strftime("%Y-%m-%d"), "cases": np.arange(len(days), dtype=float) if value is None else value,
+                             "N": np.full(len(days), 1000.0)})
+
+    def test_tables_of_any_separator(self):
+        from mobile.calibration_data import read_table
+        rows = [("date", "PF", "N"), ("2001-01-15", "7", "1200"), ("2001-02-15", "NA", "1210")]
+        for separator in (",", ";", "\t"):
+            table = read_table("\n".join(separator.join(row) for row in rows) + "\n")
+            self.assertEqual(list(table.columns), ["date", "PF", "N"], separator)
+            self.assertTrue(np.isnan(table["PF"].iloc[1]))
+        # Written by R: quoted header, row names, blanks
+        table = read_table('"date" "PF" "N"\n"1" 2001-01-15 7 1200\n"2" 2001-02-15 NA 1210\n')
+        self.assertEqual(list(table.columns), ["date", "PF", "N"])
+        self.assertEqual(float(table["N"].iloc[0]), 1200.0)
+
+    def test_dated_import(self):
+        import pandas as pd
+        from mobile.calibration_data import DataError, import_table
+        table = pd.DataFrame({"date": ["1990-03-15", "1990-01-15", "1990-01-15", "1990-04-15"], "PF": [3.0, 1.0, 1.0, np.nan],
+                              "N": [100.0, 100.0, 100.0, 100.0]})
+        observations = import_table(table, "dated", "PF", "sum", "cases", date="date", period="month", extra=("N",))
+        # Sorted; a mid-month date stands for its month; the exact repeat kept once; the gap and the missing value said
+        self.assertEqual([observations.label(i) for i in range(len(observations))], ["1990-01", "1990-03", "1990-04"])
+        self.assertEqual(str(observations.index["start"].iloc[1].date()), "1990-03-01")
+        self.assertEqual(str(observations.index["end"].iloc[1].date()), "1990-03-31")
+        notes = " ".join(observations.notes)
+        for said in ("1 rows repeated exactly", "1 values missing", "1 gaps between periods, e.g. 1990-02-01 to 1990-02-28"):
+            self.assertIn(said, notes)
+        # Different values for the same month, or overlapping periods: refused
+        clash = pd.concat([table, pd.DataFrame({"date": ["1990-01-20"], "PF": [2.0], "N": [100.0]})])
+        with self.assertRaisesRegex(DataError, "different values for the same start, end"):
+            import_table(clash, "dated", "PF", "sum", "cases", date="date", period="month")
+        spans = pd.DataFrame({"start": ["1990-01-01", "1990-01-05"], "end": ["1990-01-07", "1990-01-11"], "v": [1.0, 2.0]})
+        with self.assertRaisesRegex(DataError, "periods overlap"):
+            import_table(spans, "dated", "v", "sum", "cases", start="start", end="end")
+        # The minimum information
+        with self.assertRaisesRegex(DataError, "units are needed"):
+            import_table(table, "dated", "PF", "sum", " ", date="date")
+        with self.assertRaisesRegex(DataError, "need the column date"):
+            import_table(table, "dated", "PF", "sum", "cases")
+        with self.assertRaisesRegex(DataError, "no column 'cases'"):
+            import_table(table, "dated", "cases", "sum", "cases", date="date")
+        with self.assertRaisesRegex(DataError, "not dates"):
+            import_table(pd.DataFrame({"date": ["soon"], "v": [1.0]}), "dated", "v", "sum", "cases", date="date")
+
+    def test_other_shapes(self):
+        import pandas as pd
+        from mobile.calibration_data import DataError, import_table
+        months = import_table(pd.DataFrame({"m": range(12, 0, -1), "eir": np.arange(12.0), "s": np.ones(12)}), "climatology", "eir",
+                              "mean", "bites per person per day", month="m", sd="s")
+        self.assertEqual([months.label(i) for i in (0, 11)], ["Jan", "Dec"])
+        self.assertEqual(months.values[0], 11.0)
+        with self.assertRaisesRegex(DataError, "months must be whole numbers from 1 to 12"):
+            import_table(pd.DataFrame({"m": [13], "v": [1.0]}), "climatology", "v", "mean", "x", month="m")
+        ages = import_table(pd.DataFrame({"lo": [0, 5, 60], "hi": [4, 59, None], "v": [1.0, 2.0, 3.0]}), "age", "v", "mean",
+                            "attacks per person per year", age_lower="lo", age_upper="hi")
+        self.assertEqual([ages.label(i) for i in range(3)], ["0-4", "5-59", "60+"])
+        years = import_table(pd.DataFrame({"y": [1994, 1993], "aeir": [18.49, 59.8]}), "yearly", "aeir", "sum", "bites per person", year="y")
+        self.assertEqual([years.label(i) for i in range(2)], ["1993", "1994"])
+        one = import_table(pd.DataFrame({"aeir": [39.27], "sd": [28.5]}), "single", "aeir", "sum", "bites per person", sd="sd")
+        self.assertEqual((len(one), one.sd[0]), (1, 28.5))
+        with self.assertRaisesRegex(DataError, "a single value needs one row"):
+            import_table(pd.DataFrame({"v": [1.0, 2.0]}), "single", "v", "sum", "x")
+
+    def test_standard_file(self):
+        import pandas as pd
+        from mobile.calibration_data import DataError, import_table, read_observations, write_observations
+        sets = [
+            import_table(self.daily(), "dated", "cases", "sum", "cases", date="day", period="day", extra=("N",)),
+            import_table(pd.DataFrame({"m": range(1, 13), "v": np.arange(12.0), "s": np.full(12, 0.5)}), "climatology", "v", "mean", "x", month="m", sd="s"),
+            import_table(pd.DataFrame({"y": [1993, 1994], "v": [1.0, np.nan]}), "yearly", "v", "sum", "x", year="y"),
+            import_table(pd.DataFrame({"lo": [0, 60], "hi": [59, None], "v": [1.0, 2.0]}), "age", "v", "mean", "x", age_lower="lo", age_upper="hi"),
+            import_table(pd.DataFrame({"v": [39.27]}), "single", "v", "sum", "x"),
+        ]
+        for observations in sets:
+            path = self.folder / f"{observations.shape}.nc"
+            write_observations(observations, path)
+            back = read_observations(path)
+            self.assertEqual((back.shape, back.units, back.aggregation, back.notes), (observations.shape, observations.units,
+                             observations.aggregation, observations.notes))
+            self.assertTrue(np.array_equal(back.values, observations.values, equal_nan=True), observations.shape)
+            self.assertEqual([back.label(i) for i in range(len(back))], [observations.label(i) for i in range(len(observations))])
+            if observations.sd is not None:
+                self.assertTrue(np.array_equal(back.sd, observations.sd))
+        self.assertTrue(np.array_equal(read_observations(self.folder / "dated.nc").extra["N"], sets[0].extra["N"]))
+        # CF time bounds of a day: from its start to the start of the next
+        import netCDF4
+        with netCDF4.Dataset(self.folder / "dated.nc") as data:
+            self.assertEqual(list(data["time_bnds"][0]), [36890.0, 36891.0])  # 2001-01-01 in days since 1900-01-01
+            self.assertEqual(data["time"].bounds, "time_bnds")
+        # A driving file is not a file of observations
+        with self.assertRaisesRegex(DataError, "not a file of observations"):
+            read_observations(Path(MOBILE) / "utils" / "test_run" / "pop.nc")
+
+    def test_processing_steps(self):
+        import pandas as pd
+        from mobile.calibration_data import DataError, import_table, period_kind, read_observations, write_observations
+        from mobile.calibration_steps import STEP_KINDS, apply_steps, default_step
+        days = import_table(self.daily(), "dated", "cases", "sum", "cases", date="day", period="day", extra=("N",))
+        step = lambda kind, **changes: {**default_step(kind, days), **changes}
+        # Aggregate: sums by month add up to the daily total (control), January holds days 0 to 30
+        months = apply_steps(days, [step("aggregate", period="month")])
+        self.assertEqual((len(months), months.values.sum(), months.values[0]), (12, days.values.sum(), sum(range(31))))
+        self.assertEqual(period_kind(months), "month")
+        self.assertEqual(list(months.extra["N"]), [1000.0] * 12)
+        # 52 weeks from Monday 1 January (the 53rd starts on 31 December, incomplete); 36 complete 10-day periods
+        for period, n in (("quarter", 4), ("year", 1), ("week", 52), ("days", 36)):
+            self.assertEqual(len(apply_steps(days, [step("aggregate", period=period, days=10)])), n, period)
+        # Seasons: December belongs to the DJF of the next year, so 2001 has MAM, JJA and SON entirely
+        seasons = apply_steps(days, [step("aggregate", period="season")])
+        self.assertEqual([seasons.label(i) for i in range(len(seasons))], ["2001-03 to 2001-05", "2001-06 to 2001-08", "2001-09 to 2001-11"])
+        # Statistics, and incomplete periods kept with their coverage
+        rates = import_table(self.daily(value=np.r_[np.full(31, 1.0), np.full(334, 3.0)]), "dated", "cases", "mean", "per day", date="day", period="day")
+        self.assertEqual(list(apply_steps(rates, [{**default_step("aggregate", rates), "period": "year"}]).values), [(31 + 334 * 3.0) / 365])
+        self.assertEqual(apply_steps(days, [step("aggregate", period="month", how="max")]).values[0], 30.0)
+        part = import_table(self.daily("2001-01-01", "2001-02-10"), "dated", "cases", "sum", "cases", date="day", period="day")
+        self.assertEqual(len(apply_steps(part, [{**default_step("aggregate", part), "period": "month"}])), 1)
+        kept = apply_steps(part, [{**default_step("aggregate", part), "period": "month", "complete": False}])
+        self.assertEqual(round(kept.extra["coverage"][1], 4), round(10 / 28, 4))
+        with self.assertRaisesRegex(DataError, r"step 1 \(aggregate into longer periods\): no year is covered entirely"):
+            apply_steps(part, [{**default_step("aggregate", part), "period": "year"}])
+        # Arithmetic with a column or a number; select; climatology by month
+        per = apply_steps(months, [{**default_step("arithmetic", months), "units": "cases per person"}])
+        self.assertEqual((per.values[0], per.units), (sum(range(31)) / 1000, "cases per person"))
+        self.assertEqual(apply_steps(months, [step("arithmetic", operand="number", operation="multiply", number=2.0)]).values[0], 2 * sum(range(31)))
+        with self.assertRaisesRegex(DataError, "division by zero"):
+            apply_steps(months, [step("arithmetic", operand="number", number=0.0)])
+        summer = apply_steps(months, [{"kind": "select", "what": "months", "items": [6, 7, 8]}])
+        self.assertEqual([summer.label(i) for i in range(3)], ["2001-06", "2001-07", "2001-08"])
+        two = import_table(pd.DataFrame({"d": [f"{y}-{m:02d}-15" for y in (2001, 2002) for m in range(1, 13)],
+                                         "v": [1.0, *[0.0] * 11, 3.0, *[0.0] * 11]}), "dated", "v", "sum", "cases", date="d", period="month")
+        season = apply_steps(two, [{"kind": "climatology", "by": "month"}])
+        self.assertEqual((season.shape, season.values[0], round(season.sd[0], 6)), ("climatology", 2.0, round(np.sqrt(2.0), 6)))
+        by_season = apply_steps(two, [{"kind": "aggregate", "period": "season", "how": "sum", "complete": False, "days": 1},
+                                      {"kind": "climatology", "by": "season"}])
+        self.assertEqual([by_season.label(i) for i in range(4)], ["DJF", "MAM", "JJA", "SON"])
+        with self.assertRaisesRegex(DataError, "more than one month"):
+            apply_steps(months, [{"kind": "aggregate", "period": "quarter", "how": "sum", "complete": True, "days": 1}, {"kind": "climatology", "by": "month"}])
+        # Transforms
+        log = apply_steps(months, [{"kind": "transform", "transform": "log10", "offset": 1.0, "window": 3}])
+        self.assertAlmostEqual(log.values[0], np.log10(sum(range(31)) + 1))
+        z = apply_steps(months, [{"kind": "transform", "transform": "standardise", "offset": 0, "window": 3}])
+        self.assertAlmostEqual(float(np.mean(z.values)), 0.0)
+        self.assertAlmostEqual(float(np.std(z.values, ddof=1)), 1.0)
+        smooth = apply_steps(months, [{"kind": "transform", "transform": "moving_average", "offset": 0, "window": 3}])
+        self.assertTrue(np.isnan(smooth.values[0]))
+        self.assertAlmostEqual(smooth.values[1], months.values[:3].mean())
+        # Frequency filter on a monthly series of a 12-month cycle plus a 5-year cycle (control: each is kept or removed)
+        n = 240
+        t_ = np.arange(n)
+        annual, five = np.sin(2 * np.pi * t_ / 12), 2 * np.sin(2 * np.pi * t_ / 60)
+        series = import_table(pd.DataFrame({"d": pd.date_range("1980-01-15", periods=n, freq="MS").strftime("%Y-%m-15"), "v": annual + five}),
+                              "dated", "v", "mean", "x", date="d", period="month")
+        inner = slice(60, 180)  # Away from the ends
+        low = apply_steps(series, [{"kind": "filter", "type": "low", "short": 1, "long": 2, "unit": "years"}])
+        self.assertLess(np.max(np.abs(low.values[inner] - five[inner])), 0.1)
+        high = apply_steps(series, [{"kind": "filter", "type": "high", "short": 2, "long": 10, "unit": "years"}])
+        self.assertLess(np.max(np.abs(high.values[inner] - annual[inner])), 0.1)
+        # A band pass rings longer: on 50 years, judged 15 years (about two of the longest periods) from each end
+        n = 600
+        t_ = np.arange(n)
+        annual, five = np.sin(2 * np.pi * t_ / 12), 2 * np.sin(2 * np.pi * t_ / 60)
+        long_series = import_table(pd.DataFrame({"d": pd.date_range("1960-01-15", periods=n, freq="MS").strftime("%Y-%m-15"), "v": annual + five}),
+                                   "dated", "v", "mean", "x", date="d", period="month")
+        band = apply_steps(long_series, [{"kind": "filter", "type": "band", "short": 3, "long": 8, "unit": "years"}])
+        self.assertLess(np.max(np.abs(band.values[180:-180] - five[180:-180])), 0.1)
+        # A step saved before the ends were cut has no "edges": kept, with a note of how far they reach
+        self.assertRegex(" ".join(band.notes), r"ends kept, though the filter's start-up error exceeds 5% of a cycle it keeps within [\d.]+ years at the start")
+        with self.assertRaisesRegex(DataError, "longer than two values"):
+            apply_steps(series, [{"kind": "filter", "type": "high", "short": 1, "long": 2, "unit": "months"}])
+        # Missing values and missing periods: interpolated for the filter only, and put back as missing (240 months again)
+        from mobile.calibration_steps import describe
+        n = 240
+        t_ = np.arange(n)
+        annual, five = np.sin(2 * np.pi * t_ / 12), 2 * np.sin(2 * np.pi * t_ / 60)
+        low_step = {"kind": "filter", "type": "low", "short": 1, "long": 2, "unit": "years", "missing": "interpolate", "max_gap": 3}
+        complete = apply_steps(series, [low_step]).values
+        holes = import_table(pd.DataFrame({"d": pd.date_range("1980-01-15", periods=n, freq="MS").strftime("%Y-%m-15"),
+                                           "v": np.where(np.isin(t_, [100, 101]), np.nan, annual + five)}).drop(index=150),
+                             "dated", "v", "mean", "x", date="d", period="month")
+        gappy = apply_steps(holes, [low_step])
+        self.assertEqual(len(gappy), n - 1)  # The missing row is not added
+        self.assertTrue(np.isnan(gappy.values[[100, 101]]).all())  # Interpolated values are not data
+        rows = np.r_[60:95, 106:145, 156:180]  # Away from the gaps, in rows of the series without row 150
+        self.assertLess(np.max(np.abs(gappy.values[rows] - complete[np.where(rows < 150, rows, rows + 1)])), 0.05)
+        notes = " ".join(gappy.notes)
+        self.assertIn("2 gaps of up to 2 values interpolated for the filter only, left missing after", notes)
+        self.assertIn("gaps of up to 3 values interpolated for the filter only", describe(low_step))
+        # A gap longer than N splits the series; filtering each stretch separately interpolates nothing
+        long_gap = import_table(pd.DataFrame({"d": pd.date_range("1980-01-15", periods=n, freq="MS").strftime("%Y-%m-15"),
+                                              "v": np.where((t_ >= 100) & (t_ < 110), np.nan, annual + five)}), "dated", "v", "mean", "x", date="d", period="month")
+        self.assertIn("2 stretches without gaps filtered separately", " ".join(apply_steps(long_gap, [low_step]).notes))
+        apart = apply_steps(holes, [{**low_step, "missing": "stretches"}])
+        self.assertNotIn("interpolated", " ".join(apart.notes))
+        self.assertIn("each stretch without gaps filtered separately", describe({**low_step, "missing": "stretches"}))
+        # A stretch too short for the cut-off is left missing
+        short_end = import_table(pd.DataFrame({"d": pd.date_range("1980-01-15", periods=n, freq="MS").strftime("%Y-%m-15"),
+                                               "v": np.where((t_ >= 220) & (t_ < 230), np.nan, annual + five)}), "dated", "v", "mean", "x", date="d", period="month")
+        tail = apply_steps(short_end, [low_step])
+        self.assertTrue(np.isnan(tail.values[230:]).all())
+        self.assertIn("10 values in stretches shorter than", " ".join(tail.notes))
+        # Combine with other observations of the same coordinates
+        a = import_table(pd.DataFrame({"m": range(1, 13), "v": np.ones(12), "s": np.full(12, 3.0)}), "climatology", "v", "mean", "x", month="m", sd="s")
+        b = import_table(pd.DataFrame({"m": range(1, 13), "v": np.full(12, 2.0), "s": np.full(12, 4.0)}), "climatology", "v", "mean", "x", month="m", sd="s")
+        both = apply_steps(a, [{"kind": "combine", "other": "b", "how": "sum"}], {"b": b})
+        self.assertEqual((both.values[0], both.sd[0]), (3.0, 5.0))
+        self.assertEqual(apply_steps(a, [{"kind": "combine", "other": "b", "how": "difference"}], {"b": b}).values[0], -1.0)
+        with self.assertRaisesRegex(DataError, "same shape and the same coordinates"):
+            apply_steps(a, [{"kind": "combine", "other": "m", "how": "sum"}], {"m": months})
+        # The steps are kept with the observations, in the standard file too, and can be applied again
+        chain = [step("aggregate", period="month"), {**default_step("arithmetic", months), "units": "cases per person"}]
+        result = apply_steps(days, chain)
+        self.assertEqual([s["kind"] for s in result.steps], ["aggregate", "arithmetic"])
+        write_observations(result, self.folder / "steps.nc")
+        back = read_observations(self.folder / "steps.nc")
+        self.assertEqual(list(back.steps), chain)
+        self.assertTrue(np.array_equal(apply_steps(days, list(back.steps)).values, result.values))
+        self.assertEqual(set(STEP_KINDS), {"aggregate", "arithmetic", "select", "climatology", "transform", "filter", "combine"})
+        # An earlier stage drawn with the result: overlaid if same shape and units, else in a panel below
+        from mobile.plots import observations_figure
+        alone = observations_figure(months, "file")
+        self.assertEqual((len(alone.data), alone.layout.height), (1, 380))
+        smoothed = apply_steps(months, [{"kind": "transform", "transform": "moving_average", "offset": 0, "window": 3}])
+        overlay = observations_figure(smoothed, "file", months, "Values loaded")
+        self.assertEqual([trace.name for trace in overlay.data], ["Values loaded", "After all steps"])
+        self.assertIsNone(overlay.layout.xaxis2.domain if "xaxis2" in overlay.layout else None)
+        per_person = observations_figure(per, "file", months, "After step 1")  # cases per person vs cases: two panels
+        self.assertEqual((len(per_person.data), per_person.layout.height), (2, 640))
+        self.assertEqual((per_person.layout.yaxis.title.text, per_person.layout.yaxis2.title.text), ("cases per person", "cases"))
+        self.assertEqual(per_person.data[1].xaxis, "x2")
+        # Every shape can be drawn (a seasonal climatology once had no axis title, and the plot kept the last one)
+        quarters = observations_figure(by_season, "file")
+        self.assertEqual((list(quarters.data[0].x), quarters.layout.xaxis.title.text), (["DJF", "MAM", "JJA", "SON"], "Season"))
+        seasonal = observations_figure(season, "file", two, "Values loaded")  # a climatology vs the months: two panels, by category
+        self.assertEqual((seasonal.layout.xaxis.type, seasonal.layout.xaxis2.type), ("category", None))
+
+
+def fake_run(folder, values, pop, seed=1):
+    """A finished run folder with an output Human/Inew (time, lat, lon) on a 2 x 2 grid and its population file."""
+    folder = Path(folder)
+    (folder / "output").mkdir(parents=True)
+    lat, lon = np.array([10.0, 10.5]), np.array([30.0, 30.5])
+    pop_file = folder / "pop.nc"
+    with netCDF4.Dataset(pop_file, "w") as data:
+        data.createDimension("lat", 2), data.createDimension("lon", 2)
+        data.createVariable("lat", "f8", ("lat",))[:] = lat
+        data.createVariable("lon", "f8", ("lon",))[:] = lon
+        data.createVariable("pop", "f8", ("lat", "lon"), fill_value=np.nan)[:] = pop
+    with netCDF4.Dataset(folder / "output" / "output.nc", "w") as data:
+        for name, size in (("time", values.shape[0]), ("lat", 2), ("lon", 2)):
+            data.createDimension(name, size)
+        time = data.createVariable("time", "f8", ("time",))
+        time.units, time.calendar = "days since 2001-1-1 0:0:0", "gregorian"
+        time[:] = np.arange(values.shape[0])
+        data.createVariable("lat", "f8", ("lat",))[:] = lat
+        data.createVariable("lon", "f8", ("lon",))[:] = lon
+        variable = data.createGroup("Human").createVariable("Inew", "f4", ("time", "lat", "lon"), fill_value=np.float32(np.nan))
+        variable.units, variable.long_name = "fraction", "NEW symptomatic population per person"
+        variable[:] = values
+        climate = data.createGroup("Climate")
+        for name, units, value in (("rain", "mm/day", 2.0), ("t2m", "celsius", 20.0)):
+            field = climate.createVariable(name, "f4", ("time", "lat", "lon"), fill_value=np.float32(np.nan))
+            field.units, field.long_name = units, name
+            field[:] = np.where(np.isnan(values), np.nan, value + np.arange(values.shape[0])[:, None, None] * 0.0)
+    (folder / "run.json").write_text(json.dumps({"status": "finished", "date": "2026-11-08T12:00:00", "returncode": 0, "wall_seconds": 1,
+                                                 "spinup_years": 0, "run": {"seed": seed}, "inputs": {"pop_file": str(pop_file)},
+                                                 "region": None, "period": None}))
+    return folder
+
+
+TOY_MODEL = """
+import os, sys
+from pathlib import Path
+import netCDF4, numpy as np
+args = dict(zip(sys.argv[1::2], sys.argv[2::2]))
+with netCDF4.Dataset(args["-t"]) as data:
+    t2m = np.ma.filled(data["temperature"][:].astype("f8"), np.nan)
+    time = data["time"]
+    days, units, calendar = time[:], time.units, getattr(time, "calendar", "standard")
+    lat, lon = data["lat"][:], data["lon"][:]
+with netCDF4.Dataset(args["-p"]) as data:
+    pop = np.ma.filled(data["pop"][:].astype("f8"), np.nan)
+inew = np.where(pop > 0, 1e-3 * np.maximum(t2m - 18.0, 0.0), np.nan)
+out = Path(args["-o"])
+out.mkdir(exist_ok=True)
+with netCDF4.Dataset(out / "output.nc", "w") as data:
+    for name, size in (("time", len(days)), ("lat", len(lat)), ("lon", len(lon))):
+        data.createDimension(name, size)
+    variable = data.createVariable("time", "f8", ("time",))
+    variable[:], variable.units, variable.calendar = days, units, calendar
+    data.createVariable("lat", "f8", ("lat",))[:] = lat
+    data.createVariable("lon", "f8", ("lon",))[:] = lon
+    field = data.createGroup("Human").createVariable("Inew", "f4", ("time", "lat", "lon"), fill_value=np.float32(np.nan))
+    field.units, field.long_name = "fraction", "NEW symptomatic population per person"
+    field[:] = inew
+    # The model's own population: agents in each cell, growing by FAKE_GROWTH over the run (0: none), and its humans per
+    # agent (fixed): people = agents x HA
+    grow = float(os.environ.get("FAKE_GROWTH", "0"))
+    share = np.linspace(0.0, 1.0, len(days))[:, None, None]
+    agents = np.where(pop > 0, 100.0 * (1.0 + grow * share), np.nan)
+    ratio = np.where(pop > 0, np.broadcast_to(np.nan_to_num(pop) * 1e6 / 100.0, agents.shape), np.nan)
+    people_outputs = () if os.environ.get("FAKE_NO_PEOPLE") else (("Nagent", agents, "Number of agents"), ("HA", ratio, "Human to agent ratio"))
+    for key, values, long_name in people_outputs:
+        variable = data["Human"].createVariable(key, "f4", ("time", "lat", "lon"), fill_value=np.float32(np.nan))
+        variable.units, variable.long_name = "adimensional", long_name
+        variable[:] = values
+    climate = data.createGroup("Climate").createVariable("t2m", "f4", ("time", "lat", "lon"), fill_value=np.float32(np.nan))
+    climate.units, climate.long_name = "celsius", "temperature"
+    climate[:] = t2m
+print("Program finished successfully")
+"""
+
+
+class TestLogOffsetInCases(unittest.TestCase):
+    """A log's offset in cases: log((cases + 1) / N) for the observations (their column N) and for each reported series the
+    observational model draws (the population of each month it is made per person by)."""
+
+    @staticmethod
+    def monthly(values, population=None, first="1990-01"):
+        from mobile.calibration_data import Observations
+        start = pd.date_range(first, periods=len(values), freq="MS")
+        index = pd.DataFrame({"start": start.values.astype("datetime64[D]"),
+                              "end": (start + pd.offsets.MonthEnd(0)).values.astype("datetime64[D]")})
+        extra = {} if population is None else {"N": np.asarray(population, float)}
+        return Observations(shape="dated", values=np.asarray(values, float), index=index, units="cases", name="cases",
+                            aggregation="sum", extra=extra)
+
+    LOG = {"kind": "transform", "transform": "log", "offset": 1.0, "offset_unit": "case", "window": 3}
+
+    def test_observations(self):
+        from mobile.calibration_data import DataError
+        from mobile.calibration_steps import apply_steps
+        cases, population = np.array([0, 3, 40, 500, 0, 7] * 4, float), np.linspace(2e5, 4e5, 24)
+        divide = {"kind": "arithmetic", "operation": "divide", "operand": "column", "column": "N", "number": 1, "units": ""}
+        result = apply_steps(self.monthly(cases, population), [divide, self.LOG])
+        np.testing.assert_allclose(result.values, np.log((cases + 1) / population), rtol=1e-12)
+        # Control: the same offset per person is not the same series (the population is not 1)
+        plain = apply_steps(self.monthly(cases, population), [divide, {**self.LOG, "offset_unit": "value"}])
+        self.assertFalse(np.allclose(plain.values, result.values))
+        with self.assertRaisesRegex(DataError, "offset in cases needs the population"):
+            apply_steps(self.monthly(cases / 3e5), [self.LOG])
+
+    def test_reported_series_drawn(self):
+        from mobile.calibration_model import process_observed
+        from mobile.observation import draw
+        months = 60
+        counts = 50 + 40 * np.sin(np.arange(months) * 2 * np.pi / 12) ** 2  # Cases of the model, a month
+        population = np.linspace(3e5, 5e5, months)
+        data = self.monthly(np.round(counts * 0.3), population)
+        divide = {"kind": "arithmetic", "operation": "divide", "operand": "column", "column": "N", "number": 1, "units": ""}
+        climatology = {"kind": "climatology", "by": "month"}
+        observation = {"rho": 0.3, "k": 1.0, "draws": 40, "seed": 7}
+        member = self.monthly(counts / population)  # Per person, as model_members gives it (not used for the draws)
+        for steps, expected in (([self.LOG], lambda y: np.log((y + 1) / population)),
+                                ([self.LOG, climatology], lambda y: np.log((y + 1) / population).reshape(-1, 12).mean(axis=0))):
+            model, data_out, _, processed = process_observed([member], [self.monthly(counts)], steps, data, [divide] + steps,
+                                                             observation)
+            drawn = draw(counts, 0.3, 1.0, 40, 7)
+            self.assertGreater((drawn == 0).sum(), 0)  # Zero months among the draws: the offset matters
+            np.testing.assert_allclose(processed, np.array([expected(row) for row in drawn]), rtol=1e-10)
+            self.assertTrue(np.all(np.isfinite(processed)))
+
+    def test_population_errors_say_what_is_wrong(self):
+        """The observational model's population of each period, matched to the model's series: its errors name the case in
+        general terms (periods that differ, periods not covered, N missing), and a series in the same periods passes."""
+        from mobile.calibration_data import DataError, Observations
+        from mobile.calibration_model import _population
+
+        def daily(first, last):
+            days = pd.date_range(first, last, freq="D")
+            index = pd.DataFrame({"start": days.values.astype("datetime64[D]"), "end": days.values.astype("datetime64[D]")})
+            return Observations(shape="dated", values=np.ones(len(days)), index=index, units="cases", name="cases", aggregation="sum")
+
+        population = np.linspace(3e5, 4e5, 24)
+        data = self.monthly(np.full(24, 30.0), population)
+        np.testing.assert_allclose(_population(self.monthly(np.ones(24)), data), population)  # Control: same periods
+        with self.assertRaisesRegex(DataError, r"given in \(months\), but the model's series is in days.*aggregate it into months"):
+            _population(daily("1990-01-01", "1991-12-31"), data)
+        with self.assertRaisesRegex(DataError, r"6 of the model's 30 periods \(1992-01-01 to 1992-06-01\) have no period of the observations"):
+            _population(self.monthly(np.ones(30)), data)
+        gaps = population.copy()
+        gaps[[3, 4]] = np.nan
+        with self.assertRaisesRegex(DataError, r"N is missing or not above 0 for 2 of the 24 periods compared \(1990-04-01 to 1990-05-01\)"):
+            _population(self.monthly(np.ones(24)), self.monthly(np.full(24, 30.0), gaps))
+        with self.assertRaisesRegex(DataError, "a column N"):
+            _population(self.monthly(np.ones(24)), self.monthly(np.full(24, 30.0)))
+
+    def test_refused_without_the_observational_model(self):
+        from mobile.calibration_engine import CalibrationError, _observation
+        objective = {"name": "level", "metric": "rmse", "steps": [self.LOG]}
+        with self.assertRaisesRegex(CalibrationError, "offset in cases needs the observational model"):
+            _observation(None, [objective])
+        self.assertIsNone(_observation(None, [{**objective, "steps": [{**self.LOG, "offset_unit": "value"}]}]))
+
+
+class TestFilterEdges(unittest.TestCase):
+    """The ends of a frequency filter, where it starts up: measured on test cycles, cut by default, shown shaded."""
+
+    @staticmethod
+    def monthly(values, first="1990-01"):
+        from mobile.calibration_data import Observations
+        start = pd.date_range(first, periods=len(values), freq="MS")
+        index = pd.DataFrame({"start": start.values.astype("datetime64[D]"),
+                              "end": (start + pd.offsets.MonthEnd(0)).values.astype("datetime64[D]")})
+        return Observations(shape="dated", values=np.asarray(values, float), index=index, units="cases", name="cases")
+
+    def filtered(self, values, **choices):
+        from mobile.calibration_steps import apply_steps, default_step
+        series = self.monthly(values)
+        step = {**default_step("filter", series), **choices}
+        return apply_steps(series, [{key: value for key, value in step.items() if value is not None}])  # None: left out
+
+    def test_cut_where_measured(self):
+        from mobile.calibration_steps import EDGE, edge_reach
+        t = np.arange(240)
+        for choices, kind, periods in (({"type": "low", "long": 2}, "low", (24.0,)),
+                                       ({"type": "high", "short": 18, "unit": "months"}, "high", (18.0,)),
+                                       ({"type": "band", "short": 1, "long": 1.5}, "band", (12.0, 18.0))):
+            result = self.filtered(np.cos(2 * np.pi * t / 12) + np.cos(2 * np.pi * t / 60), **choices)
+            start, end = edge_reach(kind, periods, 240, 0.05)
+            self.assertGreater(start, 0)
+            kept = np.isfinite(result.values)
+            # Missing exactly where cut, and the cut values kept in their own column for the plots
+            self.assertTrue(kept[start:240 - end].all() and not kept[:start].any() and not kept[240 - end:].any(), choices)
+            self.assertTrue(np.isfinite(result.extra[EDGE][~kept]).all() and np.isnan(result.extra[EDGE][kept]).all())
+            self.assertIn("shaded in the plots and not compared", result.notes[-1])
+
+    def test_kept_values_within_the_error(self):
+        """Control: cycles kept by the filter, between its test cycles and at other phases, err by at most the share
+        set at the values kept, and by more at those cut."""
+        from scipy import signal
+        from mobile.calibration_steps import EDGE, _design, test_cycles
+        t = np.arange(480)
+        for choices, kind, periods in (({"type": "low", "long": 2}, "low", (24.0,)),
+                                       ({"type": "high", "short": 18, "unit": "months"}, "high", (18.0,)),
+                                       ({"type": "band", "short": 1.5, "long": 3}, "band", (18.0, 36.0))):
+            tests = np.log(test_cycles(kind, periods))
+            kept_error = cut_error = 0.0
+            for period in np.exp((tests[1:] + tests[:-1]) / 2):
+                gain = abs(signal.sosfreqz(_design(kind, periods), worN=[2 * np.pi / period])[1][0]) ** 2
+                for phase in np.linspace(0, 2 * np.pi, 7)[:-1]:
+                    cycle = np.cos(2 * np.pi * t / period + phase)
+                    result = self.filtered(cycle, **choices)
+                    kept = np.isfinite(result.values)
+                    kept_error = max(kept_error, np.abs(result.values[kept] - gain * cycle[kept]).max())
+                    cut_error = max(cut_error, np.abs(result.extra[EDGE][~kept] - gain * cycle[~kept]).max())
+            self.assertLessEqual(kept_error, 0.05, choices)
+            self.assertGreater(cut_error, 0.05, choices)
+
+    def test_too_short_refused(self):
+        from mobile.calibration_data import DataError
+        t = np.arange(240)
+        with self.assertRaisesRegex(DataError, r"too short for this filter once its unreliable ends are cut.*needs about \d+ values \([\d.]+ years\)"):
+            self.filtered(np.cos(2 * np.pi * t / 60), type="band", short=3, long=8)
+        # Kept, the same filter runs, and says that every value is affected
+        kept = self.filtered(np.cos(2 * np.pi * t / 60), type="band", short=3, long=8, edges="keep")
+        self.assertTrue(np.isfinite(kept.values).all())
+        self.assertIn("at every value", kept.notes[-1])
+        # A larger error kept cuts less
+        t = np.arange(360)
+        strict, loose = (self.filtered(np.cos(2 * np.pi * t / 24), type="band", short=1.5, long=3, edge_error=share) for share in (0.02, 0.2))
+        self.assertLess(np.isfinite(strict.values).sum(), np.isfinite(loose.values).sum())
+
+    def test_later_steps_carry_the_cut(self):
+        from mobile.calibration_metrics import pair
+        from mobile.calibration_steps import EDGE, apply_steps
+        t = np.arange(240)
+        series = self.monthly(10 + np.cos(2 * np.pi * t / 12) + np.cos(2 * np.pi * t / 60))
+        cut = self.filtered(series.values, type="high", short=18, unit="months")
+        # Standardised by the mean and spread of the values kept; the cut ones by the same numbers
+        z = apply_steps(cut, [{"kind": "transform", "transform": "standardise", "offset": 0, "window": 3}])
+        mean, sd = np.nanmean(cut.values), np.nanstd(cut.values, ddof=1)
+        self.assertTrue(np.allclose(z.extra[EDGE], (cut.extra[EDGE] - mean) / sd, equal_nan=True))
+        # A year with a month cut is cut too, shown with its value
+        years = apply_steps(cut, [{"kind": "aggregate", "period": "year", "how": "mean", "complete": True, "days": 7}])
+        self.assertEqual(len(years), 20)
+        self.assertTrue(np.isnan(years.values[[0, 1, -2, -1]]).all() and np.isfinite(years.values[2:-2]).all())
+        self.assertTrue(np.isfinite(years.extra[EDGE][[0, 1, -2, -1]]).all())
+        # Only the values kept are compared
+        model_values, data_values, labels = pair(cut, cut)
+        self.assertEqual(len(labels), int(np.isfinite(cut.values).sum()))
+        # A seed band: the median of the cut values too
+        from mobile.calibration_model import seed_spread
+        step = {**cut.steps[0]}
+        band = seed_spread([series, replace(series, values=series.values + 1)], [step])
+        self.assertTrue(np.array_equal(np.isfinite(band.extra[EDGE]), np.isfinite(cut.extra[EDGE])))
+
+    def test_plots_shade_the_cut(self):
+        from mobile.calibration_metrics import pair
+        from mobile.plots import comparison_figure, cut_spans, observations_figure
+        t = np.arange(240)
+        cut = self.filtered(np.cos(2 * np.pi * t / 12), type="high", short=18, unit="months")
+        self.assertEqual(len(cut_spans(cut)), 2)
+        figure = observations_figure(cut, "test")
+        self.assertEqual(len([shape for shape in figure.layout.shapes if shape.fillcolor and "214, 40, 40" in shape.fillcolor]), 2)
+        self.assertTrue(any(trace.name.endswith("cut at the ends") for trace in figure.data))
+        self.assertTrue(all(a.hovertext and "filter starts up" in a.hovertext for a in figure.layout.annotations if a.text == "cut"))
+        m, d, labels = pair(cut, cut)
+        both = comparison_figure(cut, cut, labels, m, d)
+        self.assertEqual(sum(trace.name.endswith("cut at the ends") for trace in both.data), 2)
+
+    def test_old_steps_and_describe(self):
+        from mobile.calibration_steps import EDGE, default_step, describe
+        t = np.arange(240)
+        old = self.filtered(np.cos(2 * np.pi * t / 60), type="low", long=2, edges=None)
+        self.assertNotIn(EDGE, old.extra)
+        step = default_step("filter", self.monthly(t))
+        self.assertEqual((step["edges"], step["edge_error"]), ("cut", 0.05))
+        self.assertIn("ends cut where the filter's start-up error exceeds 5% of a cycle it keeps", describe(step))
+        self.assertNotIn("ends cut", describe({key: value for key, value in step.items() if key not in ("edges", "edge_error")}))
+
+
+class TestCalibrationWindows(unittest.TestCase):
+    """The calibration and validation windows as a calibration will use them, said as the dates are typed."""
+
+    def setUp(self):
+        from mobile.calibration_data import Observations, write_observations
+        self.folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.folder)
+        start = pd.date_range("1980-01", periods=288, freq="MS")  # 1980-01 to 2003-12, the last value missing
+        self.data = Observations(shape="dated", values=np.r_[np.arange(287.0), np.nan], units="cases", name="cases",
+                                 index=pd.DataFrame({"start": start.values.astype("datetime64[D]"),
+                                                     "end": (start + pd.offsets.MonthEnd(0)).values.astype("datetime64[D]")}))
+        write_observations(self.data, self.folder / "raw.nc")
+        self.objectives = [{"name": "Correlation", "data_raw": str(self.folder / "raw.nc")},
+                           {"name": "Low_pass", "data_raw": str(self.folder / "raw.nc")}]
+        self.period = ("1980-01-01", "2003-12-31")
+
+    def said(self, validation, period="same"):
+        from mobile.calibration_run_ui import windows_said
+        return windows_said(self.objectives, self.period if period == "same" else period, validation)
+
+    def test_the_right_way_round(self):
+        [(names, text, warnings, problems)] = self.said(("1996-01-01", "2003-12-31"))
+        self.assertIsNone(names)  # Both objectives split alike: one line
+        self.assertEqual(text, "Calibration: 1980-01 to 1995-12 (16 years, 192 values) · Validation: 1996-01 to 2003-12 (8 years, 95 values)")
+        self.assertEqual((warnings, problems), ([], []))
+
+    def test_the_wrong_way_round_warns(self):
+        [(_, text, warnings, problems)] = self.said(("1980-01-01", "1995-12-31"))
+        self.assertTrue(text.startswith("Calibration: 1996-01 to 2003-12 (8 years, 95 values) · Validation: 1980-01 to 1995-12"))
+        self.assertIn("is this the right way round?", warnings[0])
+        self.assertEqual(problems, [])
+
+    def test_inside_across_and_outside(self):
+        [(_, text, _, _)] = self.said(("1990-01-01", "1994-12-31"))
+        self.assertIn("Calibration: 1980-01 to 1989-12 and 1995-01 to 2003-12 (19 years, 227 values)", text)
+        [(_, text, warnings, _)] = self.said(("1990-01-15", "1994-12-31"))
+        self.assertIn("Validation: 1990-02 to 1994-12 (4.91 years, 59 values)", text)
+        self.assertIn("1 value across an end of the validation window is in neither window.", warnings)
+        [(_, _, _, problems)] = self.said(("2010-01-01", "2011-12-31"))
+        self.assertEqual(problems[0], "The validation window (2010-01-01 to 2011-12-31) lies outside the period simulated "
+                                      "(1980-01-01 to 2003-12-31): extend the period (tab 1. Setup) to cover it, or move the window.")
+        [(_, _, _, problems)] = self.said(("1970-01-01", "2010-12-31"))
+        self.assertIn("leaves no values to calibrate on", problems[0])
+        # Without a validation window, the whole period; a shorter period simulated cuts the calibration window
+        [(_, text, _, _)] = self.said(None)
+        self.assertEqual(text, "Calibration: 1980-01 to 2003-12 (24 years, 287 values)")
+        [(_, text, _, _)] = self.said(("1996-01-01", "2003-12-31"), period=("1985-01-01", "2003-12-31"))
+        self.assertTrue(text.startswith("Calibration: 1985-01 to 1995-12 (11 years, 132 values)"))
+
+    def test_counts_match_the_trials(self):
+        """Control: the values said are those each trial scores, cut by the engine's own process_both."""
+        from mobile.calibration_data import Observations
+        from mobile.calibration_model import process_both
+        days = pd.date_range(*self.period, freq="D")
+        model = Observations(shape="dated", values=np.ones(len(days)), units="cases", name="cases",
+                             index=pd.DataFrame({"start": days.values.astype("datetime64[D]"), "end": days.values.astype("datetime64[D]")}))
+        monthly = [{"kind": "aggregate", "period": "month", "how": "sum", "complete": True, "days": 7}]
+        for validation in (("1996-01-01", "2003-12-31"), ("1990-01-15", "1994-12-31")):
+            [(_, text, _, _)] = self.said(validation)
+            said = [int(n) for n in re.findall(r"(\d+) values", text)]
+            got = [int(np.isfinite(process_both([model], monthly, self.data, [], validation=validation, part=part)[1].values).sum())
+                   for part in ("calibration", "validation")]
+            self.assertEqual(said, got, validation)
+
+    def test_objectives_that_differ_and_the_tags(self):
+        from mobile.calibration_data import write_observations
+        from mobile.calibration_run_ui import windows_tags, windows_text
+        write_observations(replace(self.data, values=self.data.values[:120], index=self.data.index.iloc[:120]), self.folder / "short.nc")
+        self.objectives.append({"name": "Short", "data_raw": str(self.folder / "short.nc")})
+        items = self.said(("1996-01-01", "2003-12-31"))
+        self.assertEqual([names for names, *_ in items], [["Correlation", "Low_pass"], ["Short"]])
+        self.assertIn("Short: Calibration: 1980-01 to 1989-12", windows_text(items))
+        html = str(windows_tags(items))
+        self.assertIn("color: #2e9e6b;", html)  # Calibration in the green of its bar in the plots
+        self.assertIn("text-danger", html)  # Short has no values in the validation window
+        self.assertIn("Add an objective", str(windows_tags([])))
+
+
+class TestSeveralValidationWindows(TestCalibrationWindows):
+    """Several validation windows in the card: each said, scored and shown on its own, numbered in date order; one window
+    as before (the tests of TestCalibrationWindows, inherited, run again here as the control)."""
+
+    HUMP, LAST = ("1989-01-01", "1993-12-31"), ("1998-01-01", "2003-12-31")
+
+    def test_two_windows_said(self):
+        [(names, text, warnings, problems)] = self.said([self.LAST, self.HUMP])  # Given out of order: said in date order
+        self.assertIsNone(names)
+        # By hand: 1980-88 (108 months) and 1994-97 (48); 1989-93 (60); 1998-2003 (72, the last missing)
+        self.assertEqual(text, "Calibration: 1980-01 to 1988-12 and 1994-01 to 1997-12 (13 years, 156 values) · Validation 1: "
+                               "1989-01 to 1993-12 (5 years, 60 values) · Validation 2: 1998-01 to 2003-12 (6 years, 71 values)")
+        self.assertEqual((warnings, problems), ([], []))
+        # Together longer than the calibration: warned; a window outside the period: a problem named by its number
+        [(_, _, warnings, _)] = self.said([("1982-01-01", "1993-12-31"), self.LAST])
+        self.assertIn("together are longer", warnings[0])
+        [(_, _, _, problems)] = self.said([self.HUMP, ("2010-01-01", "2011-12-31")])
+        self.assertIn("The validation window 2 (2010-01-01 to 2011-12-31) lies outside the period simulated", problems[0])
+        # Control: inside the period but without data there, the old message (the data, not the period, lack it)
+        [(_, _, _, problems)] = self.said([self.HUMP, ("2004-01-01", "2007-12-31")], period=("1980-01-01", "2010-12-31"))
+        self.assertEqual(problems, ["Correlation, Low_pass: no values within the validation window 2, in the period simulated."])
+        [(_, _, warnings, _)] = self.said([("1989-01-15", "1993-12-31"), self.LAST])
+        self.assertIn("1 value across an end of a validation window is in no window.", warnings)
+
+    def test_counts_match_the_engine(self):
+        """Control: the values said for each part are those the engine's process_both cuts for validation_1, validation_2."""
+        from mobile.calibration_data import Observations
+        from mobile.calibration_model import process_both, validation_parts
+        days = pd.date_range(*self.period, freq="D")
+        model = Observations(shape="dated", values=np.ones(len(days)), units="cases", name="cases",
+                             index=pd.DataFrame({"start": days.values.astype("datetime64[D]"), "end": days.values.astype("datetime64[D]")}))
+        monthly = [{"kind": "aggregate", "period": "month", "how": "sum", "complete": True, "days": 7}]
+        validation = [list(self.HUMP), list(self.LAST)]
+        [(_, text, _, _)] = self.said(validation)
+        said = [int(n) for n in re.findall(r"(\d+) values", text)]
+        got = [int(np.isfinite(process_both([model], monthly, self.data, [], validation=validation, part=part)[1].values).sum())
+               for part in ("calibration", *validation_parts(validation))]
+        self.assertEqual(said, got)
+
+    def test_typed_in_the_card(self):
+        from mobile.calibration_run_ui import next_window, typed_validation
+
+        class Typed(dict):  # The inputs of the card, as Shiny gives them
+            def __getattr__(self, name):
+                return self[name]
+
+            def __getitem__(self, name):
+                value = dict.__getitem__(self, name)
+                return value if callable(value) else (lambda: value)
+
+        day = lambda text: pd.Timestamp(text).date()
+        typed = Typed(cal_validation=True, cal_validation_dates=(day("1998-01-01"), day("2003-12-31")))
+        self.assertEqual(typed_validation(typed, []), ("1998-01-01", "2003-12-31"))  # Control: one window, as before
+        typed["cal_validation_dates_2"] = (day("1989-01-01"), day("1993-12-31"))
+        self.assertEqual(typed_validation(typed, [(2, None)]), [list(self.HUMP), list(self.LAST)])  # In date order
+        self.assertEqual(typed_validation(typed, [(3, (day("1989-01-01"), day("1993-12-31")))]),  # Not drawn yet: its start
+                         [list(self.HUMP), list(self.LAST)])
+        typed["cal_validation_dates_2"] = (day("1993-01-01"), day("1998-06-30"))
+        with self.assertRaisesRegex(ValueError, "overlap"):
+            typed_validation(typed, [(2, None)])
+        typed["cal_validation_dates_2"] = (day("1993-01-01"), None)
+        with self.assertRaisesRegex(ValueError, "Each validation window needs"):
+            typed_validation(typed, [(2, None)])
+        typed["cal_validation_dates_2"] = (day("1993-01-01"), day("1990-01-01"))
+        with self.assertRaisesRegex(ValueError, "1993-01-01 to 1990-01-01 must start"):
+            typed_validation(typed, [(2, None)])
+        typed["cal_validation"] = False
+        self.assertIsNone(typed_validation(typed, [(2, None)]))
+        # A window added: up to five years after the latest, within the period simulated (item 34: 2004-2007 after the
+        # hump and 1998-2003, with runs to 2010); with no room after, the five years before the earliest; the first year
+        # if no room before either
+        self.assertEqual(next_window([list(self.HUMP), list(self.LAST)], ("1980-01-01", "2010-12-31")),
+                         (day("2004-01-01"), day("2008-12-31")))
+        self.assertEqual(next_window([list(self.HUMP)], self.period), (day("1994-01-01"), day("1998-12-31")))
+        self.assertEqual(next_window([(day("1999-01-01"), day("2001-12-31"))], self.period), (day("2002-01-01"), day("2003-12-31")))
+        self.assertEqual(next_window([(day("1999-01-01"), day("2003-12-31"))], self.period), (day("1994-01-01"), day("1998-12-31")))
+        self.assertEqual(next_window([(day("1982-01-01"), day("2003-12-31"))], self.period), (day("1980-01-01"), day("1981-12-31")))
+        self.assertEqual(next_window([(day("1980-01-01"), day("2003-12-31"))], self.period), (day("1980-01-01"), day("1980-12-31")))
+        self.assertIsNone(next_window([], None))
+
+    def test_compared_in_the_title(self):
+        """Item 29: the values each part of a trial compared, as the engine pairs them: with a 5-year low pass the filter's
+        ends are cut, so the calibration starts after 1980-01; control: monthly values without a filter, every month."""
+        from mobile.calibration_data import Observations
+        from mobile.calibration_metrics import pair
+        from mobile.calibration_model import process_both
+        from mobile.calibration_run_ui import compared_parts, compared_said
+        validation = [list(self.HUMP), list(self.LAST)]
+        self.assertEqual(compared_parts(validation), [("calibration", "calibration"), ("validation_1", "validation 1"),
+                                                      ("validation_2", "validation 2")])
+        self.assertEqual(compared_parts(list(self.LAST)), [("calibration", "calibration"), ("validation", "validation")])
+        self.assertEqual(compared_parts(None), [])
+        self.assertEqual(compared_said([]), "")
+        days = pd.date_range(*self.period, freq="D")
+        model = Observations(shape="dated", values=np.ones(len(days)), units="cases", name="cases",
+                             index=pd.DataFrame({"start": days.values.astype("datetime64[D]"), "end": days.values.astype("datetime64[D]")}))
+        monthly = [{"kind": "aggregate", "period": "month", "how": "sum", "complete": True, "days": 7}]
+
+        def said(model_steps, data_steps):
+            parts = [(label, pair(*process_both([model], model_steps, self.data, data_steps, validation=validation, part=part)[:2])[2])
+                     for part, label in compared_parts(validation)]
+            return compared_said(parts, "months")
+
+        # Control: no filter, every month of each part (the last month of the data is missing)
+        self.assertEqual(said(monthly, []), "Compared: calibration 156 months (1980-01 to 1997-12) · validation 1: 60 months "
+                                            "(1989-01 to 1993-12) · validation 2: 71 months (1998-01 to 2003-11)")
+        from mobile.calibration_steps import DECADES, EDGE_ERROR
+        low = {"kind": "filter", "type": "low", "short": 1.0, "long": DECADES, "unit": "years", "missing": "interpolate",
+               "max_gap": 3, "edges": "cut", "edge_error": EDGE_ERROR}  # The decadal recipes' low pass
+        filtered = said([*monthly, low], [low])
+        first, last = re.search(r"calibration (\d+) months \((\S+) to", filtered).group(1, 2)
+        self.assertLess(int(first), 156)
+        self.assertGreater(last, "1980-01")  # The filter's start cut: not compared
+        self.assertIn("validation 1: 60 months (1989-01 to 1993-12)", filtered)  # Mid-period: nothing cut
+
+    def test_pareto_table(self):
+        from mobile.calibration_run_ui import (
+            IDEAL, front_columns, front_key, sort_rows, window_columns, window_scores,
+        )
+        objectives = [{"name": "Correlation", "direction": "maximize"}, {"name": "RMSE", "direction": "minimize"}]
+        record = {"objectives": objectives, "validation": [list(self.HUMP), list(self.LAST)]}
+
+        def row(number, hump, last):
+            return {"number": number, "state": "COMPLETE", "values": [0.5, 1.0], "params": {}, "offsets": {},
+                    "validation": hump, "validation_windows": [{"window": list(self.HUMP), "part": "validation_1", "values": hump},
+                                                               {"window": list(self.LAST), "part": "validation_2", "values": last}]}
+        front = [row(0, [0.1, 3.0], [0.9, 1.0]), row(1, [0.7, 2.0], None), row(2, [0.4, 1.0], [0.2, 4.0])]
+        self.assertEqual(window_columns(record), [(["w1_0", "w1_1"], "validation 1"), (["w2_0", "w2_1"], "validation 2")])
+        self.assertEqual(window_scores(record, front[2]), [[0.4, 1.0], [0.2, 4.0]])
+        self.assertTrue({"w1_0", "w1_1", "w2_0", "w2_1"} <= front_columns(record))
+        self.assertNotIn("v0", front_columns(record))
+        numbers = lambda column, descending: [r["number"] for r in sort_rows(front, column, descending, {}, record)]
+        self.assertEqual(numbers("w1_0", True), [1, 2, 0])
+        self.assertEqual(numbers("w2_0", True), [0, 2, 1])  # Trial 1 has no score on window 2: last either way
+        self.assertEqual(numbers("w2_0", False), [2, 0, 1])
+        # A score that changes on window 2 only draws the table again
+        changed = [*front[:2], row(2, [0.4, 1.0], [0.3, 4.0])]
+        self.assertNotEqual(front_key((record, front, front)), front_key((record, changed, changed)))
+        # Control: one window keeps its columns v0, v1 and the scores user_attrs validation
+        one = {"objectives": objectives, "validation": list(self.LAST)}
+        self.assertEqual(window_columns(one), [(["v0", "v1"], "validation")])
+        self.assertEqual(window_scores(one, front[0]), [[0.1, 3.0]])
+        self.assertEqual([r["number"] for r in sort_rows(front, "v0", True, {}, one)], [1, 2, 0])
+        self.assertEqual(window_columns({"objectives": objectives}), [])  # No window: no column
+        self.assertEqual(front_columns({"objectives": objectives}), {"number", IDEAL, "o0", "o1"})
+
+    def test_window_bars(self):
+        import plotly.graph_objects as go
+
+        from mobile.plots import CALIBRATION_WINDOW, VALIDATION_WINDOW, mark_windows
+
+        figure = mark_windows(go.Figure(go.Scatter(x=["1980-01-15", "2003-12-15"], y=[0, 1])), self.period, [self.HUMP, self.LAST])
+        self.assertEqual([shape.fillcolor for shape in figure.layout.shapes],
+                         [CALIBRATION_WINDOW, VALIDATION_WINDOW, CALIBRATION_WINDOW, VALIDATION_WINDOW])
+        self.assertEqual([(str(shape.x0)[:10], str(shape.x1)[:10]) for shape in figure.layout.shapes],
+                         [("1980-01-01", "1988-12-31"), ("1989-01-01", "1993-12-31"), ("1994-01-01", "1997-12-31"),
+                          ("1998-01-01", "2003-12-31")])
+        self.assertEqual([a.text for a in figure.layout.annotations],
+                         ["Calibration window", "Validation window 1", "Calibration window", "Validation window 2"])
+        # Control: one window is named as before
+        figure = mark_windows(go.Figure(go.Scatter(x=["1980-01-15", "2003-12-15"], y=[0, 1])), self.period, self.LAST)
+        self.assertEqual([a.text for a in figure.layout.annotations], ["Calibration window", "Validation window"])
+
+
+class TestSharedPeriod(unittest.TestCase):
+    """Model and data are cut to the period they share before their steps, so that a climatology covers the same years."""
+
+    @staticmethod
+    def daily(first, last, value):
+        from mobile.calibration_data import Observations
+
+        day = np.arange(np.datetime64(first), np.datetime64(last) + 1)
+        values = value(day.astype("datetime64[Y]").astype(int) + 1970) * np.ones(len(day))
+        return Observations(shape="dated", values=values, index=pd.DataFrame({"start": day, "end": day}), aggregation="sum",
+                            units="fraction", name="x")
+
+    def test_climatology_over_the_shared_years_only(self):
+        from mobile.calibration_data import DataError
+        from mobile.calibration_metrics import pair
+        from mobile.calibration_model import process_both, shared_span
+        from mobile.calibration_steps import apply_steps
+
+        steps = [{"kind": "aggregate", "period": "month", "how": "sum", "complete": True, "days": 1}, {"kind": "climatology", "by": "month"}]
+        model = self.daily("2001-01-01", "2002-12-31", lambda year: 1.0)
+        # The data are 1 a day in 2001-2002 and 10 a day in the years around them, monthly as loaded
+        data = apply_steps(self.daily("1999-01-01", "2004-12-31", lambda year: np.where((year >= 2001) & (year <= 2002), 1.0, 10.0)),
+                           steps[:1])
+        self.assertEqual(shared_span(model, data), ("2001-01-01", "2002-12-31"))
+        m, d, span = process_both([model], steps, data, steps[1:])
+        self.assertEqual(span, ("2001-01-01", "2002-12-31"))
+        m, d, _ = pair(m, d)
+        np.testing.assert_allclose(m, d)  # Both 1 a day: the years around do not enter
+        self.assertEqual(round(float(d[0]), 6), 31.0)
+        # Without the cut the data's January would mix in the 10s: what the earlier objectives did
+        self.assertGreater(float(apply_steps(data, steps[1:]).values[0]), 31.0)
+        # Several seeds: each cut, then the median and range
+        m2, _, _ = process_both([model, self.daily("2000-06-01", "2002-12-31", lambda year: 3.0)], steps, data, steps[1:])
+        self.assertEqual(float(m2.values[0]), 62.0)  # Median of 31 and 93
+        # Nothing shared
+        with self.assertRaises(DataError):
+            shared_span(self.daily("1990-01-01", "1990-12-31", lambda year: 1.0), data)
+        # Not dated (a climatology loaded as such): nothing to cut
+        self.assertIsNone(process_both([model], steps, apply_steps(data, steps[1:]), [])[2])
+
+    def test_validation_window_kept_out_before_the_steps(self):
+        from mobile.calibration_data import DataError, drop_window
+        from mobile.calibration_model import process_both
+        from mobile.calibration_steps import apply_steps
+
+        steps = [{"kind": "aggregate", "period": "month", "how": "sum", "complete": True, "days": 1}, {"kind": "climatology", "by": "month"}]
+        model = self.daily("2001-01-01", "2002-12-31", lambda year: np.where(year == 2001, 1.0, 2.0))
+        data = apply_steps(model, steps[:1])  # Monthly: 1 a day in 2001, 2 a day in 2002
+        window = ("2002-01-01", "2002-12-31")
+        m, d, _ = process_both([model], steps, data, steps[1:], validation=window, part="calibration")
+        self.assertEqual((float(m.values[0]), float(d.values[0])), (31.0, 31.0))  # January of 2001 only
+        m, d, _ = process_both([model], steps, data, steps[1:], validation=window, part="validation")
+        self.assertEqual((float(m.values[0]), float(d.values[0])), (62.0, 62.0))  # January of 2002 only
+        m, d, _ = process_both([model], steps, data, steps[1:], validation=window)  # No part: the whole shared period
+        self.assertEqual(float(d.values[0]), 46.5)
+        # A month across the start of the window is left out of the calibration too
+        self.assertEqual(len(drop_window(data, "2002-01-15", "2002-12-31")), 12)
+        with self.assertRaises(DataError):
+            drop_window(data, "2000-01-01", "2003-12-31")
+        with self.assertRaises(DataError):  # Not dated: no window in time
+            process_both([model], steps, apply_steps(data, steps[1:]), [], validation=window, part="calibration")
+
+    def test_window_bars(self):
+        import plotly.graph_objects as go
+
+        from mobile.plots import CALIBRATION_WINDOW, VALIDATION_WINDOW, mark_windows
+
+        span = ("1985-01-01", "2004-12-31")
+        for window, colours in ((("2000-01-01", "2004-12-31"), [CALIBRATION_WINDOW, VALIDATION_WINDOW]),
+                                (("1993-01-01", "1997-12-31"), [CALIBRATION_WINDOW, VALIDATION_WINDOW, CALIBRATION_WINDOW]),
+                                (("1980-01-01", "1989-12-31"), [VALIDATION_WINDOW, CALIBRATION_WINDOW])):  # Clipped to the span
+            figure = mark_windows(go.Figure(go.Scatter(x=["1985-01-15", "2004-12-15"], y=[0, 1])), span, window)
+            self.assertEqual([shape.fillcolor for shape in figure.layout.shapes], colours)
+            self.assertEqual(str(figure.layout.shapes[0].x0)[:10], "1985-01-01")
+            self.assertEqual(str(figure.layout.shapes[-1].x1)[:10], "2004-12-31")
+
+
+class TestCalibrationProgress(unittest.TestCase):
+    """The steps at the right of the Calibration tab: every box links to a mark that exists in the tab."""
+
+    def test_links_reach_the_tab(self):
+        from mobile.calibration_progress import STEPS, step_box
+        from mobile.calibration_ui import calibration_tab
+
+        html = str(calibration_tab())
+        for key, title, target in STEPS:
+            box = str(step_box(key, title, target, "todo"))
+            if target is None:  # Setup: opens tab 1
+                self.assertIn("data-value=", box)
+                self.assertIn("setup", box)
+                continue
+            self.assertIn(f'href="#{target}"', box)
+            self.assertIn(f'id="{target}"', html, target)
+        self.assertIn('class="cal-progress"', html)
+        self.assertIn('id="cal_progress"', html)
+
+    def test_states_are_said_in_words(self):
+        from mobile.calibration_progress import WORDS, step_box
+
+        for state, word in WORDS.items():
+            box = str(step_box("run", "Run", "cal-step-calibrations", state, "running on leonardo"))
+            self.assertIn(f'class="cal-step {state}"', box)
+            self.assertIn(f">{word}<", box)  # Not by colour alone
+
+
+class TestObservationModel(unittest.TestCase):
+    """The observational model (observation.py) on its own: reported cases drawn from a model's, negative binomial."""
+
+    def series(self, years=24):
+        from mobile.calibration_data import Observations
+
+        months = pd.date_range("1980-01-01", periods=12 * years, freq="MS")
+        t = np.arange(len(months)) / 12
+        cases = 2000 * np.exp(0.1 * t) * (1.3 + np.sin(2 * np.pi * t))  # Monthly cases: a trend and a season
+        index = pd.DataFrame({"start": months.values.astype("datetime64[D]"),
+                              "end": (months + pd.offsets.MonthEnd(0)).values.astype("datetime64[D]")})
+        population = np.full(len(months), 300000.0)
+        model = Observations(shape="dated", values=cases / population, index=index, aggregation="sum", units="cases per person",
+                             name="model", extra={})
+        return model, cases, population
+
+    def test_draws_and_scores(self):
+        from mobile.observation import band, coverage, crps, draw
+
+        cases = np.array([0.0, 10.0, 1000.0])
+        drawn = draw(cases, rho=0.3, k=4.0, draws=20000, seed=1)
+        mean = 0.3 * cases
+        np.testing.assert_allclose(drawn.mean(axis=0), mean, rtol=0.03, atol=0.05)
+        np.testing.assert_allclose(drawn.var(axis=0), mean + mean ** 2 / 4.0, rtol=0.06, atol=0.1)  # NB: mu + mu^2 / k
+        self.assertTrue((drawn[:, 0] == 0).all())  # No cases, none reported
+        # CRPS: the absolute error for draws all equal; lower for a band around the value than for one away from it
+        np.testing.assert_allclose(crps(np.full((10, 2), 3.0), np.array([1.0, 3.0])), [2.0, 0.0])
+        around = np.random.default_rng(2).normal(0.0, 1.0, (4000, 1))
+        self.assertLess(crps(around, [0.0])[0], crps(around + 2.0, [0.0])[0])
+        self.assertAlmostEqual(crps(around, [0.0])[0], 0.2337, delta=0.02)  # Of N(0, 1) at 0: (sqrt(2) - 1) / sqrt(pi)
+        low, middle, high = band(around)
+        self.assertAlmostEqual(float(low[0]), -1.96, delta=0.1)
+        self.assertEqual(coverage([0.0, 0.0], [1.0, 1.0], [0.5, 2.0]), 0.5)
+        for bad in ({"rho": 0.0, "k": 1.0}, {"rho": 1.5, "k": 1.0}, {"rho": 0.5, "k": 0.0}):
+            with self.assertRaises(Exception):
+                draw(cases, **bad)
+
+    def test_draws_through_the_steps(self):
+        """The draws go through an objective's steps as one matrix where they can, and the result is the steps themselves,
+        draw by draw (filter first, then the windows, as for the data); with the true reporting the data lie within the
+        band about as often as its width says, and the CRPS is lowest there."""
+        from mobile.calibration_steps import EDGE_ERROR, apply_steps
+        from mobile.observation import _through, band, coverage, crps, draw, median_of, process_draws
+
+        model, cases, population = self.series()
+        log = {"kind": "transform", "transform": "log", "offset": 1e-5}
+        low = {"kind": "filter", "type": "low", "short": 1.0, "long": 5.0, "unit": "years", "missing": "interpolate",
+               "max_gap": 3, "edges": "cut", "edge_error": EDGE_ERROR}
+        recipes = {"season": [log, {"kind": "climatology", "by": "month"}], "decadal shape": [log, low, {"kind": "transform", "transform": "anomaly"}],
+                   "decadal level": [log, low]}
+        matrix = draw(cases, 0.3, 5.0, draws=40, seed=3) / population
+        for name, steps in recipes.items():
+            batch, shape = _through(matrix, replace(model, values=matrix[0].copy()), steps)
+            one_by_one = np.vstack([apply_steps(replace(model, values=row.copy()), steps).values for row in matrix])
+            np.testing.assert_allclose(batch, one_by_one, rtol=1e-9, atol=1e-12, equal_nan=True, err_msg=name)
+            self.assertEqual(len(shape.values), batch.shape[1])
+        # Filter first, then the windows: the draws' calibration part is the whole series' filtered draws, cut
+        windows = [["1989-01-01", "1993-12-31"], ["1998-01-01", "2003-12-31"]]
+        part, shape = process_draws(replace(model, values=matrix[0].copy()), matrix, [log, low], windows, "calibration")
+        whole, whole_shape = process_draws(replace(model, values=matrix[0].copy()), matrix, [log, low])
+        kept = pd.to_datetime(shape.index["start"]).isin(pd.to_datetime(whole_shape.index["start"]))
+        self.assertTrue(kept.all())
+        self.assertFalse(pd.DatetimeIndex(shape.index["start"]).year.isin(range(1989, 1994)).any())
+        # Coverage and CRPS: data reported with the true rho and k, against draws with the true and a wrong rho
+        observed = draw(cases, 0.3, 5.0, draws=1, seed=99)[0] / population
+        data = replace(model, values=observed)
+        steps = recipes["decadal level"]
+        observed_series = np.asarray(apply_steps(data, steps).values, float)
+        scored = {}
+        for rho in (0.3, 0.03):
+            processed, shape = process_draws(replace(model, values=matrix[0].copy()), draw(cases, rho, 5.0, draws=400, seed=4) / population,
+                                             [log])
+            low_, _, high_ = band(processed)
+            month = np.asarray(apply_steps(data, [log]).values, float)
+            scored[rho] = (coverage(low_, high_, month), float(np.nanmean(crps(processed, month))))
+        self.assertGreater(scored[0.3][0], 0.85)  # About 95 % of the months within the true band
+        self.assertLess(scored[0.03][0], 0.05)  # Almost none within a band ten times too low
+        self.assertLess(scored[0.3][1], scored[0.03][1])
+        self.assertEqual(len(median_of(processed, shape).values), processed.shape[1])
+
+
+class TestCalibrationEngine(unittest.TestCase):
+    """A calibration with Optuna, on a toy model: new cases grow with the temperature above 18 °C. Observations made
+    from it at known temperature offsets of two cells must be found again."""
+
+    TRUTH = {"dT_1": 1.0, "dT_2": 0.3}  # West, then east: the east stays warmer (18.8 against 18.0 °C on average)
+    # Builds unless given a model (-E), then runs the toy
+    FAKE = """#!/bin/bash
+prebuilt=""
+while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:i:l:M:B:T:C:G:O:E:" flag; do
+  case $flag in E) [ "$OPTARG" != "NONE" ] && prebuilt=$OPTARG ;; esac
+done
+if [ -z "$prebuilt" ]; then
+  echo build >> $EVENTS
+  mkdir -p output && printf '#!/bin/bash\\n' > output/mobile.out && chmod +x output/mobile.out
+fi
+echo '================= Running MoBILE ================='
+[ -n "$FAKE_FAIL" ] && { echo ' More agents than people! --> STOP'; exit 0; }
+if [ -n "$FAKE_COUNTER" ]; then  # Runs counted from 1: those in FAKE_FAIL_RUNS fail, and all from FAKE_FAIL_FROM on
+  count=$(( $(cat "$FAKE_COUNTER" 2>/dev/null || echo 0) + 1 )); echo $count > "$FAKE_COUNTER"
+  case " $FAKE_FAIL_RUNS " in *" $count "*) echo ' More agents than people! --> STOP'; exit 0 ;; esac
+  [ -n "$FAKE_FAIL_FROM" ] && [ $count -ge $FAKE_FAIL_FROM ] && { echo ' More agents than people! --> STOP'; exit 0; }
+fi
+sleep ${FAKE_SLEEP:-0}
+"$FAKE_PYTHON" "$FAKE_TOY" "$@"
+"""
+
+    def setUp(self):
+        from mobile.config import Config
+
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        root = self.root = Path(folder.name)
+        fake = root / "MoBILE"
+        (fake / "utils").mkdir(parents=True)
+        (fake / "src").mkdir()
+        (fake / "utils" / "run_MOBILE.sh").write_text((Path(MOBILE) / "utils" / "run_MOBILE.sh").read_text())
+        (fake / "src" / "mo_namelist.f90").write_text((Path(MOBILE) / "src" / "mo_namelist.f90").read_text())
+        (fake / "mobile.sh").write_text(self.FAKE)
+        (root / "toy.py").write_text(TOY_MODEL)
+        self.events = root / "events.txt"
+        self.events.write_text("")
+        patch = mock.patch.dict(os.environ, {"EVENTS": str(self.events), "FAKE_PYTHON": sys.executable, "FAKE_TOY": str(root / "toy.py")})
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(root)
+        # Two cells of 0.5°, two years: the west cooler, its seasons half a year from those of the east
+        days = np.arange(np.datetime64("2001-01-01"), np.datetime64("2003-01-01"))
+        doy = np.arange(len(days)) % 365
+        self.t2m = np.stack([17.0 + 3 * np.sin(2 * np.pi * (doy - 100) / 365), 18.5 + 3 * np.sin(2 * np.pi * (doy - 280) / 365)], axis=1)[:, None, :]
+        self.pop = np.array([[2e-4, 3e-4]])
+        self.cells = [{"lat": 8.75, "lon": 38.75}, {"lat": 8.75, "lon": 39.25}]
+        files = {}
+        for key, name, values, units in (("rain_file", "rain", np.full_like(self.t2m, 3.0), "mm/day"), ("temp_file", "temperature", self.t2m, "celsius"),
+                                         ("pop_file", "pop", self.pop, "persons/m2")):
+            path = files[key] = root / f"{name}.nc"
+            with netCDF4.Dataset(path, "w") as data:
+                for axis, centres in (("lat", [8.75]), ("lon", [38.75, 39.25])):
+                    data.createDimension(axis, len(centres))
+                    variable = data.createVariable(axis, "f8", (axis,))
+                    variable[:], variable.bounds = centres, f"{axis}_bnds"
+                    data.createDimension(f"{axis}_nv", 2)
+                    data.createVariable(f"{axis}_bnds", "f8", (axis, f"{axis}_nv"))[:] = [[c - 0.25, c + 0.25] for c in centres]
+                dims = ("lat", "lon")
+                if key != "pop_file":
+                    data.createDimension("time", len(days))
+                    time = data.createVariable("time", "f8", ("time",))
+                    time[:], time.units, time.calendar = np.arange(len(days)), "days since 2001-01-01", "proleptic_gregorian"
+                    dims = ("time", *dims)
+                field = data.createVariable(name, "f4", dims, fill_value=np.float32(1e20))
+                field[:], field.units = values, units
+        example = Config.load(CONFIG)
+        self.config = replace(example, mobile=fake, runs_dir=root / "runs", inputs={**example.inputs, **{k: str(v) for k, v in files.items()}},
+                              run={**example.run, "nstep": 0, "spin_up": 0, "nagent": 100, "threads": 1}, region=None, period=None,
+                              age_structure={"product": "Global2000_2020", "country": "SEN", "year": 2012}, output=("out_I_new",))
+        self.data = root / "cases.nc"
+        self.write_observations(self.TRUTH, self.data)
+
+    def write_observations(self, offsets, path):
+        """Monthly cases per person of the two cells together, people-weighted, computed here from the toy's rule."""
+        from mobile.calibration_data import Observations, write_observations
+        from mobile.calibration_steps import apply_steps
+        from mobile.cells import cell_areas
+
+        shifted = self.t2m + np.array([[offsets["dT_1"], offsets["dT_2"]]])
+        inew = 1e-3 * np.maximum(shifted - 18.0, 0.0)
+        people = self.pop * cell_areas(self.root / "pop.nc")
+        daily = (inew * people).sum(axis=(1, 2)) / people.sum()
+        day = np.arange(np.datetime64("2001-01-01"), np.datetime64("2003-01-01"))
+        observations = Observations(shape="dated", values=daily, index=pd.DataFrame({"start": day, "end": day}), aggregation="sum",
+                                    units="fraction", name="cases")
+        write_observations(apply_steps(observations, self.MONTHLY), path)
+
+    MONTHLY = [{"kind": "aggregate", "period": "month", "how": "sum", "complete": True, "days": 1}]
+
+    def objectives(self):
+        return [{"name": "timing", "data": str(self.data), "variable": "Inew", "steps": self.MONTHLY, "metric": "correlation"},
+                {"name": "swings", "data": str(self.data), "variable": "Inew", "steps": self.MONTHLY, "metric": "rmse_relative"}]
+
+    def temperature(self):
+        return {"cells": self.cells, "first": (-2.0, 2.0), "gap": (0.0, 3.0)}
+
+    def test_objectives_with_raw_data_are_cut_to_the_shared_period(self):
+        from mobile.calibration_data import Observations, read_observations, write_observations
+        from mobile.calibration_engine import objective_series
+        from mobile.calibration_steps import apply_steps
+        from mobile.runner import Runner
+
+        result = Runner(self.config).run("cut")
+        self.assertTrue(result.ok, result.log_tail())
+        folder = result.run_dir
+        loaded = read_observations(self.data)  # Monthly, 2001-2002
+        # The same months with a year of big values before and after: loaded as such, not cut
+        months = pd.date_range("2000-01-01", "2003-12-01", freq="MS")
+        values = np.where((months.year >= 2001) & (months.year <= 2002), np.resize(loaded.values, len(months)), 1.0)
+        index = pd.DataFrame({"start": months.values.astype("datetime64[D]"), "end": (months + pd.offsets.MonthEnd(0)).values.astype("datetime64[D]")})
+        raw = self.root / "raw.nc"
+        write_observations(Observations(shape="dated", values=values, index=index, aggregation="sum", units="fraction", name="cases"), raw)
+        climatology = [{"kind": "climatology", "by": "month"}]
+        objective = {"name": "season", "data": str(self.data), "variable": "Inew", "space": "people", "aggregation": None,
+                     "steps": self.MONTHLY + climatology, "metric": "rmse_relative"}
+        cut = objective_series({**objective, "data_raw": str(raw), "data_steps": climatology}, [folder])[1]
+        np.testing.assert_allclose(cut.values, apply_steps(loaded, climatology).values)  # Only 2001-2002
+        old = objective_series(objective, [folder])[1]  # Earlier objectives: the data as processed, read as they are
+        np.testing.assert_allclose(old.values, loaded.values)
+
+    def test_offsets_keep_the_order_of_the_cells(self):
+        from mobile.calibration_engine import cell_means, offset_temperature, offsets_from
+
+        means = cell_means(self.root / "temperature.nc", self.cells)
+        np.testing.assert_allclose(means, self.t2m.mean(axis=0).ravel())
+        temperature = {"cells": self.cells, "means": means}
+        for dT_1, gap in ((-2.0, 0.0), (1.5, 0.0), (0.0, 2.5)):
+            offsets = offsets_from(temperature, {"dT_1": dT_1, "gap_2": gap})
+            self.assertAlmostEqual(means[1] + offsets["dT_2"] - (means[0] + offsets["dT_1"]), gap)  # East above west by the gap
+        offsets = {"dT_1": 1.0, "dT_2": -0.5}
+        offset_temperature(self.root / "temperature.nc", self.root / "shifted.nc", self.cells, offsets)
+        with netCDF4.Dataset(self.root / "shifted.nc") as data:
+            np.testing.assert_allclose(data["temperature"][:] - self.t2m, np.broadcast_to([[[1.0, -0.5]]], self.t2m.shape), atol=1e-5)
+
+    def test_truth_gives_a_perfect_match(self):
+        # The plumbing: the toy run at the true offsets, processed as the objectives say, matches the observations
+        from mobile.calibration_engine import evaluate, offset_temperature
+        from mobile.calibration_metrics import DIRECTIONS
+        from mobile.runner import Runner
+
+        offset_temperature(self.root / "temperature.nc", self.root / "true.nc", self.cells, self.TRUTH)
+        result = Runner(replace(self.config, inputs={**self.config.inputs, "temp_file": str(self.root / "true.nc")})).run("truth")
+        self.assertTrue(result.ok, result.log_tail())
+        correlation, relative = evaluate([{**objective, "space": "people", "aggregation": None, "direction": DIRECTIONS[objective["metric"]]}
+                                          for objective in self.objectives()], [result.run_dir])
+        self.assertAlmostEqual(correlation, 1.0, places=5)
+        self.assertLess(relative, 1e-4)
+
+    def test_finds_the_offsets_again(self):
+        from mobile.calibration_engine import best_trials, create_calibration, read_calibration, run_calibration, trials_table
+        from mobile.sensitivity_runs import StudyState
+
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=40, startup_trials=10,
+                                    sampler_seed=1, name="toy")
+        record = run_calibration(folder, StudyState(), parallel=4)
+        self.assertEqual((record["status"], record["completed"], record["failed"]), ("finished", 40, 0))
+        self.assertEqual(self.events.read_text().split(), ["build"])  # Built once, for all the trials
+        self.assertEqual(record["binary_md5"], hashlib.md5((folder / "bin" / "mobile.out").read_bytes()).hexdigest())
+        means = read_calibration(folder)["temperature"]["means"]
+        rows = trials_table(folder)
+        self.assertEqual(len(rows), 40)
+        for row in rows:  # The east stays warmer in every trial
+            self.assertGreaterEqual(means[1] + row["offsets"]["dT_2"], means[0] + row["offsets"]["dT_1"] - 1e-9)
+        best = min(best_trials(folder), key=lambda row: row["values"][1])
+        self.assertLess(best["values"][1], 0.15)
+        for key, value in self.TRUTH.items():
+            self.assertAlmostEqual(best["offsets"][key], value, delta=0.5, msg=(best, rows))
+
+    def test_cancel_resume_and_failures(self):
+        import threading
+
+        from mobile.calibration_engine import counts, create_calibration, open_study, read_calibration, run_calibration
+        from mobile.sensitivity_runs import StudyState
+
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=12, name="resume")
+        state = StudyState()
+        outcome = {}
+        with mock.patch.dict(os.environ, {"FAKE_SLEEP": "0.5"}):
+            worker = threading.Thread(target=lambda: outcome.update(record=run_calibration(folder, state, parallel=2)))
+            worker.start()
+            time.sleep(2.0)
+            state.cancel()
+            worker.join(30)
+        self.assertEqual(outcome["record"]["status"], "cancelled")
+        done = outcome["record"]["completed"]
+        self.assertLess(done, 12)
+        record = run_calibration(folder, StudyState(), parallel=2)  # Resumed: only the trials left
+        self.assertEqual((record["status"], record["completed"]), ("finished", 12))
+        self.assertEqual(counts(open_study(folder, read_calibration(folder))), (12, 0))
+        # Runs that all fail stop the calibration, with the end of a log
+        failing = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=10, name="failing")
+        with mock.patch.dict(os.environ, {"FAKE_FAIL": "1"}):
+            record = run_calibration(failing, StudyState(), parallel=1)
+        self.assertEqual((record["status"], record["completed"], record["failed"]), ("stopped", 0, 3))
+        self.assertIn("More agents than people", record["failure"])
+
+    def test_what_the_tab_shows(self):
+        from mobile.calibration_engine import (best_trials, calibration_label, create_calibration, read_calibration, run_calibration,
+                                               trial_comparison, trials_table)
+        from mobile.calibration_run_ui import offset_cells
+        from mobile.plots import calibration_history_figure
+        from mobile.sensitivity_runs import StudyState
+
+        # The cells to offset, coolest first, with their means; too many for a big grid
+        cells = offset_cells(self.config)
+        self.assertEqual([(c["lat"], c["lon"]) for c in cells], [(8.75, 38.75), (8.75, 39.25)])
+        np.testing.assert_allclose([c["mean"] for c in cells], self.t2m.mean(axis=0).ravel(), rtol=1e-6)
+        with mock.patch("mobile.calibration_run_ui.MAX_SIMULATED", 1):
+            self.assertIn("at most 1 cells", offset_cells(self.config))
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=6, name="shown")
+        record = run_calibration(folder, StudyState(), parallel=2)
+        self.assertEqual(calibration_label(folder, record), "shown (finished, 6 of 6 trials completed, 2 objectives)")
+        figure = calibration_history_figure(trials_table(folder), read_calibration(folder)["objectives"])
+        self.assertEqual([len(trace.x) for trace in figure.data], [6, 6, 6, 6])  # Trials and best so far, for each objective
+        # The first trial is the model as it is: no offset, both cells at the temperatures of the file
+        first = trials_table(folder)[0]
+        self.assertTrue(first["baseline"])
+        self.assertAlmostEqual(first["offsets"]["dT_1"], 0.0)
+        self.assertAlmostEqual(first["offsets"]["dT_2"], 0.0, places=6)
+        self.assertEqual(sum(row["baseline"] for row in trials_table(folder)), 1)
+        best = best_trials(folder)[0]
+        model, data, m, d, labels = trial_comparison(folder, best["number"], 0)
+        self.assertEqual((len(labels), labels[0], labels[-1]), (24, "2001-01", "2002-12"))
+        self.assertAlmostEqual(float(np.corrcoef(m, d)[0, 1]), best["values"][0], places=6)  # The plot is what was scored
+
+    def test_validation_window(self):
+        from mobile.calibration_engine import (CalibrationError, create_calibration, evaluate, read_calibration, run_calibration,
+                                               trial_comparison, trial_folder, trials_table)
+        from mobile.sensitivity_runs import StudyState
+
+        window = ("2002-07-01", "2002-12-31")
+        objectives = [{**objective, "data_raw": str(self.data), "data_steps": []} for objective in self.objectives()]
+        for given, why, wrong in ((self.objectives(), "add the objective again", window), (objectives, "no observations", ("1990-01-01", "1990-12-31")),
+                                  (objectives, "start before", window[::-1])):
+            with self.assertRaisesRegex(CalibrationError, why):
+                create_calibration(self.config, given, temperature=self.temperature(), n_trials=2, validation=wrong)
+        folder = create_calibration(self.config, objectives, temperature=self.temperature(), n_trials=4, name="validated", validation=window)
+        record = run_calibration(folder, StudyState(), parallel=2)
+        self.assertEqual(record["status"], "finished")
+        record = read_calibration(folder)
+        self.assertEqual(record["validation"], list(window))
+        rows = trials_table(folder)
+        self.assertTrue(all(len(row["validation"]) == 2 and all(isinstance(v, float) for v in row["validation"]) for row in rows))
+        row = rows[0]
+        run_dirs = [trial_folder(folder, row["number"]) / f"seed_{seed}" for seed in record["seeds"]]
+        # Scored on the months outside the window; the window apart, kept with the trial
+        np.testing.assert_allclose(row["values"], evaluate(record["objectives"], run_dirs, window, "calibration"))
+        np.testing.assert_allclose(row["validation"], evaluate(record["objectives"], run_dirs, window, "validation"))
+        self.assertFalse(np.allclose(row["values"], evaluate(record["objectives"], run_dirs)))
+        self.assertEqual([len(trial_comparison(folder, row["number"], 0, part)[4]) for part in (None, "calibration", "validation")], [24, 18, 6])
+
+    def test_results_views(self):
+        from mobile.calibration_engine import create_calibration, run_calibration
+        from mobile.calibration_results import FIGURES, ResultsError, results_figure
+        from mobile.sensitivity_runs import StudyState
+
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=12, name="views")
+        run_calibration(folder, StudyState(), parallel=2)
+        for kind in FIGURES:
+            for index in (0, 1):
+                figure = results_figure(folder, kind, index)
+                self.assertTrue(figure.data, kind)
+                self.assertTrue(figure.layout.title.text.startswith(FIGURES[kind][0]), kind)
+        # The distributions: for each cell, all the trials, the best tenth, and the Pareto front
+        figure = results_figure(folder, "distributions", 1)
+        self.assertEqual([trace.name for trace in figure.data[:3]], ["All trials", "Best 10% by swings", "Pareto front"])
+        self.assertEqual(sum(len(trace.x) for trace in figure.data if trace.name == "All trials"), 24)  # 12 trials × 2 cells
+        # With one objective, no Pareto front to draw; with one cell, no pair of parameters
+        single = create_calibration(self.config, self.objectives()[:1], temperature={**self.temperature(), "cells": self.cells[:1]},
+                                    n_trials=4, name="single")
+        run_calibration(single, StudyState(), parallel=2)
+        for kind, why in (("pareto", "two objectives"), ("contour", "two sampled parameters"), ("rank", "two sampled parameters")):
+            with self.assertRaisesRegex(ResultsError, why):
+                results_figure(single, kind)
+
+    def test_running_interrupted_and_one_at_a_time(self):
+        import signal
+        import subprocess
+        import threading
+
+        from mobile.calibration_engine import (CalibrationError, calibration_label, create_calibration, is_running, read_calibration,
+                                               run_calibration, status_of)
+        from mobile.sensitivity_runs import StudyState
+
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=6, name="locked")
+        self.assertFalse(is_running(folder))
+        outcome = {}
+        with mock.patch.dict(os.environ, {"FAKE_SLEEP": "0.5"}):
+            worker = threading.Thread(target=lambda: outcome.update(record=run_calibration(folder, StudyState(), parallel=2)))
+            worker.start()
+            time.sleep(1.0)
+            self.assertTrue(is_running(folder))
+            self.assertEqual(status_of(folder, read_calibration(folder)), "running")
+            with self.assertRaisesRegex(CalibrationError, "running already"):  # Not twice at once
+                run_calibration(folder, StudyState())
+            worker.join(60)
+        self.assertEqual(outcome["record"]["status"], "finished")
+        self.assertFalse(is_running(folder))
+        # Run by another process that is killed (a GUI closed or crashed): recorded as running, but nothing runs it
+        killed = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=20, name="killed")
+        code = ("import sys; sys.path[:0] = [sys.argv[1]]; from mobile.calibration_engine import run_calibration; "
+                "from mobile.sensitivity_runs import StudyState; run_calibration(sys.argv[2], StudyState(), parallel=2)")
+        other = subprocess.Popen([sys.executable, "-c", code, str(Path(MOBILE) / "python"), str(killed)], start_new_session=True,
+                                 env={**os.environ, "FAKE_SLEEP": "0.5"}, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for _ in range(100):  # Until it holds the lock and has recorded that it runs
+            if is_running(killed) and read_calibration(killed)["status"] == "running":
+                break
+            time.sleep(0.1)
+        self.assertTrue(is_running(killed))
+        os.killpg(other.pid, signal.SIGKILL)
+        other.wait()
+        record = read_calibration(killed)
+        self.assertEqual((record["status"], status_of(killed, record)), ("running", "interrupted"))
+        self.assertIn("(interrupted,", calibration_label(killed, record))
+        self.assertEqual(run_calibration(killed, StudyState(), parallel=2)["status"], "finished")  # And it goes on
+
+    def test_a_queued_trial_never_taken_runs_alone_on_resume(self):
+        """The process that queued the start trial ended before taking it (the flaky CI test, killed right after it said
+        it runs): resumed with workers side by side, that trial runs on its own first, as in a new calibration; else two
+        workers could both take it and one would make again the folder the other writes in."""
+        from mobile.calibration_engine import baseline, create_calibration, open_study, read_calibration, run_calibration
+        from mobile.sensitivity_runs import StudyState
+
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=4, name="queued")
+        record = read_calibration(folder)
+        open_study(folder, record).enqueue_trial(baseline(record["temperature"]), user_attrs={"baseline": True})
+        with mock.patch.dict(os.environ, {"FAKE_SLEEP": "0.5"}):
+            self.assertEqual(run_calibration(folder, StudyState(), parallel=2)["status"], "finished")
+        trials = sorted(open_study(folder, read_calibration(folder)).trials, key=lambda trial: trial.number)
+        first, others = trials[0], trials[1:]
+        self.assertTrue(first.user_attrs.get("baseline"))
+        self.assertEqual(first.state.name, "COMPLETE")
+        for other in others:  # None began before the queued one had ended
+            self.assertGreaterEqual(other.datetime_start, first.datetime_complete, (first.number, other.number))
+
+    def test_resumed_stops_runs_left_running(self):
+        """A run left running by a process that died goes on writing in its trial folder: the calibration, resumed, stops
+        it before it makes the folder again (else: Directory not empty, and the calibration stops with an error)."""
+        import subprocess
+
+        from mobile.calibration_engine import create_calibration, run_calibration, trial_folder
+        from mobile.runner import RUN_PID, write_pid
+        from mobile.sensitivity_runs import StudyState
+
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=4, name="left")
+        seed_dir = trial_folder(folder, 0) / "seed_12345"
+        seed_dir.mkdir(parents=True)
+        # As a model run is left: in a process group of its own, whose parent has gone, writing all the time
+        parent = subprocess.Popen(["bash", "-c", 'while true; do touch "$0/f$RANDOM$RANDOM"; sleep 0.002; done >/dev/null 2>&1 & echo $!',
+                                   str(seed_dir)], start_new_session=True, stdout=subprocess.PIPE, text=True)
+        writer = int(parent.stdout.read().strip())
+        parent.wait()
+        write_pid(seed_dir, parent.pid)
+        self.addCleanup(lambda: subprocess.run(["kill", "-9", str(writer)], capture_output=True))
+        time.sleep(0.3)
+        self.assertTrue(any(seed_dir.iterdir()))
+        self.assertEqual(run_calibration(folder, StudyState(), parallel=2)["status"], "finished")
+        with self.assertRaises(ProcessLookupError):  # Stopped
+            os.kill(writer, 0)
+        self.assertFalse((seed_dir / RUN_PID).exists())
+
+    def test_runs_of_others_not_stopped(self):
+        """Control: a process group that is not the one the file names (its number given again) is left alone."""
+        import subprocess
+        import threading
+
+        from mobile.runner import RUN_PID, process_started, stop_left
+
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder)
+        other = subprocess.Popen(["sleep", "30"], start_new_session=True)
+        self.addCleanup(other.kill)
+        time.sleep(0.2)
+        started = process_started(other.pid)
+        self.assertIsNotNone(started)
+        (folder / RUN_PID).write_text(json.dumps({"pid": other.pid, "host": socket.gethostname(), "started": started - 100}))
+        self.assertFalse(stop_left(folder))
+        self.assertIsNone(other.poll())  # Still running
+        (folder / RUN_PID).write_text(json.dumps({"pid": other.pid, "host": "another-computer", "started": started}))
+        self.assertFalse(stop_left(folder))
+        self.assertIsNone(other.poll())
+        (folder / RUN_PID).write_text(json.dumps({"pid": other.pid, "host": socket.gethostname(), "started": started}))
+        reaper = threading.Thread(target=other.wait)  # As the system does for a run whose parent died
+        reaper.start()
+        self.assertTrue(stop_left(folder))  # The one it names: stopped
+        other.wait(5)
+
+    def test_status_file_snapshot_and_kept_series(self):
+        import optuna
+
+        from mobile.calibration_engine import (SERIES, SNAPSHOT, STATUS, create_calibration, objective_series, read_status, resolved,
+                                               run_calibration, trial_comparison, trial_folder)
+        from mobile.sensitivity_runs import StudyState
+
+        window = ("2002-07-01", "2002-12-31")
+        objectives = [{**objective, "data_raw": str(self.data), "data_steps": []} for objective in self.objectives()]
+        folder = create_calibration(self.config, objectives, temperature=self.temperature(), n_trials=4, name="status",
+                                    validation=window)
+        self.assertIsNone(read_status(folder))  # Never run
+        record = run_calibration(folder, StudyState(), parallel=2)
+        status = read_status(folder)
+        self.assertEqual((status["state"], status["completed"], status["failed"], status["target"]), ("finished", 4, 0, 4))
+        self.assertEqual((status["host"], status["pid"]), (socket.gethostname(), os.getpid()))
+        self.assertFalse(list(Path(folder).glob(f".{STATUS}*")))  # Written whole: no temporary file left
+        # The snapshot is a study of its own, with every trial
+        snapshot = optuna.load_study(study_name="calibration", storage=f"sqlite:///{Path(folder) / SNAPSHOT}")
+        self.assertEqual(sum(t.state == optuna.trial.TrialState.COMPLETE for t in snapshot.trials), 4)
+        # The series compared are kept with each trial, for the whole period and each part: the same as from the output
+        objectives = resolved(folder, record)["objectives"]
+        here = trial_folder(folder, 1)
+        run_dirs = [here / f"seed_{seed}" for seed in record["seeds"]]
+        self.assertEqual(len(list((here / SERIES).glob("*.nc"))), 2 * 2 * 3)  # 2 objectives x (model, data) x 3 parts
+        for part in (None, "calibration", "validation"):
+            model, data = objective_series(objectives[0], run_dirs, window, part)
+            shutil.rmtree(run_dirs[0]) if part == "validation" else None  # The last without the output: from what was kept
+            kept = trial_comparison(folder, 1, 0, part)
+            np.testing.assert_allclose(kept[0].values, model.values)
+            np.testing.assert_allclose(kept[1].values, data.values)
+            self.assertTrue(kept[0].index.equals(model.index))
+
+    def test_running_elsewhere_and_taking_over(self):
+        from mobile.calibration_engine import (STATUS, CalibrationError, _SQUEUE_CACHE, counts, create_calibration, in_squeue,
+                                               is_running, open_study, read_calibration, run_calibration, status_of)
+        from mobile.sensitivity_runs import StudyState
+
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=3, name="elsewhere")
+        study = open_study(folder, read_calibration(folder))
+        left = study.ask()  # A trial the other process was running when it ended
+        write_calibration_status = lambda **fields: (Path(folder) / STATUS).write_text(json.dumps(
+            {"host": "lrdn0042", "pid": 1, "state": "running", "target": 3, "completed": 0, **fields}))
+        now = datetime.datetime.now(datetime.timezone.utc)
+        # On another computer, without Slurm to ask: by the heartbeat
+        write_calibration_status(heartbeat=now.isoformat())
+        self.assertTrue(is_running(folder))
+        with self.assertRaisesRegex(CalibrationError, "running already: process 1 on lrdn0042, last heard of"):
+            run_calibration(folder, StudyState())
+        write_calibration_status(heartbeat=(now - datetime.timedelta(minutes=10)).isoformat())
+        self.assertFalse(is_running(folder))
+        self.assertEqual(status_of(folder, {"status": "running"}), "interrupted")
+        # With Slurm: by whether it still lists the job, whatever the heartbeat
+        bin_dir = self.root / "slurm"
+        bin_dir.mkdir()
+        (bin_dir / "squeue").write_text('#!/bin/bash\nfor a in "$@"; do [ "$a" = 77 ] && { echo 77; exit 0; }; done\n'
+                                        'echo "slurm_load_jobs error: Invalid job id specified" >&2; exit 1\n')
+        (bin_dir / "squeue").chmod(0o755)
+        with mock.patch.dict(os.environ, {"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}):
+            _SQUEUE_CACHE.clear()
+            self.assertEqual((in_squeue("77"), in_squeue("78")), (True, False))
+            write_calibration_status(job="77", heartbeat=(now - datetime.timedelta(hours=2)).isoformat())
+            self.assertTrue(is_running(folder))  # Listed: running, though silent for long (e.g. a slow file system)
+            write_calibration_status(job="78", heartbeat=now.isoformat())
+            self.assertFalse(is_running(folder))  # Not listed: ended, though heard of just now
+            record = run_calibration(folder, StudyState(), parallel=1)  # So this one takes over
+        self.assertEqual((record["status"], record["completed"], record["failed"]), ("finished", 3, 0))
+        ended = open_study(folder, record).trials[left.number]
+        self.assertEqual((ended.state.name, ended.user_attrs.get("ended")), ("FAIL", "the process running it ended"))
+        self.assertEqual(counts(open_study(folder, record)), (3, 0))  # Not a failure
+
+    def test_failed_trials_are_made_up_for(self):
+        from mobile.calibration_engine import create_calibration, run_calibration
+        from mobile.sensitivity_runs import StudyState
+
+        # One run at a time, so the runs come in order: the second trial fails twice (its two attempts), the others not
+        counter = self.root / "count.txt"
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=5, name="made_up")
+        with mock.patch.dict(os.environ, {"FAKE_COUNTER": str(counter), "FAKE_FAIL_RUNS": "2 3"}):
+            record = run_calibration(folder, StudyState(), parallel=1)
+        self.assertEqual((record["status"], record["completed"], record["failed"]), ("finished", 5, 1))
+        # Too many failures after a success (more than CRASH_RATE of the trials, at least FAIL_FAST): stopped
+        counter.unlink()
+        crashing = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=10, name="crashing")
+        with mock.patch.dict(os.environ, {"FAKE_COUNTER": str(counter), "FAKE_FAIL_FROM": "2"}):
+            record = run_calibration(crashing, StudyState(), parallel=1)
+        self.assertEqual((record["status"], record["completed"], record["failed"]), ("stopped", 1, 4))
+
+    def test_deadline(self):
+        from mobile.calibration_engine import create_calibration, read_status, run_calibration
+        from mobile.sensitivity_runs import StudyState
+
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=50, name="deadline")
+        # A guess of how long a trial takes that does not fit: none starts
+        record = run_calibration(folder, StudyState(), parallel=2, deadline=time.time() + 60, trial_seconds=120)
+        self.assertEqual((record["status"], record["completed"], record["failed"]), ("stopped at deadline", 0, 0))
+        self.assertEqual(read_status(folder)["state"], "stopped at deadline")
+        # Then from the time the trials take: as many as fit, all ended by the deadline
+        with mock.patch.dict(os.environ, {"FAKE_SLEEP": "0.3"}):
+            deadline = time.time() + 4
+            record = run_calibration(folder, StudyState(), parallel=2, deadline=deadline)
+            ended = time.time()
+        self.assertEqual(record["status"], "stopped at deadline")
+        self.assertTrue(2 <= record["completed"] < 50, record["completed"])
+        self.assertLess(ended, deadline + 0.5)
+        record = run_calibration(folder, StudyState(), parallel=4)  # Without one: to the end
+        self.assertEqual((record["status"], record["completed"]), ("finished", 50))
+
+    def test_command_line(self):
+        import signal
+        import subprocess
+
+        from mobile.calibration_engine import create_calibration, read_calibration, read_status
+
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=8, name="batch")
+        command = [sys.executable, "-m", "mobile", "calibrate", str(folder)]
+        # No compiler: refused while the model is still to be built (a PATH with nothing on it, as the tools found in
+        # /usr/bin differ between computers: GitHub's Ubuntu has gfortran there, not nf-config)
+        bare = {**os.environ, "PYTHONPATH": str(Path(MOBILE) / "python"), "PATH": "/usr/bin:/bin"}
+        nothing = self.root / "empty_path"
+        nothing.mkdir()
+        refused = subprocess.run(command, env={**bare, "PATH": str(nothing)}, capture_output=True, text=True, timeout=60)
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn("needed to compile MoBILE: make, gfortran, nf-config, nc-config", refused.stderr)
+        environment = {**bare, "PATH": f"{self.stand_in_compilers()}{os.pathsep}/usr/bin:/bin"}
+        too_many = subprocess.run([*command, "--parallel", "100000"], env=environment, capture_output=True, text=True, timeout=60)
+        self.assertEqual(too_many.returncode, 1)
+        self.assertIn("Use --parallel", too_many.stdout)
+        # Stopped by SIGTERM, as by Slurm before the end of a job: the runs cancelled, resumable, exit 3
+        job = subprocess.Popen([*command, "--parallel", "1"], env={**environment, "FAKE_SLEEP": "0.5"}, stdout=subprocess.PIPE,
+                               stderr=subprocess.STDOUT, text=True)
+        for _ in range(300):
+            if (read_status(folder) or {}).get("completed", 0) >= 1:
+                break
+            time.sleep(0.1)
+        job.send_signal(signal.SIGTERM)
+        output = job.communicate(timeout=60)[0]
+        self.assertEqual(job.returncode, 3, output)
+        self.assertRegex(output, r"trial 0 completed in \dm\d\ds: timing [-0-9.]+, swings [-0-9.e]+ \| Pareto front 1 trials \| 1 of 8 completed")
+        self.assertIn("cancelled (SIGTERM)", output)
+        self.assertEqual((read_calibration(folder)["status"], read_status(folder)["state"]), ("cancelled", "cancelled"))
+        # The same command again goes on to the end: exit 0
+        done = subprocess.run([*command, "--parallel", "2"], env=environment, capture_output=True, text=True, timeout=300)
+        self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+        self.assertIn("finished", done.stdout)
+        self.assertEqual(read_calibration(folder)["completed"], 8)
+        # Its model built and kept, a later run of it (e.g. another job) needs no compiler
+        self.assertTrue((Path(folder) / "bin" / "mobile.out").is_file())
+        again = subprocess.run(command, env={**bare, "PATH": str(nothing)}, capture_output=True, text=True, timeout=60)
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertIn("8 of 8 trials completed so far", again.stdout)
+
+    def stand_in_compilers(self):
+        """A folder of stand-ins for the tools `mobile` looks for before it builds: the stand-in mobile.sh builds nothing."""
+        folder = self.root / "compilers"
+        folder.mkdir(exist_ok=True)
+        for name in ("make", "gfortran", "nf-config", "nc-config"):
+            (folder / name).write_text("#!/bin/bash\n")
+            (folder / name).chmod(0o755)
+        return folder
+
+    def test_moved_folder(self):
+        # As sent to a cluster: the folder elsewhere, its paths relative to it, the observations in it, MoBILE from $MOBILE
+        from mobile.calibration_engine import create_calibration, read_calibration, run_calibration, write_calibration
+        from mobile.sensitivity_runs import StudyState
+
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=2, name="moved")
+        moved = self.root / "elsewhere" / "moved"
+        shutil.copytree(folder, moved)
+        (moved / "inputs").mkdir(exist_ok=True)
+        (moved / "data").mkdir()
+        record = read_calibration(moved)
+        for key in ("rain_file", "temp_file", "pop_file"):
+            shutil.copy(record["run_inputs"][key], moved / "inputs" / Path(record["run_inputs"][key]).name)
+            record["run_inputs"][key] = record["setup"]["inputs"][key] = f"inputs/{Path(record['run_inputs'][key]).name}"
+        shutil.copy(self.data, moved / "data" / "cases.nc")
+        record["objectives"] = [{**objective, "data": "data/cases.nc"} for objective in record["objectives"]]
+        record["setup"]["mobile"] = "/nowhere/MoBILE"
+        write_calibration(moved, record)
+        shutil.rmtree(folder)
+        os.rename(self.root / "temperature.nc", self.root / "temperature_gone.nc")  # Not read from where it was
+        with mock.patch.dict(os.environ, {"MOBILE": str(self.config.mobile)}):
+            result = run_calibration(moved, StudyState(), parallel=1)
+        self.assertEqual((result["status"], result["completed"]), ("finished", 2))
+
+    def test_transmission_dying_out_is_infeasible_not_failed(self):
+        # The toy has cases only above 18 °C: offsets of the west of -2 °C or lower (with a small gap) leave none anywhere
+        from mobile.calibration_engine import (CONSTRAINT, DataError, INFEASIBLE, create_calibration, evaluate, open_study,
+                                               read_calibration, resolved, run_calibration, trial_folder, trials_table, best_trials)
+        from mobile.calibration_results import results_figure
+        from mobile.sensitivity_runs import StudyState
+
+        temperature = {"cells": self.cells, "first": (-5.0, 1.0), "gap": (0.0, 0.5)}
+        folder = create_calibration(self.config, self.objectives(), temperature=temperature, n_trials=16, startup_trials=8, name="dying")
+        record = run_calibration(folder, StudyState(), parallel=2)
+        self.assertEqual((record["status"], record["completed"], record["failed"]), ("finished", 16, 0))  # None failed
+        rows = [row for row in trials_table(folder) if row["state"] == "COMPLETE"]
+        dead = [row for row in rows if row["infeasible"]]
+        self.assertTrue(0 < len(dead) < len(rows), [row["offsets"] for row in rows])
+        for row in rows:  # Died out exactly where the toy says (no day above 18 °C in the last year), graded by when
+            shifted = self.t2m + np.array([[row["offsets"]["dT_1"], row["offsets"]["dT_2"]]])
+            cases = np.flatnonzero((shifted > 18.0).any(axis=(1, 2)))
+            last = int(cases[-1]) if len(cases) else -1
+            died = len(self.t2m) - 1 - last >= 365
+            self.assertEqual(bool(row["infeasible"]), died, row)
+            self.assertEqual(row["persistence"]["last"], [last])
+            self.assertAlmostEqual(row["violation"], (len(self.t2m) - 1 - last) / len(self.t2m) if died else -1.0)
+        never = [row for row in dead if row["violation"] == 1.0]
+        self.assertTrue(never, "some trials should have no case at all")
+        self.assertEqual(never[0]["infeasible"], "transmission died out: no case at all in 1 of 1 seeds")
+        self.assertEqual(never[0]["values"][0], 0.0)  # The correlation of a series that does not vary
+        # Kept out of the front, which Optuna's own constraints also know of
+        front = best_trials(folder)
+        self.assertTrue(front and not any(row["infeasible"] for row in front))
+        study = open_study(folder, read_calibration(folder))
+        self.assertEqual(study.trials[never[0]["number"]].constraints, {"transmission": 1.0})
+        # Control: as before (no flat series allowed), such a trial fails
+        here = trial_folder(folder, never[0]["number"])
+        with self.assertRaisesRegex(DataError, "not defined for these values"):
+            evaluate(resolved(folder, read_calibration(folder))["objectives"], [here / "seed_12345"])
+        # The regime of every trial: the toy repeats the same seasons, so the years are alike (CV ~0) while it persists
+        self.assertEqual(never[0]["regime"]["fade_out"], 1.0)
+        self.assertIsNone(never[0]["regime"]["annual_cv"])  # No cases: not defined
+        alive = [row for row in rows if not row["infeasible"] and row["persistence"]["last"][0] == len(self.t2m) - 1]
+        self.assertTrue(alive and all(row["regime"]["annual_cv"] < 0.05 for row in alive))
+        for kind in ("boundary_cv", "boundary_fade", "boundary_pairs", "distributions", "pareto"):
+            results_figure(folder, kind)
+
+    def test_regime_measures(self):
+        from mobile.calibration_data import DataError, Observations
+        from mobile import calibration_engine
+
+        def run(first, values):
+            day = np.arange(np.datetime64(first), np.datetime64(first) + len(values))
+            return Observations(shape="dated", values=np.asarray(values, dtype="f8"), index=pd.DataFrame({"start": day, "end": day}))
+
+        def measured(*series):
+            by_dir = {f"seed_{k}": member for k, member in enumerate(series)}
+            with mock.patch.object(calibration_engine, "model_members", lambda folder, *args: [by_dir[folder]]):
+                return calibration_engine.regime(list(by_dir))
+
+        steady = run("2001-01-01", np.full(3 * 365, 1e-3))  # The same cases every day of three years
+        self.assertAlmostEqual(measured(steady)["annual_cv"], 0.0)
+        self.assertEqual(measured(steady)["fade_out"], 0.0)
+        # Outbreaks in the first and third years only, each in its first three months: the second year has none
+        days = np.arange(np.datetime64("2001-01-01"), np.datetime64("2004-01-01"))
+        outbreaks = np.where(np.isin(days.astype("datetime64[Y]").astype(int) + 1970, (2001, 2003))
+                             & ((days.astype("datetime64[M]").astype(int) % 12) < 3), 1e-3, 0.0)
+        found = measured(run("2001-01-01", outbreaks))
+        annual = np.array([outbreaks[:365].sum(), outbreaks[365:730].sum(), outbreaks[730:].sum()])
+        self.assertAlmostEqual(found["annual_cv"], annual.std(ddof=1) / annual.mean())
+        self.assertAlmostEqual(found["fade_out"], 30 / 36)  # 6 of the 36 months had cases
+        # Only whole years and months: a run from mid-June 2001 to the end of 2003 has two full years, 30 full months
+        partial = run("2001-06-15", np.full(len(np.arange(np.datetime64("2001-06-15"), np.datetime64("2004-01-01"))), 1e-3))
+        self.assertAlmostEqual(measured(partial)["annual_cv"], 0.0)
+        self.assertEqual(measured(steady, run("2001-01-01", outbreaks))["seeds"]["fade_out"], [0.0, 30 / 36])
+        self.assertAlmostEqual(measured(steady, run("2001-01-01", outbreaks))["fade_out"], 15 / 36)  # The median of the seeds
+        self.assertIsNone(measured(run("2001-01-01", np.full(400, 1e-3)))["annual_cv"])  # One full year: no CV
+        with mock.patch.object(calibration_engine, "model_members", mock.Mock(side_effect=DataError("no output"))):
+            self.assertIsNone(calibration_engine.regime(["seed_0"]))  # New cases not written
+
+    def test_persistence_is_graded(self):
+        from mobile.calibration_data import Observations
+        from mobile import calibration_engine
+
+        days = 1000
+
+        def runs(*lasts):
+            """Stand-in outputs: one daily series per run, with cases up to the day given (-1: none at all)."""
+            by_dir = {}
+            for k, last in enumerate(lasts):
+                values = np.zeros(days)
+                values[:last + 1] = 1e-3
+                day = np.arange(np.datetime64("2001-01-01"), np.datetime64("2001-01-01") + days)
+                by_dir[f"seed_{k}"] = Observations(shape="dated", values=values, index=pd.DataFrame({"start": day, "end": day}))
+            return list(by_dir), lambda folder, *args: [by_dir[folder]]
+
+        objectives = [{"name": "timing", "variable": "Inew", "space": "people", "aggregation": None}]
+        for lasts, violation in (((999,), -1.0),             # To the end
+                                 ((900,), -1.0),             # Ended 99 days before the end: less than a year, not died out
+                                 ((500,), 499 / 1000),       # Died out half way: the share of the run after
+                                 ((-1,), 1.0),               # None at all: the farthest
+                                 ((500, 999), -1.0),         # One seed of two: not more than half
+                                 ((500, 400, 999), np.mean([499 / 1000, 599 / 1000]))):  # Two of three: the mean of those
+            folders, members = runs(*lasts)
+            with mock.patch.object(calibration_engine, "model_members", members):
+                found = calibration_engine.persistence(objectives, folders)
+            self.assertAlmostEqual(found["violation"], violation, msg=lasts)
+            self.assertEqual(found["last"], list(lasts))
+        with mock.patch.object(calibration_engine, "model_members", runs(999)[1]):  # Persisting, but a series did not vary
+            found = calibration_engine.persistence(objectives, ["seed_0"], flat=[0])
+        self.assertEqual((found["violation"], found["reason"]), (1.0, "the model series of timing does not vary"))
+
+    # A stand-in ssh: runs the command here, in a shell whose HOME is that of the cluster and whose PATH has its Slurm
+    FAKE_SSH = """#!/bin/bash
+while [ "$1" = "-o" ]; do shift 2; done
+host=$1; shift
+[ -n "$FAKE_SSH_DENY" ] && { echo "** WARNING: connection is not using a post-quantum key exchange algorithm." >&2;
+                              echo "$host: Permission denied (publickey)." >&2; exit 255; }
+echo "$*" >> "$FAKE_REMOTE_HOME/commands.txt"
+HOME="$FAKE_REMOTE_HOME" PATH="$FAKE_REMOTE_BIN:$PATH" exec bash -c "$*"
+"""
+    # sbatch runs the job at once, to its end, then says its id; squeue lists what FAKE_SQUEUE says; sacct, that it completed
+    FAKE_SLURM = {
+        "sbatch": """#!/bin/bash
+echo "$@" >> "$HOME/sbatch.txt"
+script=${@: -2:1}; folder=${@: -1}
+id=$(( $(cat "$HOME/next_id" 2>/dev/null || echo 1000) + 1 )); echo $id > "$HOME/next_id"
+[ -z "$FAKE_SQUEUE" ] && SLURM_JOB_ID=$id bash "$script" "$folder" > "$folder/logs/$id.out" 2>&1
+echo "$id;leonardo"
+""",
+        "squeue": """#!/bin/bash
+[ -n "$FAKE_SQUEUE" ] && echo "$FAKE_SQUEUE"
+true
+""",
+        "sacct": """#!/bin/bash
+for job in $(echo "$5" | tr , ' '); do echo "$job|${FAKE_SACCT:-COMPLETED}"; done
+""",
+        "scancel": """#!/bin/bash
+echo "$@" >> "$HOME/scancel.txt"
+""",
+    }
+
+    def cluster(self):
+        """Settings of a stand-in cluster here: ssh, Slurm and `mobile` in folders of their own."""
+        from mobile.cluster import ClusterSettings
+
+        home = self.root / "cluster_home"
+        local_bin, remote_bin = self.root / "local_bin", self.root / "remote_bin"
+        for folder in (home, local_bin, remote_bin):
+            folder.mkdir(exist_ok=True)
+        for tool in self.stand_in_compilers().iterdir():  # Those of the cluster, for `mobile calibrate` there
+            shutil.copy(tool, remote_bin / tool.name)
+        scripts = {local_bin / "ssh": self.FAKE_SSH, **{remote_bin / name: text for name, text in self.FAKE_SLURM.items()},
+                   remote_bin / "mobile": f'#!/bin/bash\nPYTHONPATH={Path(MOBILE) / "python"} exec {sys.executable} -m mobile "$@"\n'}
+        for path, text in scripts.items():
+            path.write_text(text)
+            path.chmod(0o755)
+        config_dir = self.root / "config_here"
+        cached = config_dir / "worldpop" / "Global2000_2020" / "SEN_2012.json"
+        cached.parent.mkdir(parents=True)
+        cached.write_text((Path(MOBILE) / "python" / "mobile" / "age_structures" / "Global2000_2020" / "SEN_2012.json").read_text())
+        patch = mock.patch.dict(os.environ, {"PATH": f"{local_bin}{os.pathsep}{os.environ['PATH']}", "FAKE_REMOTE_HOME": str(home),
+                                             "FAKE_REMOTE_BIN": str(remote_bin), "MOBILE_CONFIG_DIR": str(config_dir)})
+        patch.start()
+        self.addCleanup(patch.stop)
+        return ClusterSettings(host="leonardo", folder="~/work/calibration", mobile=str(self.config.mobile), account="", partition="",
+                               qos="", time="00:10:00", cpus=2, exclusive=False, setup="# the modules and the venv here"), home
+
+    def test_cluster_send_submit_refresh(self):
+        import sqlite3
+        from contextlib import closing
+
+        import optuna
+
+        from mobile.calibration_engine import (CalibrationError, SERIES, create_calibration, forget_storage, is_running, open_study,
+                                               read_calibration, read_cluster, run_calibration, status_of, trial_comparison,
+                                               trial_folder)
+        from mobile.cluster import ClusterError, last_log, observation_files, refresh, send, submit
+        from mobile.sensitivity_runs import StudyState
+
+        settings, home = self.cluster()
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=3, name="sent",
+                                    views=[{"name": "monthly", "data": str(self.data), "variable": "Inew", "steps": self.MONTHLY}])
+        self.assertEqual(observation_files(folder), [(str(self.data.resolve()), self.data.stat().st_size)])
+        with self.assertRaisesRegex(ClusterError, "tick that its observations may be copied"):
+            send(folder, settings)
+        there = Path(send(folder, settings, cleared=True))
+        self.assertEqual(there, home / "work" / "calibration" / "sent")  # ~ as the shell there sees it
+        record = json.loads((there / "calibration.json").read_text())
+        self.assertEqual({objective["data"] for objective in record["objectives"]}, {"data/objective_0_data_cases.nc", "data/objective_1_data_cases.nc"})
+        self.assertEqual(record["run_inputs"]["temp_file"], "inputs/external/temp_file_temperature.nc")
+        self.assertTrue((there / "inputs" / "external" / "temp_file_temperature.nc").is_file())
+        self.assertTrue((home / ".config" / "mobile" / "worldpop" / "Global2000_2020" / "SEN_2012.json").is_file())
+        self.assertEqual(record["setup"]["runs_dir"], str(there))  # No paths of this computer there
+        self.assertNotIn("shapes", record["setup"])
+        with self.assertRaisesRegex(ClusterError, "sent already"):
+            send(folder, settings, cleared=True)
+        with self.assertRaisesRegex(CalibrationError, "sent to leonardo"):  # The folder here only mirrors it
+            run_calibration(folder, StudyState())
+        # The job: runs it there, from that folder alone (the data here moved away), to the end
+        os.rename(self.data, self.root / "cases_away.nc")
+        job = submit(folder, settings)
+        self.assertEqual(job, "1001")
+        script = (there / "job.sh").read_text()
+        self.assertIn('exec mobile calibrate "$1" --parallel 2', script)
+        self.assertIn(f"#SBATCH --output={there}/logs/%j.out", script)
+        self.assertNotIn("--account", script)  # Empty: not given
+        self.assertEqual(json.loads((there / "calibration.json").read_text())["completed"], 3)
+        self.assertFalse((Path(folder) / "optuna.db").stat().st_size and open_study(folder, read_calibration(folder)).trials)
+        # Refreshed: the study, the progress, the series of each trial and the log; never the output
+        refresh(folder)
+        record = read_calibration(folder)
+        self.assertEqual((record["status"], record["completed"], status_of(folder, record), is_running(folder)), ("finished", 3, "finished", False))
+        self.assertEqual(read_cluster(folder)["jobs"][0]["state"], "COMPLETED")  # As sacct says
+        trials = open_study(folder, record).trials
+        self.assertEqual(sum(trial.state == optuna.trial.TrialState.COMPLETE for trial in trials), 3)
+        self.assertTrue((trial_folder(folder, 2) / SERIES).is_dir())
+        self.assertFalse(list(Path(folder).glob("trials/*/seed_*")))
+        # The view's observations went with it (data/), and its series came back with the trials'
+        self.assertEqual(json.loads((there / "calibration.json").read_text())["views"][0]["data"], f"data/view_0_data_{self.data.name}")
+        self.assertTrue((there / "data" / f"view_0_data_{self.data.name}").is_file())
+        self.assertTrue((trial_folder(folder, 2) / SERIES / "view_0_whole_model.nc").is_file())
+        model, data, *_ = trial_comparison(folder, 2, 0)  # Drawn here from the series kept there
+        self.assertEqual(len(model), len(data))
+        job_id, tail = last_log(folder)
+        self.assertEqual(job_id, "1001")
+        self.assertIn("exit 0: done", tail)
+        # Refreshed again: the series of trials ended here are not copied again; those missing, or of a trial not ended in
+        # the study here (maybe copied half-written), are
+        said = []
+        refresh(folder, say=said.append)
+        self.assertRegex(said[-1], r"^Copying back 0 new trials and the study \([\d.]+ MB\)…$")
+        shutil.rmtree(trial_folder(folder, 2) / SERIES)
+        forget_storage(folder)
+        with closing(sqlite3.connect(Path(folder) / "optuna.db")) as connection, connection:
+            connection.execute("UPDATE trials SET state = 'RUNNING' WHERE number = 1")
+        refresh(folder, say=said.append)
+        self.assertRegex(said[-1], r"^Copying back 2 new trials ")
+        self.assertTrue((trial_folder(folder, 2) / SERIES).is_dir())
+        refresh(folder, say=said.append)  # The study copied back says trial 1 ended
+        self.assertRegex(said[-1], r"^Copying back 0 new trials ")
+        # Continued there with more trials: the job raises them first; the copy here says it at once, and Refresh brings
+        # back the trials run
+        submit(folder, settings, trials=5)
+        self.assertEqual(read_calibration(folder)["n_trials"], 5)
+        self.assertIn("--trials 5", (there / "job.sh").read_text())
+        refresh(folder)
+        record = read_calibration(folder)
+        self.assertEqual((record["n_trials"], record["completed"], record["status"]), (5, 5, "finished"))
+        with self.assertRaisesRegex(ClusterError, "5 trials have completed already"):
+            submit(folder, settings, trials=4)
+
+    def test_cluster_jobs_and_login(self):
+        from mobile.calibration_engine import create_calibration, is_running, read_calibration, read_cluster, running_where, status_of
+        from mobile.cluster import ClusterError, ClusterSettings, job_script, refresh, send, stop, submit
+
+        settings, home = self.cluster()
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=3, name="queued")
+        with mock.patch.dict(os.environ, {"FAKE_SSH_DENY": "1"}):
+            with self.assertRaisesRegex(ClusterError, r"cannot connect to leonardo: log in to the cluster first.*\(leonardo: Permission denied \(publickey\)\.\)"):
+                send(folder, settings, cleared=True)
+        send(folder, settings, cleared=True)
+        with mock.patch.dict(os.environ, {"FAKE_SQUEUE": "1001 PENDING"}):
+            first = submit(folder, settings)
+            refresh(folder)
+            self.assertEqual((status_of(folder, read_calibration(folder)), is_running(folder)), ("queued", True))
+            second = submit(folder, settings)  # After the first
+        self.assertIn(f"--dependency=afterany:{first}", (home / "sbatch.txt").read_text().splitlines()[-1])
+        self.assertEqual(read_cluster(folder)["jobs"][-1]["after"], first)
+        with mock.patch.dict(os.environ, {"FAKE_SQUEUE": f"{second} RUNNING"}):
+            refresh(folder)
+            self.assertEqual(status_of(folder, read_calibration(folder)), "running")
+            self.assertRegex(running_where(folder), rf"on leonardo, job {second} running, .*as of the refresh 0 s ago")
+            self.assertEqual(stop(folder), second)
+        self.assertEqual((home / "scancel.txt").read_text().strip(), f"--batch --signal=TERM {second}")
+        # Submit asks squeue itself: the second has ended since the refresh that listed it, and only another job is listed
+        with mock.patch.dict(os.environ, {"FAKE_SQUEUE": "9999 RUNNING"}):
+            third = submit(folder, settings)
+        self.assertNotIn("--dependency", (home / "sbatch.txt").read_text().splitlines()[-1])
+        self.assertEqual([(job["listed"], job.get("after")) for job in read_cluster(folder)["jobs"]],
+                         [(False, None), (False, first), (True, None)])
+        refresh(folder)  # Ended: sacct says completed, and its status is as written there (not run here)
+        self.assertEqual(is_running(folder), False)
+        # Exit 3 (stopped before the end, resumable), which Slurm records as FAILED, is said as such; exit 1 is a failure
+        logs = home / "work" / "calibration" / "queued" / "logs"
+        (logs / f"{first}.out").write_text("Trial 2 failed\nexit 1: see above\n")
+        (logs / f"{second}.out").write_text("stopped at deadline\nexit 3: not done: run the same command again to go on\n")
+        with mock.patch.dict(os.environ, {"FAKE_SACCT": "FAILED"}):
+            refresh(folder)
+        self.assertEqual([job["state"] for job in read_cluster(folder)["jobs"]], ["FAILED", "STOPPED (RESUMABLE)", "FAILED"])
+        # The script for LEONARDO's DCGP nodes, as the settings default to
+        record = read_calibration(folder)
+        record["setup"]["run"]["threads"] = 7
+        script = job_script(ClusterSettings(), record, "/leonardo_work/try26_garrido/calibration/x")
+        for line in ("#SBATCH --account=try26_garrido", "#SBATCH --partition=dcgp_usr_prod", "#SBATCH --cpus-per-task=112",
+                     "#SBATCH --exclusive", "#SBATCH --signal=B:TERM@60", "unset PYTHONPATH",
+                     "module load python/3.11.7 > /dev/null 2>&1",
+                     'exec mobile calibrate "$1" --parallel 16'):
+            self.assertIn(line, script)
+        with self.assertRaisesRegex(ClusterError, "need 32 CPUs"):
+            job_script(replace(ClusterSettings(), parallel=4, cpus=16), {**record, "setup": {**record["setup"], "run": {"threads": 8}}}, "/x")
+        # A folder there with too long a path
+        long = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=3, name="long")
+        with self.assertRaisesRegex(ClusterError, "choose a shorter folder there"):
+            send(long, replace(settings, folder="~/" + "x" * 150), cleared=True)
+
+    def test_cluster_information(self):
+        import optuna
+
+        from mobile import cluster
+        from mobile.calibration_engine import create_calibration, open_study, read_calibration
+        from mobile.cluster import ClusterSettings, certificate, cluster_info, info_rows, job_cost, wall_seconds
+
+        settings, home = self.cluster()
+        # What LEONARDO's commands said on 11 Nov 2026, in their formats (the usage made up to add to 571 core-hours)
+        canned = {
+            "saldo": """#!/bin/bash
+echo "$*" >> "$HOME/saldo.txt"
+echo "account                start         end         total        localCluster   totConsumed     totConsumed     monthTotal     monthConsumed"
+echo "                                             (local h)   Consumed(local h)     (local h)               %      (local h)         (local h)"
+echo "-----------------------------------------------------------------------------------------------------------------------------------------"
+# As LEONARDO on 20 Nov 2026: per user, only with --dcgp; by project, only by CINECA's spelling (IscrC_MALAGIC, not
+# Slurm's iscrc_malagic)
+try26='echo "try26_garrido       20260923    20261125          7500                 555           555             7.4          3571                 135"'
+malagic='echo "IscrC_MALAGIC       20261123    20270823         66000                   0             0             0.0             0                   0"'
+case "$*" in
+  "-b --dcgp") eval "$try26"; eval "$malagic";;
+  "-b") echo "username not existing"; exit 1;;
+  "-b -a try26_garrido"*) eval "$try26";;
+  "-b -a IscrC_MALAGIC"*) eval "$malagic";;
+  *) echo "account not existing"; exit 1;;
+esac
+""",
+            "sacctmgr": """#!/bin/bash
+case "$*" in
+  *assoc*) echo "try26_garrido||normal,dcgp_qos_dbg"; echo "try26_garrido|dcgp_usr_prod|dcgp_qos_lprod,dcgp_qos_bprod"
+           echo "iscrc_malagic||normal,dcgp_qos_dbg";;
+  *qos*) printf "dcgp_qos_bprod||node=128||\ndcgp_qos_dbg|00:30:00|cpu=224,mem=988000M,node=2|2|2\n"  # LEONARDO, 17 Nov 2026
+         printf "dcgp_qos_lprod|4-00:00:00|cpu=336,mem=1482000M,node=3||\nnormal||||\n";;
+esac
+""",
+            "scontrol": """#!/bin/bash
+echo "PartitionName=boost_usr_prod DefaultTime=00:30:00 MaxNodes=64 MaxTime=1-00:00:00 State=UP TotalCPUs=105120 TotalNodes=3285"
+echo "PartitionName=dcgp_usr_prod DefaultTime=00:30:00 MaxNodes=16 MaxTime=1-00:00:00 State=UP TotalCPUs=167104 TotalNodes=1492"
+echo "PartitionName=lrd_all_serial DefaultTime=00:30:00 MaxNodes=UNLIMITED MaxTime=04:00:00 State=UP TotalCPUs=256 TotalNodes=2"
+""",
+            "sacct": """#!/bin/bash
+case " $* " in
+  *" -A try26_garrido "*) echo "$*" >> "$HOME/sacct_usage.txt"; printf "2000000\n55600\n";;
+  *" -A iscrc_malagic "*) echo "$*" >> "$HOME/sacct_usage.txt";;  # Not started: no jobs
+  *) echo "64190103|FAILED|28440"; echo "64192142|FAILED|25920";;
+esac
+""",
+            "sinfo": """#!/bin/bash
+printf "idle 80\nmixed 408\nallocated 942\ndrained* 12\n"
+""",
+            "squeue": """#!/bin/bash
+echo "64200001|cal_x|PENDING|0:00|20:00|(Priority)"
+""",
+        }
+        for name, text in canned.items():
+            path = self.root / "remote_bin" / name
+            path.write_text(text)
+            path.chmod(0o755)
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=3, name="info")
+        cluster._write_cluster(folder, {"host": "leonardo", "folder": "x", "jobs": [{"id": "64190103"}, {"id": "64192142"}]})
+        given = replace(settings, account="try26_garrido", qos="dcgp_qos_dbg", partition="dcgp_usr_prod", time="01:00:00", cpus=32)
+        sections = cluster_info(given, folder)
+        asked = (home / "sacct_usage.txt").read_text()
+        self.assertIn("-A try26_garrido -S 2026-09-23 -E now", asked)  # From each project's start, as saldo says
+        self.assertIn("-A iscrc_malagic -S 2026-11-23 -E now", asked)  # Slurm's name, saldo's start (its own spelling)
+        record = {**read_calibration(folder), "completed": 78}
+        listed = info_rows(sections, given, record, today=datetime.date(2026, 11, 12))
+        rows = {what: (value, warning) for what, value, _, warning in listed}
+        # The projects first, then for each its budget and its use, one row each
+        self.assertEqual([what for what, *_ in listed[:5]], ["Your projects and QOS", "Budget of IscrC_MALAGIC", "Used now by IscrC_MALAGIC",
+                                                              "Budget of try26_garrido (the Account chosen)", "Used now by try26_garrido"])
+        self.assertEqual(rows["Budget of IscrC_MALAGIC"], ("0 of 66,000 core-hours used (0.0 %); from 23 Nov 2026 to 23 Aug 2027, starts in "
+                                                          "11 days", False))
+        self.assertEqual(rows["Used now by IscrC_MALAGIC"], ("none yet: starts on 23 Nov 2026", False))
+        self.assertEqual(rows["Budget of try26_garrido (the Account chosen)"], ("555 of 7,500 core-hours used (7.4 %); from 23 Sep 2026 to 25 Nov 2026, "
+                                                          "13 days left", True))  # Less than 2 weeks left
+        self.assertEqual(rows["Used now by try26_garrido"], ("571 core-hours since 23 Sep 2026: 6,929 left", False))
+        # sacct over the whole project timing out (24 s of the earlier 25 on LEONARDO, 12 Nov): said, never as 0 core-hours
+        timed = {what: value for what, value, *_ in info_rows({**sections, "usage": ["try26_garrido|20260923|124|0"]}, given)}
+        self.assertEqual(timed["Used now by try26_garrido"], "sacct did not answer within 120 s (it is slow over a whole project): Check again later")
+        # Slurm's name with CINECA's beside it where they differ, so that the rows below read as the same project
+        self.assertEqual(rows["Your projects and QOS"][0], "iscrc_malagic (IscrC_MALAGIC): dcgp_qos_dbg, normal; try26_garrido: "
+                                                           "dcgp_qos_bprod, dcgp_qos_dbg, dcgp_qos_lprod, normal")
+        # Under the Account (handover item 37): the project chosen ending within a week, ended or not started, with the
+        # others to switch to (Slurm's name, what saldo says is left); nothing to say otherwise (controls)
+        from mobile.cluster import account_advice, folder_advice
+        day = lambda text: datetime.date.fromisoformat(text)
+        self.assertIsNone(account_advice(sections, "try26_garrido", day("2026-11-12")))  # 13 days left: the Budget row says it
+        self.assertEqual(account_advice(sections, "try26_garrido", day("2026-11-20")),
+                         ("try26_garrido ends on 25 Nov 2026 (in 5 days): a job after that cannot run on it.",
+                          [("iscrc_malagic", "Use iscrc_malagic (66,000 core-hours left, from 23 Nov 2026 to 23 Aug 2027)")]))
+        self.assertEqual(account_advice(sections, "try26_garrido", day("2026-11-26")),
+                         ("try26_garrido ended on 25 Nov 2026: a job billed to it cannot run.",
+                          [("iscrc_malagic", "Use iscrc_malagic (66,000 core-hours left, to 23 Aug 2027)")]))
+        self.assertEqual(account_advice(sections, "iscrc_malagic", day("2026-11-20")),
+                         ("IscrC_MALAGIC starts on 23 Nov 2026 (in 3 days): a job before then may not run.",
+                          [("try26_garrido", "Use try26_garrido (6,945 core-hours left, to 25 Nov 2026)")]))
+        self.assertIsNone(account_advice(sections, "iscrc_malagic", day("2026-12-01")))
+        self.assertIsNone(account_advice(sections, "someone_else", day("2026-11-20")))
+        # The folder in another project's work area than the Account's; controls: the same project (whatever its case), or
+        # no project's name in the path
+        self.assertEqual(folder_advice(sections, "/leonardo_work/try26_garrido/calibration", "iscrc_malagic", day("2026-11-20")),
+                         "The folder is in the work area of try26_garrido (it ends on 25 Nov 2026), not of the Account "
+                         "IscrC_MALAGIC: once that project's work area exists, move the folder there. Calibrations already "
+                         "sent keep the folder they were sent to.")
+        self.assertIsNone(folder_advice(sections, "/leonardo_work/try26_garrido/calibration", "try26_garrido", day("2026-11-20")))
+        self.assertIsNone(folder_advice(sections, "/leonardo_work/IscrC_MALAGIC/calibration", "iscrc_malagic", day("2026-11-20")))
+        self.assertIsNone(folder_advice(sections, "$WORK/calibration", "iscrc_malagic", day("2026-11-20")))
+        value, warning = rows["QOS dcgp_qos_dbg"]
+        self.assertTrue(warning)
+        self.assertIn("a job runs at most 30 min (its own), you may use at most 224 CPUs, 965 GB of memory, 2 nodes at a time, run at most 2 "
+                      "jobs at a time, queue at most 2. The time limit set, 01:00:00, is longer", value)
+        self.assertEqual(rows["Partition dcgp_usr_prod"], ("up to 1 day a job, at most 16 nodes a job, 1,492 nodes of 112 CPUs", False))
+        # A QOS without a time limit of its own: the partition's applies (normal on dcgp_usr_prod: 1 day), in the row and the check
+        for time, longer in (("30:00:00", True), ("12:00:00", False)):
+            value, warning = {what: (value, warning) for what, value, _, warning in info_rows(sections, replace(given, qos="normal", time=time))}["QOS normal"]
+            self.assertTrue(value.startswith("a job runs at most 1 day (partition dcgp_usr_prod's; none of its own)"), value)
+            self.assertEqual((warning, "is longer" in value), (longer, longer))
+        # The choices offered after a Check: the projects with their budget, the partitions and the QOS of the account, with
+        # their limits and what those make them for
+        offered = cluster.choices(sections, "try26_garrido", "dcgp_usr_prod")
+        self.assertEqual(offered["account"], [("iscrc_malagic", "iscrc_malagic: 66,000 of 66,000 core-hours left, ends 23 Aug 2027"),
+                                              ("try26_garrido", "try26_garrido: 6,945 of 7,500 core-hours left, ends 25 Nov 2026")])
+        self.assertEqual([name for name, _ in offered["partition"]], ["boost_usr_prod", "dcgp_usr_prod", "lrd_all_serial"])
+        labels = dict(offered["qos"])
+        self.assertEqual(sorted(labels), ["dcgp_qos_bprod", "dcgp_qos_dbg", "dcgp_qos_lprod", "normal"])
+        self.assertTrue(labels["dcgp_qos_dbg"].endswith("— for short tests"))
+        self.assertIn("up to 4 days (its own)", labels["dcgp_qos_lprod"])
+        self.assertTrue(labels["dcgp_qos_lprod"].endswith("— for long jobs"))
+        self.assertTrue(labels["dcgp_qos_bprod"].endswith("at most 128 nodes at a time — for large jobs"))
+        self.assertEqual(labels["normal"], "normal: up to 1 day (partition dcgp_usr_prod's; none of its own)")
+        self.assertEqual(cluster.choices({}, None, None), {"account": [], "partition": [], "qos": []})  # Before a Check: nothing offered
+        # The panel: Check first (Cluster information), then the settings chosen from it; Account, Partition and QOS lists that
+        # also take what is typed
+        from mobile.cluster_ui import cluster_section
+        html = str(cluster_section())
+        self.assertLess(html.index("Cluster information"), html.index("Cluster settings"))
+        for name in ("cl_account", "cl_partition", "cl_qos"):
+            self.assertIn(f'<select class="shiny-input-select" id="{name}">', html)
+        self.assertIn('"create": true', html)
+        self.assertEqual(rows["This calibration"], ("2 jobs, 15.1 core-hours; 0.19 per completed trial (78 completed, as of the last refresh)", False))
+        # With its folder: the trials completed in the study, which the record has only once a run has ended (0 while it runs)
+        study = open_study(folder, read_calibration(folder))
+        for value in range(6):
+            study.add_trial(optuna.trial.create_trial(values=[float(value)] * len(record["objectives"])))
+        running = {**record, "completed": 0}
+        self.assertEqual(dict((what, value) for what, value, *_ in info_rows(sections, given, running, folder=folder))["This calibration"],
+                         "2 jobs, 15.1 core-hours; 2.52 per completed trial (6 completed, as of the last refresh)")
+        self.assertNotIn("per completed trial", dict((what, value) for what, value, *_ in info_rows(sections, given, running))["This calibration"])
+        self.assertEqual(rows["Your jobs"][0], "64200001 cal_x pending 0:00 of 20:00 (Priority)")
+        self.assertEqual(rows["Nodes of dcgp_usr_prod"][0], "80 idle, 408 mixed, 942 allocated, 12 other (down, drained, reserved…)")
+        # Without an account, QOS or partition: those parts are not asked, and the rest still said
+        rows = {what for what, *_ in info_rows(cluster_info(replace(settings, account="", qos="", partition="")), settings)}
+        # (no partition, so no --dcgp: saldo lists the new project neither per user nor by Slurm's name, which is said)
+        self.assertEqual(rows, {"Your projects and QOS", "Budget of try26_garrido", "Used now by try26_garrido", "Budget of iscrc_malagic",
+                                "Used now by iscrc_malagic", "Your jobs"})
+        self.assertIn("saldo-exit: 0", sections["saldo"])
+        # Per user and by project, once a Check; --dcgp for a DCGP partition
+        self.assertEqual(sorted((home / "saldo.txt").read_text().splitlines()),
+                         ["-b", "-b --dcgp", "-b -a iscrc_malagic", "-b -a iscrc_malagic --dcgp", "-b -a try26_garrido", "-b -a try26_garrido --dcgp"])
+        # saldo too slow (timeout's exit 124), or not there: said as such, and the usage that needs its start date too
+        for code, said in (("124", "saldo did not answer within 120 s for your projects (it is often slow): Check again later"),
+                           ("127", "saldo is not there (not CINECA?)")):
+            rows = {what: value for what, value, *_ in info_rows({**sections, "saldo": [f"saldo-exit: {code}"], "usage": []}, given)}
+            self.assertEqual((rows["Budget"], rows["Used now by try26_garrido"]), (said, "needs the start of the project, from saldo"))
+        rows = {what: value for what, value, *_ in info_rows({**sections, "usage": []}, replace(given, account="other"))}  # Not in saldo: no usage
+        self.assertEqual((rows["Budget of other"], rows["Used now by other"]),
+                         ("not in what saldo listed: is the Account right?", "needs the start of the project, from saldo"))
+        # Times and costs
+        self.assertEqual([wall_seconds(text) for text in ("00:30:00", "1-00:00:00", "30", "10:00", "UNLIMITED", "")],
+                         [1800, 86400, 1800, 600, None, None])
+        self.assertEqual(job_cost(replace(settings, cpus=112, time="06:00:00")), 672)
+        # The login certificate in the ssh agent, as ssh-keygen shows it
+        def run(command, **_):
+            out = {"ssh-add": "ssh-ed25519-cert-v01@openssh.com AAAA user\nssh-ed25519 AAAA plain\n",
+                   "ssh-keygen": "        Valid: from 2026-11-12T09:00:00 to 2026-11-12T21:00:00\n"}[command[0]]
+            return mock.Mock(stdout=out)
+        with mock.patch.object(cluster.subprocess, "run", run):
+            self.assertEqual(certificate(datetime.datetime(2026, 11, 12, 16, 50)), (4 * 3600 + 600, "valid until 21:00 (4 h 10 min left)"))
+            self.assertEqual(certificate(datetime.datetime(2026, 11, 12, 22, 0))[1], "expired at 21:00: log in again")
+
+    def test_regions_share_an_offset(self):
+        from mobile.calibration_engine import create_calibration, read_calibration, region_mean, run_calibration, trials_table
+        from mobile.calibration_run_ui import offset_cells, regions
+        from mobile.plots import regions_figure
+        from mobile.sensitivity_runs import StudyState
+
+        # The two cells as one region of a 2° box (38-40°E, 8-10°N): one offset for both, its mean weighted by their people (2:3 here)
+        cells = offset_cells(self.config)
+        from mobile.cells import cell_areas
+        self.assertEqual(round(sum(cell["people"] for cell in cells)), round(float((self.pop * cell_areas(self.root / "pop.nc")).sum())))
+        found = regions(cells, 2.0)
+        self.assertEqual(len(found), 1)
+        region = found[0]
+        self.assertEqual((region["lat"], region["lon"], len(region["members"])), (9.0, 39.0, 2))
+        self.assertEqual([len(r["members"]) for r in regions(cells, 1.0)], [1, 1])  # Edges on whole degrees: 38-39 and 39-40
+        means = self.t2m.mean(axis=0).ravel()
+        people = np.array([cell["people"] for cell in sorted(cells, key=lambda c: c["lon"])])
+        self.assertAlmostEqual(region["mean"], float(np.average(means, weights=people)), places=4)
+        self.assertAlmostEqual(region_mean(self.root / "temperature.nc", self.root / "pop.nc", region), region["mean"], places=4)
+        # Boxes of 0.5°: each cell its own region, as one offset per cell
+        self.assertEqual([len(r["members"]) for r in regions(cells, 0.5)], [1, 1])
+        figure = regions_figure(cells, found, [True], 2.0)
+        self.assertEqual(int(np.nanmax(figure.data[0].z)), 0)  # Both cells coloured as region 1
+        # With the areas of a shapefile over them: its outline (halo and line) and their names on hovering
+        outline = ({"x": [38.6, 39.4, 39.4, 38.6, 38.6, None], "y": [8.6, 8.6, 8.9, 8.9, 8.6, None]}, {"x": [39.0], "y": [8.75], "text": ["A"]})
+        with_shapes = regions_figure(cells, found, [True], 2.0, outline)
+        self.assertEqual(len(with_shapes.data), len(figure.data) + 3)
+        self.assertEqual(list(with_shapes.data[-1].text), ["A"])
+        folder = create_calibration(self.config, self.objectives(), temperature={"cells": [region], "first": (-2.0, 2.0)}, n_trials=4,
+                                    name="one_region")
+        record = run_calibration(folder, StudyState(), parallel=2)
+        self.assertEqual(record["status"], "finished")
+        self.assertAlmostEqual(read_calibration(folder)["temperature"]["means"][0], region["mean"], places=4)
+        row = next(row for row in trials_table(folder) if not row["baseline"])
+        with netCDF4.Dataset(folder / "trials" / f"trial_{row['number']:05d}" / "t2m.nc") as data:
+            shift = data["temperature"][:] - self.t2m
+        np.testing.assert_allclose(shift, row["offsets"]["dT_1"], atol=1e-5)  # Every cell of the region moved by the same dT
+
+    def test_model_parameters(self):
+        from mobile.calibration_engine import create_calibration, read_calibration, run_calibration, trials_table
+        from mobile.calibration_results import results_figure
+        from mobile.sensitivity import SampledParameter
+        from mobile.sensitivity_runs import StudyState
+
+        # Calibrated with the offsets, in the units of their sliders: mu per year, b_rate on a log scale
+        parameters = [SampledParameter("mu", "uniform", 0.02, 0.04), SampledParameter("b_rate", "loguniform", 0.2, 20.0)]
+        folder = create_calibration(self.config, self.objectives(), parameters=parameters, temperature=self.temperature(), n_trials=6,
+                                    name="parameters")
+        record = run_calibration(folder, StudyState(), parallel=2)
+        self.assertEqual(record["status"], "finished")
+        self.assertEqual([p["name"] for p in read_calibration(folder)["parameters"]], ["mu", "b_rate"])
+        for row in trials_table(folder):
+            self.assertTrue(0.02 <= row["params"]["mu"] <= 0.04 and 0.2 <= row["params"]["b_rate"] <= 20.0)
+            given = read_params(folder / "trials" / f"trial_{row['number']:05d}" / "seed_12345" / "params.txt")
+            self.assertAlmostEqual(float(given["mu"]), row["params"]["mu"] / 365)  # Per day in the model
+            self.assertAlmostEqual(float(given["b_rate"]), row["params"]["b_rate"])
+        # The distributions: the two offsets, then the two parameters, b_rate on a log scale
+        figure = results_figure(folder, "distributions", 0)
+        titles = [annotation.text for annotation in figure.layout.annotations]
+        self.assertEqual([title.split(":")[0].split(" (")[0] for title in titles], ["dT1", "dT2", "mu", "b_rate"])
+        self.assertEqual(figure.layout.xaxis4.title.text, "log10 of b_rate")
+        # Parameters alone, without offsets
+        alone = create_calibration(self.config, self.objectives(), parameters=parameters[:1], n_trials=3, name="alone")
+        self.assertEqual(run_calibration(alone, StudyState(), parallel=2)["status"], "finished")
+        self.assertEqual(len(results_figure(alone, "distributions", 0).layout.annotations), 1)
+
+    def test_independent_offsets(self):
+        from mobile.calibration_engine import create_calibration, read_calibration, run_calibration, trials_table
+        from mobile.sensitivity_runs import StudyState
+
+        folder = create_calibration(self.config, self.objectives(), temperature={**self.temperature(), "first": (-3.0, 3.0), "ordered": False},
+                                    n_trials=16, name="independent")
+        self.assertEqual(run_calibration(folder, StudyState(), parallel=2)["status"], "finished")
+        record = read_calibration(folder)
+        self.assertFalse(record["temperature"]["ordered"])
+        rows = trials_table(folder)
+        start = next(row for row in rows if row["baseline"])
+        self.assertEqual(start["offsets"], {"dT_1": 0.0, "dT_2": 0.0})
+        self.assertEqual(sorted(start["params"]), ["dT_1", "dT_2"])  # Each sampled on its own, no gap
+        means = record["temperature"]["means"]
+        for row in rows:
+            self.assertTrue(all(-3.0 <= row["offsets"][key] <= 3.0 for key in ("dT_1", "dT_2")))
+        # The order can change: the east, warmer by 1.5 °C, cooler than the west in some trials
+        self.assertTrue(any(means[1] + row["offsets"]["dT_2"] < means[0] + row["offsets"]["dT_1"] for row in rows))
+
+    def test_temperature_trend(self):
+        from mobile.calibration_engine import (CalibrationError, baseline, create_calibration, offset_temperature, read_calibration,
+                                               run_calibration, trial_folder, trials_table)
+        from mobile.calibration_results import value_panels
+        from mobile.sensitivity_runs import StudyState
+
+        # The file shifted by each offset plus the trend times the decades from the centre: 0 there, the mean barely moved
+        days = np.arange(self.t2m.shape[0])  # 2001-01-01 to 2002-12-31: the centre is day 364, 2001-12-31
+        offset_temperature(self.root / "temperature.nc", self.root / "trend.nc", self.cells, {"dT_1": 1.0, "dT_2": -0.5, "dT_trend": 2.0},
+                           "2001-12-31")
+        with netCDF4.Dataset(self.root / "trend.nc") as data:
+            shift = data["temperature"][:] - self.t2m
+            self.assertEqual(json.loads(data.mobile_trend), {"dT_trend": 2.0, "unit": "°C per decade", "zero_on": "2001-12-31"})
+        drift = 2.0 * (days - 364) / 3652.5
+        np.testing.assert_allclose(shift[:, 0, 0], 1.0 + drift, atol=1e-5)
+        np.testing.assert_allclose(shift[:, 0, 1], -0.5 + drift, atol=1e-5)
+        self.assertAlmostEqual(float(shift[:, 0, 0].mean()), 1.0, delta=1e-3)  # Centred: the cell's mean is its offset
+        with self.assertRaisesRegex(CalibrationError, "the day where it is 0"):
+            offset_temperature(self.root / "temperature.nc", self.root / "x.nc", self.cells, {"dT_1": 0.0, "dT_2": 0.0, "dT_trend": 1.0})
+        # The record keeps the range and the centre of the calibration's period; the start trial has no trend
+        with self.assertRaisesRegex(CalibrationError, "trend needs its low below its high"):
+            create_calibration(self.config, self.objectives(), temperature={**self.temperature(), "trend": (1.0, 1.0)}, name="flat")
+        folder = create_calibration(self.config, self.objectives(), temperature={**self.temperature(), "trend": (-1.0, 3.0)}, n_trials=6,
+                                    name="trend")
+        temperature = read_calibration(folder)["temperature"]
+        self.assertEqual((temperature["trend"], temperature["trend_centre"]), ([-1.0, 3.0], "2001-12-31"))
+        self.assertEqual(baseline(temperature)["dT_trend"], 0.0)
+        self.assertIsNone(baseline({**temperature, "trend": [0.5, 3.0]}))  # No trend is outside the range
+        self.assertIn("Temperature trend (-1 to 3 °C per decade, 0 on 2001-12-31)", [panel[0] for panel in value_panels(read_calibration(folder))])
+        # Run: each trial samples it within the range, and its temperature file carries it
+        self.assertEqual(run_calibration(folder, StudyState(), parallel=2)["status"], "finished")
+        rows = trials_table(folder)
+        self.assertEqual(next(row for row in rows if row["baseline"])["offsets"]["dT_trend"], 0.0)
+        for row in rows:
+            self.assertTrue(-1.0 <= row["params"]["dT_trend"] <= 3.0)
+            self.assertEqual(row["offsets"]["dT_trend"], row["params"]["dT_trend"])
+        row = next(row for row in rows if not row["baseline"])
+        with netCDF4.Dataset(trial_folder(folder, row["number"]) / "t2m.nc") as data:
+            trend = json.loads(data.mobile_trend)["dT_trend"]
+            west = data["temperature"][:, 0, 0] - self.t2m[:, 0, 0]
+        self.assertAlmostEqual(trend, row["offsets"]["dT_trend"], places=5)
+        self.assertAlmostEqual(float(west[-1] - west[0]), trend * days[-1] / 3652.5, places=4)  # Its rise over the two years
+        # Without a trend, as before: nothing sampled for it, nothing in the file
+        plain = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=2, name="plain")
+        self.assertNotIn("trend", read_calibration(plain)["temperature"])
+        self.assertEqual(run_calibration(plain, StudyState())["status"], "finished")
+        self.assertTrue(all("dT_trend" not in row["params"] for row in trials_table(plain)))
+
+    def test_filters_run_over_the_whole_period_then_the_windows_are_cut(self):
+        from mobile.calibration_data import DataError, Observations
+        from mobile.calibration_model import process_both
+        from mobile.calibration_steps import EDGE_ERROR, apply_steps
+
+        days = pd.date_range("1990-01-01", "2003-12-31", freq="D")
+        t = np.arange(len(days)) / 365.25
+        values = np.exp(0.15 * t + 0.5 * np.sin(2 * np.pi * t / 4.0)) * (1.2 + np.sin(2 * np.pi * t))
+        daily = Observations(shape="dated", values=values, index=pd.DataFrame({"start": days.values.astype("datetime64[D]"),
+                             "end": days.values.astype("datetime64[D]")}), aggregation="sum", units="fraction", name="cases")
+        month = {"kind": "aggregate", "period": "month", "how": "sum", "complete": True, "days": 1}
+        low = {"kind": "filter", "type": "low", "short": 1.0, "long": 3.0, "unit": "years", "missing": "interpolate",
+               "max_gap": 3, "edges": "cut", "edge_error": EDGE_ERROR}
+        window = ("2000-01-01", "2003-12-31")
+
+        def series(observations):
+            return pd.Series(np.asarray(observations.values, float), index=pd.to_datetime(observations.index["start"])).dropna()
+
+        whole = series(apply_steps(daily, [month, low]))  # As the plot of a trial draws it: cut only at its outer ends
+        for part, first, last in (("calibration", "1992-07-01", "1999-12-01"), ("validation", "2000-01-01", "2002-02-01")):
+            model, data, _ = process_both([daily], [month, low], daily, [month, low], validation=window, part=part)
+            kept = series(model)
+            self.assertEqual((str(kept.index[0].date()), str(kept.index[-1].date())), (first, last))  # Up to the boundary
+            np.testing.assert_allclose(kept.values, whole[kept.index].values)  # The whole series, cut to the part
+            np.testing.assert_allclose(series(data).values, kept.values)
+        # Steps after the filter (an anomaly) apply to the part: its mean is 0 over the months it compares
+        model, _, _ = process_both([daily], [month, low, {"kind": "transform", "transform": "anomaly"}], daily, [month, low],
+                                   validation=window, part="calibration")
+        self.assertAlmostEqual(float(series(model).mean()), 0.0, places=9)
+        # Cut first, then filtered (as before): each part too short for this filter
+        with self.assertRaisesRegex(DataError, "too short for this filter"):
+            apply_steps(Observations(shape="dated", values=values[days < "2000-01-01"], index=daily.index[days < "2000-01-01"].reset_index(drop=True),
+                                     aggregation="sum", units="fraction", name="cases"), [month, low])
+        # Without a filter (a climatology): the part only, so the validation years do not enter the calibration season
+        climatology = [month, {"kind": "climatology", "by": "month"}]
+        part, _, _ = process_both([daily], climatology, daily, climatology, validation=window, part="calibration")
+        before = Observations(shape="dated", values=values[days < "2000-01-01"], index=daily.index[days < "2000-01-01"].reset_index(drop=True),
+                              aggregation="sum", units="fraction", name="cases")
+        np.testing.assert_allclose(part.values, apply_steps(before, climatology).values)
+
+    def test_several_validation_windows(self):
+        """An episode held out as a second validation window (e.g. a hump the calibration should not be pressed to fit,
+        1989-1993 in Debre Zeit, and the last years): calibration compares neither, each window is scored on its own."""
+        from mobile.calibration_data import Observations
+        from mobile.calibration_engine import (CalibrationError, SERIES, create_calibration, read_calibration, run_calibration,
+                                               trial_folder, trials_table)
+        from mobile.calibration_model import process_both, validation_parts, validation_windows
+        from mobile.calibration_steps import EDGE_ERROR, apply_steps
+        from mobile.sensitivity_runs import StudyState
+
+        self.assertEqual(validation_windows(None), [])
+        self.assertEqual(validation_windows(["2000-01-01", "2003-12-31"]), [("2000-01-01", "2003-12-31")])  # One, as before
+        windows = [["1994-01-01", "1996-12-31"], ["2000-01-01", "2003-12-31"]]
+        self.assertEqual(validation_parts(windows), ["validation_1", "validation_2"])
+        self.assertEqual(validation_parts(windows[1]), ["validation"])
+        # Filtered over the whole period, then each part cut: calibration has neither window, each window its own months
+        days = pd.date_range("1990-01-01", "2003-12-31", freq="D")
+        t = np.arange(len(days)) / 365.25
+        values = np.exp(0.15 * t + 0.5 * np.sin(2 * np.pi * t / 4.0)) * (1.2 + np.sin(2 * np.pi * t))
+        daily = Observations(shape="dated", values=values, index=pd.DataFrame({"start": days.values.astype("datetime64[D]"),
+                             "end": days.values.astype("datetime64[D]")}), aggregation="sum", units="fraction", name="cases")
+        steps = [{"kind": "aggregate", "period": "month", "how": "sum", "complete": True, "days": 1},
+                 {"kind": "filter", "type": "low", "short": 1.0, "long": 3.0, "unit": "years", "missing": "interpolate",
+                  "max_gap": 3, "edges": "cut", "edge_error": EDGE_ERROR}]
+
+        def months(part):
+            model, _, _ = process_both([daily], steps, daily, steps, validation=windows, part=part)
+            return pd.DatetimeIndex(model.index["start"][np.isfinite(np.asarray(model.values, float))]).year.unique()
+
+        calibration = set(months("calibration"))
+        self.assertFalse(calibration & set(range(1994, 1997)) or calibration & set(range(2000, 2004)))
+        self.assertTrue({1993, 1997, 1999} <= calibration)  # Up to each window
+        self.assertEqual(set(months("validation_1")), {1994, 1995, 1996})
+        self.assertEqual(set(months("validation_2")), {2000, 2001, 2002})  # The whole series ends early in 2002 (the filter)
+        # In a calibration: both stored, each scored and kept by trial; refused when they overlap or leave nothing
+        windows = [["2001-04-01", "2001-08-31"], ["2002-09-01", "2002-12-31"]]
+        objectives = [{**objective, "data_raw": objective["data"]} for objective in self.objectives()]
+        with self.assertRaisesRegex(CalibrationError, "overlap"):
+            create_calibration(self.config, objectives, temperature=self.temperature(), name="overlap",
+                               validation=[["2001-04-01", "2001-08-31"], ["2001-08-01", "2001-12-31"]])
+        folder = create_calibration(self.config, objectives, temperature=self.temperature(), n_trials=3, name="two_windows",
+                                    validation=windows)
+        self.assertEqual(read_calibration(folder)["validation"], windows)
+        self.assertEqual(run_calibration(folder, StudyState(), parallel=2)["status"], "finished")
+        for row in trials_table(folder):
+            scored = row["validation_windows"]
+            self.assertEqual([(entry["window"], entry["part"]) for entry in scored], [(windows[0], "validation_1"), (windows[1], "validation_2")])
+            self.assertEqual(row["validation"], scored[0]["values"])  # The first window, as the views read it
+            self.assertTrue(all(len(entry["values"]) == 2 for entry in scored))
+            series = trial_folder(folder, row["number"]) / SERIES
+            for part in ("calibration", "validation_1", "validation_2", "whole"):
+                self.assertTrue((series / f"objective_0_{part}_model.nc").is_file(), part)
+        # One window, as before: stored as [first, last], scored as "validation"
+        one = create_calibration(self.config, objectives, temperature=self.temperature(), n_trials=1, name="one_window",
+                                 validation=windows[1])
+        self.assertEqual(read_calibration(one)["validation"], windows[1])
+        run_calibration(one, StudyState())
+        self.assertEqual(trials_table(one)[0]["validation_windows"][0]["part"], "validation")
+
+    def test_more_trials_continue_a_finished_calibration(self):
+        """mobile calibrate --trials N raises the trials of a calibration, which goes on from all those it has (Optuna keeps
+        no target: one longer run); a job on a cluster passes it on."""
+        import io
+
+        from mobile.calibration_cli import EXIT_ERROR, calibrate
+        from mobile.calibration_engine import (CalibrationError, create_calibration, open_study, read_calibration, run_calibration,
+                                               set_trials, write_calibration)
+        from mobile.cluster import REMOTE_FIELDS, job_script
+        from mobile.sensitivity_runs import StudyState
+
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=3, name="more")
+        self.assertEqual(run_calibration(folder, StudyState())["status"], "finished")
+        first = {t.number: t.values for t in open_study(folder, read_calibration(folder)).trials}
+        self.assertEqual(run_calibration(folder, StudyState())["completed"], 3)  # Run again as it is: nothing more
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {"PATH": f"{self.stand_in_compilers()}{os.pathsep}{os.environ['PATH']}"}):
+            self.assertEqual(calibrate(str(folder), parallel=1, out=out, trials=5), 0)
+        self.assertIn("trials asked for: 3 -> 5", out.getvalue())
+        record = read_calibration(folder)
+        self.assertEqual((record["n_trials"], record["completed"], record["status"]), (5, 5, "finished"))
+        trials = {t.number: t.values for t in open_study(folder, record).trials}
+        self.assertEqual({number: trials[number] for number in first}, first)  # The first three as they were
+        # Refused: fewer than completed, not a whole number, a calibration of an earlier version
+        out = io.StringIO()
+        self.assertEqual(calibrate(str(folder), parallel=1, out=out, trials=4), EXIT_ERROR)
+        self.assertIn("5 trials have completed already", out.getvalue())
+        with self.assertRaisesRegex(CalibrationError, "whole number"):
+            set_trials(folder, 2.5)
+        old = {**record}
+        del old["version"]
+        write_calibration(folder, old)
+        with self.assertRaisesRegex(CalibrationError, "earlier version"):
+            set_trials(folder, 10)
+        # On a cluster: the job raises them first, and Refresh brings the record's number back
+        from dataclasses import replace as replaced
+        settings, _ = self.cluster()
+        self.assertIn('exec mobile calibrate "$1" --parallel 2 --trials 1000', job_script(replaced(settings), record, "/there", trials=1000))
+        self.assertNotIn("--trials", job_script(replaced(settings), record, "/there"))
+        self.assertIn("n_trials", REMOTE_FIELDS)
+
+    def test_objective_limits(self):
+        """A limit on an objective makes it a hard constraint (none by default): a trial beyond it is infeasible, kept out
+        of the Pareto front and graded by how far beyond; one within it, as before."""
+        from mobile.calibration_engine import CalibrationError, create_calibration, front, open_study, read_calibration, run_calibration, trials_table
+        from mobile.sensitivity_runs import StudyState
+
+        timing, swings = self.objectives()
+        for limit, said in ((0.0, "above 0"), ("x", "a number")):
+            with self.assertRaisesRegex(CalibrationError, said):
+                create_calibration(self.config, [timing, {**swings, "limit": limit}], temperature=self.temperature(), name=f"bad{limit}")
+        # Strict: correlation at least 0.999, relative RMSE at most 0.01: (nearly) every trial beyond them
+        folder = create_calibration(self.config, [{**timing, "limit": 0.999}, {**swings, "limit": 0.01}], temperature=self.temperature(),
+                                    n_trials=6, name="strict")
+        self.assertEqual([objective.get("limit") for objective in read_calibration(folder)["objectives"]], [0.999, 0.01])
+        self.assertEqual(run_calibration(folder, StudyState(), parallel=2)["status"], "finished")
+        rows = trials_table(folder)
+        beyond = [row for row in rows if row["limits"] and max(row["limits"].values()) > 0]
+        self.assertTrue(beyond)
+        for row in beyond:
+            self.assertGreater(row["violation"], 0)
+            self.assertIn("beyond its limit", row["infeasible"])
+            correlation, relative = row["values"]
+            self.assertAlmostEqual(row["limits"]["timing"], 0.999 - correlation)  # Below the limit of a maximised one
+            self.assertAlmostEqual(row["limits"]["swings"], relative - 0.01)
+        study = open_study(folder, read_calibration(folder))
+        self.assertFalse(set(front(study, rows)) & {row["number"] for row in beyond})  # Out of the front
+        trial = next(t for t in study.trials if t.number == beyond[0]["number"])
+        self.assertTrue(any(value > 0 for value in trial.system_attrs.get("constraints", trial.user_attrs.get("constraint", ()))))
+        self.assertIn("swings", beyond[0]["infeasible"])  # Not in log units: said as numbers
+        # Said as factors for an objective in log units (a bias or an RMSE after a log), as numbers otherwise
+        from mobile.calibration_engine import limit_said, log_base
+        log = {"kind": "transform", "transform": "log", "offset": 1e-5}
+        level = {"name": "Decadal_level", "metric": "bias", "steps": [log, {"kind": "filter", "type": "low"}]}
+        shape = {"name": "Decadal_shape", "metric": "rmse", "steps": [{**log, "transform": "log10"}, {"kind": "transform", "transform": "anomaly"}]}
+        season = {"name": "Seasonal_shape", "metric": "correlation", "steps": [log, {"kind": "climatology", "by": "month"}]}
+        self.assertEqual((log_base(level), log_base(shape), log_base(season)), (math.e, 10.0, None))
+        self.assertEqual(limit_said(level, 1.29, math.log(3)), "Decadal_level ×3.63 off, beyond ×3")
+        self.assertEqual(limit_said(shape, 0.3, 0.2), "Decadal_shape typically ×2 off, beyond ×1.58")
+        self.assertEqual(limit_said(season, 0.42, 0.7), "Seasonal_shape 0.42, beyond its limit 0.7")
+        # Loose: nothing beyond, all as without a limit
+        loose = create_calibration(self.config, [timing, {**swings, "limit": 100.0}], temperature=self.temperature(), n_trials=3, name="loose")
+        run_calibration(loose, StudyState())
+        self.assertTrue(all(row["violation"] <= 0 and row["limits"]["swings"] < 0 for row in trials_table(loose)))
+        plain = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=1, name="no_limit")
+        run_calibration(plain, StudyState())
+        self.assertIsNone(trials_table(plain)[0]["limits"])
+
+    def test_calibration_with_the_observational_model(self):
+        """A calibration with the observational model: each trial samples rho and k, its metrics compare the median of the
+        reported series drawn from its runs, CRPS their band; the band and its coverage of the data are kept with it."""
+        from mobile.calibration_data import read_observations, write_observations
+        from mobile.calibration_engine import (CalibrationError, SERIES, create_calibration, read_calibration, run_calibration,
+                                               trial_band, trial_folder, trials_table)
+        from mobile.sensitivity_runs import StudyState
+
+        data = read_observations(self.data)  # Monthly cases per person; as reported counts with their population N
+        population = np.full(len(data.values), 1e5)
+        raw = self.root / "cases_counts.nc"
+        write_observations(replace(data, values=np.asarray(data.values) * population, units="cases", extra={"N": population}), raw)
+        per_person = [{"kind": "arithmetic", "operation": "divide", "operand": "column", "column": "N", "number": 1, "units": ""}]
+        objectives = [{"name": "timing", "data": str(raw), "data_raw": str(raw), "variable": "Inew", "steps": self.MONTHLY,
+                       "data_steps": per_person, "metric": "correlation"},
+                      {"name": "band", "data": str(raw), "data_raw": str(raw), "variable": "Inew", "steps": self.MONTHLY,
+                       "data_steps": per_person, "metric": "crps"}]
+        with self.assertRaisesRegex(CalibrationError, "needs the observational model"):
+            create_calibration(self.config, objectives, temperature=self.temperature(), name="no_obs")
+        with self.assertRaisesRegex(CalibrationError, "rho needs a range"):
+            create_calibration(self.config, objectives, temperature=self.temperature(), name="bad_obs",
+                               observation={"rho": [0.5, 0.2], "k": [1, 50]})
+        observation = {"rho": [0.1, 1.0], "k": [1.0, 50.0], "draws": 60}
+        with self.assertRaisesRegex(CalibrationError, "Agents per cell and Humans per agent"):
+            create_calibration(self.config, objectives, temperature=self.temperature(), name="no_people", observation=observation)
+        config = replace(self.config, output=("out_I_new", "out_N", "out_HA"))
+        folder = create_calibration(config, objectives, temperature=self.temperature(), n_trials=3, name="observed",
+                                    observation=observation)
+        self.assertEqual(read_calibration(folder)["observation"], {"model": "negbin", "rho": [0.1, 1.0], "k": [1.0, 50.0], "draws": 60})
+        self.assertEqual(run_calibration(folder, StudyState(), parallel=2)["status"], "finished")
+        for row in trials_table(folder):
+            self.assertTrue(0.1 <= row["params"]["obs_rho"] <= 1.0 and 1.0 <= row["params"]["obs_k"] <= 50.0)
+            self.assertEqual(row["reporting"], {"rho": row["params"]["obs_rho"], "k": row["params"]["obs_k"]})
+            self.assertEqual(sorted(row["coverage"]), ["whole"])
+            self.assertTrue(all(0.0 <= share <= 1.0 for share in row["coverage"]["whole"]))
+            self.assertGreaterEqual(row["values"][1], 0.0)  # The CRPS
+            low, middle, high = trial_band(folder, row["number"], 0)
+            self.assertTrue(np.all(low[np.isfinite(low)] <= high[np.isfinite(low)]) and len(middle) == 24)
+        # A trial's draws are the same for every objective and part (the trial's seed): rerunning one gives the same band
+        row = trials_table(folder)[1]
+        self.assertTrue((trial_folder(folder, row["number"]) / SERIES / "objective_1_whole_band.nc").is_file())
+
+    def test_counts_of_the_models_own_population(self):
+        """The observational model draws around the model's cases as counts of its own population each day (agents x
+        humans per agent, which growth changes), not the observations' population."""
+        from mobile.calibration_data import DataError
+        from mobile.calibration_model import model_count_members, model_members
+        from mobile.runner import Runner
+
+        with mock.patch.dict(os.environ, {"FAKE_GROWTH": "1.0"}):  # The agents double over the run
+            result = Runner(replace(self.config, output=("out_I_new", "out_N", "out_HA"))).run("grown")
+        self.assertTrue(result.ok, result.log_tail())
+        counts = model_count_members(result.run_dir, "Inew")[0]
+        rate = model_members(result.run_dir, "Inew")[0]  # Per person, weighted by the population file's people
+        with netCDF4.Dataset(result.run_dir / "output" / "output.nc") as data:
+            inew, agents, ratio = (np.ma.filled(data[f"Human/{key}"][:].astype("f8"), np.nan) for key in ("Inew", "Nagent", "HA"))
+        np.testing.assert_allclose(counts.values, np.nansum(np.nan_to_num(inew) * np.nan_to_num(agents) * np.nan_to_num(ratio), axis=(1, 2)),
+                                   rtol=1e-6)
+        self.assertEqual((counts.units, counts.aggregation), ("cases", "sum"))
+        # The people the model stands for double over the run: so do its cases for the same rate (control: the rate times a
+        # fixed population would not)
+        people = np.nansum(np.nan_to_num(agents) * np.nan_to_num(ratio), axis=(1, 2))
+        self.assertAlmostEqual(people[-1] / people[0], 2.0, places=5)
+        warm = np.asarray(rate.values) > 0
+        per_person = np.asarray(counts.values)[warm] / np.asarray(rate.values)[warm]
+        self.assertGreater(per_person[-1] / per_person[0], 1.9)
+        with mock.patch.dict(os.environ, {"FAKE_NO_PEOPLE": "1"}):  # A run without them in its output
+            plain = Runner(self.config).run("plain")
+        self.assertTrue(plain.ok, plain.log_tail())
+        with self.assertRaisesRegex(DataError, "Agents per cell .* Humans per agent"):
+            model_count_members(plain.run_dir, "Inew")
+
+    def test_views_are_kept_and_never_fail_a_trial(self):
+        from mobile.calibration_engine import (SERIES, VIEW, create_calibration, read_calibration, run_calibration, trial_comparison,
+                                               trial_folder, trials_table)
+        from mobile.sensitivity_runs import StudyState
+
+        views = [{"name": "monthly", "data": str(self.data), "variable": "Inew", "steps": self.MONTHLY, "metric": "rmse"},
+                 {"name": "broken", "data": str(self.data), "variable": "Inew", "steps": [{"kind": "transform", "transform": "log"}]}]
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=3, name="views", views=views)
+        kept = read_calibration(folder)["views"]
+        self.assertEqual([view["name"] for view in kept], ["monthly", "broken"])
+        self.assertNotIn("metric", kept[0])  # Drawn, never optimised
+        self.assertEqual(kept[0]["data"], str(self.data.resolve()))
+        record = run_calibration(folder, StudyState(), parallel=2)
+        self.assertEqual((record["status"], record["completed"], record["failed"]), ("finished", 3, 0))  # The broken view failed none
+        for row in trials_table(folder):
+            self.assertEqual(len(row["values"]), 2)  # Only the objectives are optimised
+            series = trial_folder(folder, row["number"]) / SERIES
+            self.assertTrue((series / "view_0_whole_model.nc").is_file())
+            self.assertTrue((series / "view_0_whole_data.nc").is_file())
+            self.assertFalse((series / "view_1_whole_model.nc").exists())  # A log of zeros: left out
+        model, data, model_values, data_values, _ = trial_comparison(folder, 1, 0, kind=VIEW)
+        self.assertEqual(len(model_values), len(data_values))
+        self.assertEqual(len(data_values), 24)  # The two years, monthly
+        objective = trial_comparison(folder, 1, 0)  # The objectives as before
+        self.assertEqual(len(objective[2]), 24)
+        # Without views, as before
+        plain = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=1, name="no_views")
+        self.assertEqual(read_calibration(plain)["views"], [])
+
+    def test_earlier_versions_are_not_resumed(self):
+        from mobile.calibration_engine import (CalibrationError, calibration_label, create_calibration, read_calibration, run_calibration,
+                                               write_calibration)
+        from mobile.sensitivity_runs import StudyState
+
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=2, name="old")
+        record = read_calibration(folder)
+        self.assertNotIn("earlier version", calibration_label(folder, record))
+        del record["version"]  # As made before versions
+        write_calibration(folder, record)
+        self.assertIn("earlier version: cannot be resumed", calibration_label(folder, record))
+        with self.assertRaisesRegex(CalibrationError, "earlier version"):
+            run_calibration(folder, StudyState())
+        self.assertFalse((folder / "trials").exists())  # Nothing was run
+
+    def test_no_start_trial_outside_the_ranges(self):
+        from mobile.calibration_engine import baseline
+
+        temperature = {"cells": self.cells, "means": [17.0, 19.0], "first": (-3.0, 3.0), "gap": (0.0, 5.0)}
+        self.assertEqual(baseline(temperature), {"dT_1": 0.0, "gap_2": 2.0})
+        self.assertIsNone(baseline({**temperature, "first": (0.5, 3.0)}))  # dT_1 = 0 is not allowed
+        self.assertIsNone(baseline({**temperature, "gap": (0.0, 1.0)}))   # Their own difference is not allowed
+
+    def test_refused(self):
+        from mobile.calibration_engine import CalibrationError, create_calibration
+
+        with self.assertRaisesRegex(CalibrationError, "at least one parameter"):
+            create_calibration(self.config, self.objectives())
+        with self.assertRaisesRegex(CalibrationError, "unknown metric"):
+            create_calibration(self.config, [{**self.objectives()[0], "metric": "nse"}], temperature=self.temperature())
+        with self.assertRaisesRegex(CalibrationError, "no cell"):
+            create_calibration(self.config, self.objectives(), temperature={**self.temperature(), "cells": [{"lat": 0.0, "lon": 0.0}]},
+                               name="nowhere")
+        self.assertFalse((self.root / "runs" / "calibration" / "nowhere").exists())
+
+
+class TestCalibrationModel(unittest.TestCase):
+    """The model side of a calibration, and the metrics that compare it with the observations."""
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.folder = Path(folder.name)
+
+    def test_model_series(self):
+        from mobile.calibration_model import default_aggregation, model_series, run_choices
+        from mobile.calibration_steps import apply_steps
+        from mobile.cells import cell_areas
+        days = 59  # January and February 2001
+        values = np.zeros((days, 2, 2))
+        values[:, 0, 0], values[:, 0, 1], values[:, 1, 0] = 0.001, 0.003, 0.002
+        values[:, 1, 1] = np.nan  # Not simulated
+        pop = np.array([[100.0, 300.0], [50.0, 999.0]])
+        run = fake_run(self.folder / "runs" / "one", values, pop)
+        series = model_series(run, "Inew")
+        self.assertEqual((series.shape, len(series), series.label(0), series.units, series.aggregation), ("dated", 59, "2001-01-01", "fraction", "sum"))
+        # People-weighted over the simulated cells (control: by hand, without the cell that is not simulated)
+        people = pop * cell_areas(run / "pop.nc")
+        expected = (0.001 * people[0, 0] + 0.003 * people[0, 1] + 0.002 * people[1, 0]) / (people[0, 0] + people[0, 1] + people[1, 0])
+        self.assertLess(abs(series.values[0] / (expected) - 1), 1e-6)
+        self.assertLess(abs(model_series(run, "Inew", "mean").values[0] / (0.002) - 1), 1e-6)
+        self.assertLess(abs(model_series(run, "Inew", "sum").values[0] / (0.006) - 1), 1e-6)
+        # Daily amounts per person summed by month: cases per person per month
+        months = apply_steps(series, [{"kind": "aggregate", "period": "month", "how": "sum", "complete": True, "days": 1}])
+        self.assertLess(abs(months.values[0] / (31 * expected) - 1), 1e-6)
+        self.assertEqual(default_aggregation("I", {"units": "fraction"}), "mean")
+        # A seed band: one seed, or the mean over the seeds
+        band = self.folder / "runs" / "band"
+        fake_run(band / "seed_1", values, pop, 1), fake_run(band / "seed_2", values * 3, pop, 2)
+        (band / "seed_band.json").write_text(json.dumps({"status": "finished", "date": "2026-11-08T13:00:00", "seeds": [1, 2]}))
+        self.assertLess(abs(model_series(band, "Inew", seed=2).values[0] / (3 * expected) - 1), 1e-6)
+        self.assertLess(abs(model_series(band, "Inew").values[0] / (2 * expected) - 1), 1e-6)
+        # A seed band processed seed by seed: the median, with the range across seeds as a band (control: by hand)
+        from mobile.calibration_model import model_members, seed_spread
+        members = model_members(band, "Inew")
+        spread = seed_spread(members, [{"kind": "aggregate", "period": "month", "how": "sum", "complete": True, "days": 1}])
+        january = 31 * expected
+        for got, want in ((spread.values[0], 2 * january), (spread.extra["lowest"][0], january), (spread.extra["highest"][0], 3 * january)):
+            self.assertLess(abs(got / want - 1), 1e-6)
+        self.assertIn("median over the 2 seeds", spread.notes[-1])
+        from mobile.plots import comparison_figure, observations_figure
+        drawn = observations_figure(spread, "band")
+        self.assertEqual([trace.fill for trace in drawn.data], [None, "tonexty", None])
+        self.assertIn("range across seeds", drawn.data[1].name)
+        paired_labels = [spread.label(i) for i in range(2)]
+        shown = comparison_figure(spread, spread, paired_labels, spread.values, spread.values)
+        self.assertEqual(sum(trace.fill == "tonexty" for trace in shown.data), 1)
+        self.assertIn("median across seeds", shown.data[-1].name)
+        self.assertEqual(len(run_choices(self.folder / "runs")), 2)
+        # Drivers from the same run, processed on their own: monthly sums of rain in mm per month, a climatology of temperature
+        from mobile.calibration_model import driver_series
+        rain = driver_series(run, "rain", "month")
+        self.assertEqual((len(rain), rain.units), (2, "mm per month"))
+        self.assertLess(abs(rain.values[0] / (31 * 2.0) - 1), 1e-6)  # Control: 31 days of 2 mm
+        self.assertEqual(len(driver_series(run, "rain", "month", first="2001-02-01")), 1)
+        temperature = driver_series(run, "t2m", "as_is")
+        self.assertEqual((temperature.units, len(temperature), temperature.aggregation), ("celsius", 59, "mean"))
+        from mobile.plots import comparison_figure
+        months_model = apply_steps(series, [{"kind": "aggregate", "period": "month", "how": "sum", "complete": True, "days": 1}])
+        figure = comparison_figure(months_model, months_model, [months_model.label(i) for i in range(2)], months_model.values, months_model.values,
+                                   drivers=[("rain", "Rainfall", rain), ("t2m", "Temperature", driver_series(run, "t2m", "month"))])
+        self.assertEqual(len(figure.data), 4)
+        self.assertEqual((figure.data[2].xaxis, figure.data[3].xaxis, figure.layout.xaxis2.matches), ("x2", "x3", "x3"))
+        self.assertEqual((figure.layout.yaxis2.title.text, figure.layout.yaxis3.title.text), ("mm per month", "celsius"))
+        # A run in any folder, for the Model box; a folder that is not a finished run is refused, saying why
+        from mobile.calibration_data import DataError
+        from mobile.calibration_model import run_elsewhere
+        found = run_elsewhere(run)
+        self.assertEqual(list(found), [str(run.resolve())])
+        self.assertIn(f"in {run.parent.resolve()}", found[str(run.resolve())])
+        with self.assertRaisesRegex(DataError, "not a finished run"):
+            run_elsewhere(self.folder)
+        with self.assertRaisesRegex(DataError, "no folder"):
+            run_elsewhere(self.folder / "nowhere")
+
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root reads any folder")
+    def test_unreadable_neighbour(self):
+        # A folder that cannot be read, next to the runs (as in /tmp), is skipped, not an error
+        from mobile.calibration_model import run_elsewhere
+        from mobile.results import list_runs
+        pop = np.ones((2, 2))
+        run = fake_run(self.folder / "runs" / "one", np.ones((3, 2, 2)), pop)
+        locked = self.folder / "runs" / "locked"
+        locked.mkdir()
+        locked.chmod(0)
+        try:
+            self.assertEqual(list(list_runs(self.folder / "runs")), [str(run)])
+            self.assertEqual(list(run_elsewhere(run)), [str(run.resolve())])
+        finally:
+            locked.chmod(0o755)
+
+    def test_vector_densities_on_a_twin_axis(self):
+        from mobile.calibration_data import DataError
+        from mobile.calibration_model import driver_panel, model_series
+        from mobile.calibration_steps import apply_steps
+        from mobile.plots import comparison_figure
+        days = 59
+        run = fake_run(self.folder / "runs" / "one", np.full((days, 2, 2), 0.01), np.array([[1.0, 2.0], [3.0, 4.0]]))
+        with self.assertRaisesRegex(DataError, "no daily output 'V'.*tick Vector density and Infective vector density"):
+            driver_panel(run, "vectors")
+        with netCDF4.Dataset(run / "output" / "output.nc", "a") as data:
+            vector = data.createGroup("Vector")
+            for name, value in (("V", 2.0), ("Vinf", 0.004)):  # Infective vectors, far fewer
+                field = vector.createVariable(name, "f4", ("time", "lat", "lon"), fill_value=np.float32(np.nan))
+                field.units, field.long_name = "m^-2", name
+                field[:] = np.full((days, 2, 2), value)
+        panel = driver_panel(run, "vectors", "month", "mean")
+        self.assertEqual([label for label, _ in panel], ["Vector density", "Infective vector density"])
+        np.testing.assert_allclose([series.values[0] for _, series in panel], [2.0, 0.004], rtol=1e-6)
+        monthly = [{"kind": "aggregate", "period": "month", "how": "sum", "complete": True, "days": 1}]
+        model = apply_steps(model_series(run, "Inew"), monthly)
+        figure = comparison_figure(model, model, [model.label(i) for i in range(len(model))], model.values, model.values,
+                                   drivers=[("t2m", "Temperature", driver_panel(run, "t2m", "month", "mean")), ("vectors", "Vector densities", panel)])
+        axes = {trace.name: trace.yaxis for trace in figure.data}
+        self.assertEqual(len({axes["Vector density"], axes["Infective vector density"], axes["Temperature"]}), 3)  # Its own scale
+        right = figure.layout[axes["Infective vector density"].replace("y", "yaxis")]
+        self.assertEqual(right.side, "right")
+        # The panels zoom together: the time axes of the upper ones follow that of the bottom one
+        self.assertEqual((figure.layout.xaxis.matches, figure.layout.xaxis2.matches, figure.layout.xaxis3.matches), ("x3", "x3", None))
+
+    def test_metrics(self):
+        import pandas as pd
+        from mobile.calibration_data import DataError, import_table
+        from mobile.calibration_metrics import metrics, pair
+        months = lambda values, start="2001-01": import_table(pd.DataFrame({"d": pd.date_range(f"{start}-01", periods=len(values), freq="MS").strftime("%Y-%m-15"),
+                                                                             "v": values}), "dated", "v", "sum", "cases per person", date="d", period="month")
+        season = 1 + np.sin(2 * np.pi * np.arange(24) / 12)
+        data = months(season)
+        # A reporting fraction: scale-free metrics see no difference (control: the RMSE does)
+        reported = metrics(*pair(months(0.3 * season), data)[:2])
+        self.assertAlmostEqual(reported["rmse_relative"], 0.0)
+        self.assertAlmostEqual(reported["correlation"], 1.0)
+        self.assertGreater(reported["rmse"], 0.1)
+        # The right timing with half the swing: correlation perfect, the relative RMSE is not
+        half = metrics(*pair(months(1 + 0.5 * np.sin(2 * np.pi * np.arange(24) / 12)), data)[:2])
+        self.assertAlmostEqual(half["correlation"], 1.0)
+        self.assertGreater(half["rmse_relative"], 0.2)
+        # Six months late: the timing is wrong
+        self.assertLess(metrics(*pair(months(1 + np.sin(2 * np.pi * (np.arange(24) - 6) / 12)), data)[:2])["correlation"], -0.9)
+        # Only the periods in common, without missing values
+        m, d, labels = pair(months(np.r_[season[6:], np.nan]), data)
+        self.assertEqual((len(m), labels[0]), (18, "2001-01"))  # 19 months in common, the last missing in the model
+        self.assertIsNone(metrics(np.ones(5), np.arange(5.0))["correlation"])
+        with self.assertRaisesRegex(DataError, "aggregate the model into the periods of the other"):
+            days = import_table(pd.DataFrame({"d": pd.date_range("2001-01-01", periods=60).strftime("%Y-%m-%d"), "v": np.ones(60)}),
+                                "dated", "v", "sum", "x", date="d", period="day")
+            pair(days, data)
+        with self.assertRaisesRegex(DataError, "process them into the same shape"):
+            pair(import_table(pd.DataFrame({"y": [2001], "v": [1.0]}), "yearly", "v", "sum", "x", year="y"), data)
+
+
+class TestObjectiveRecipes(unittest.TestCase):
+    """The recipes of objectives blind to how many of the cases are reported: their steps, and a control that they are
+    scale-free where they say so (synthetic monthly cases per person, no simulation)."""
+
+    @staticmethod
+    def observations(values):
+        from mobile.calibration_data import Observations
+        start = pd.date_range("1980-01", periods=288, freq="MS")  # 1980-01 to 2003-12
+        return Observations(shape="dated", values=values, units="cases per person", name="cases",
+                            index=pd.DataFrame({"start": start.values.astype("datetime64[D]"),
+                                                "end": (start + pd.offsets.MonthEnd(0)).values.astype("datetime64[D]")}))
+
+    @staticmethod
+    def cases(shift=0, seed=0):
+        """A season peaking in October (shifted by months) on a rise over the decades, with noise."""
+        t, month = np.arange(288), np.arange(288) % 12 + 1
+        level = 1e-4 + 2e-3 / (1 + np.exp(-(t - 150) / 20))
+        return level * np.exp(1.5 * np.cos(2 * np.pi * (month - 10 - shift) / 12)) * np.exp(np.random.default_rng(seed).normal(0, 0.3, 288))
+
+    def score(self, recipe, model):
+        from mobile.calibration_metrics import metrics, pair
+        from mobile.calibration_model import process_both
+        from mobile.calibration_steps import RECIPES, recipe_steps
+        steps = recipe_steps(recipe, [])
+        m, d, _ = process_both([self.observations(model)], steps, self.observations(self.cases(seed=1)), steps)
+        return metrics(*pair(m, d)[:2])[RECIPES[recipe][1]]
+
+    def test_steps_kept_and_replaced(self):
+        from mobile.calibration_steps import recipe_steps
+        prepare = [{"kind": "aggregate", "period": "month"}, {"kind": "arithmetic", "operation": "divide"}]
+        steps = recipe_steps("decadal_shape", [prepare[0], {"kind": "climatology", "by": "month"}, prepare[1]])
+        self.assertEqual(steps[:2], prepare)  # The preparing steps, in their order; the climatology replaced
+        self.assertEqual([(s["kind"], s.get("transform") or s.get("type")) for s in steps[2:]],
+                         [("transform", "log"), ("filter", "low"), ("transform", "anomaly")])
+        self.assertEqual((steps[3]["long"], steps[3]["unit"], steps[2]["offset"]), (5.0, "years", 1e-5))
+        # Another recipe replaces this one's steps, not adds to them; a log's offset is kept
+        steps[2]["offset"] = 1.0
+        again = recipe_steps("seasonal_shape", steps)
+        self.assertEqual([s["kind"] for s in again], ["aggregate", "arithmetic", "transform", "climatology"])
+        self.assertEqual(again[2]["offset"], 1.0)
+        self.assertEqual([s["kind"] for s in recipe_steps("decadal_tendency", again)], ["aggregate", "arithmetic", "filter"])
+
+    def test_blind_to_scale_not_to_timing(self):
+        model = self.cases(seed=2)
+        for recipe in ("seasonal_shape", "decadal_tendency"):
+            same = self.score(recipe, model)
+            self.assertGreater(same, 0.95, recipe)
+            for scale in (0.1, 10.0):
+                self.assertAlmostEqual(self.score(recipe, scale * model), same, delta=0.002, msg=(recipe, scale))
+        # Control: the season three months late is seen
+        self.assertLess(self.score("seasonal_shape", self.cases(shift=3, seed=2)), 0.5)
+        # The level sees the scale: 10 times too many is a bias of about ln 10 (the offset is negligible above)
+        self.assertAlmostEqual(self.score("decadal_level", 10 * model) - self.score("decadal_level", model), np.log(10), delta=0.05)
+        # The shape of the decades is blind to too many cases; far too few sink towards the offset and weigh on it
+        shape = self.score("decadal_shape", model)
+        self.assertLess(self.score("decadal_shape", 10 * model), 2 * shape)
+        self.assertGreater(self.score("decadal_shape", 0.1 * model), 3 * shape)
+
+    def test_relative_rmse_not_defined_after_a_log(self):
+        from mobile.calibration_metrics import metrics
+        values = np.log(self.cases(seed=1) + 1e-5)  # All negative
+        self.assertIsNone(metrics(values, values * 1.1)["rmse_relative"])
+
+
+class TestOutputsNeeded(unittest.TestCase):
+    """The outputs a variable of the output file needs, checked against the model's own writer, and those objectives need."""
+
+    def test_against_the_model(self):
+        from mobile.layout import OUTPUT_FLAGS, flags_of
+        source = Path(__file__).resolve().parents[2] / "src" / "mo_netcdf.f90"
+        if not source.is_file():
+            self.skipTest("no model source")
+        known = {flag for flags in OUTPUT_FLAGS.values() for flag, _, _ in flags}
+        found, condition = [], set()
+        for line in source.read_text().splitlines():
+            if re.match(r"\s*(else\s+)?if\s*\(", line) and "out_" in line:
+                condition = set(re.findall(r"\b(out_\w+)\b", line))
+            elif re.match(r"\s*end\s*if\b", line):
+                condition = set()
+            name = re.search(r"nf90_def_var\(.*name\s*=\s*\"(\w+)\"", line)
+            if name and condition & known:
+                found.append((name.group(1), condition & known))
+        self.assertGreater(len(found), 20)
+        for name, flags in found:
+            self.assertEqual(set(flags_of(name) or ()), flags, name)
+        self.assertEqual(flags_of("Inew_5-14"), ("out_Ia_new",))
+        self.assertEqual(flags_of("t2m"), ())  # Always written
+        self.assertIsNone(flags_of("something_else"))
+
+    def test_objectives(self):
+        from mobile.layout import needed_outputs, output_label
+        needed, unknown = needed_outputs([{"name": "a", "variable": "Inew"}, {"name": "b", "variable": "Inew"},
+                                          {"name": "c", "variable": "Inew_bulk"}, {"name": "d", "variable": "x"}])
+        self.assertEqual(needed, {"out_I_new": ["a", "b", "c"], "out_Ia_new": ["c"]})
+        self.assertEqual(unknown, ["d"])
+        self.assertEqual((output_label("out_I_new"), output_label("out_Ia_new")), ("New symptomatic cases", "New symptomatic cases (by age)"))
+
+
+class TestCalibrationProgressAndFront(unittest.TestCase):
+    """The completed trials counted in the study, and the Pareto front sorted by the distance to the ideal point."""
+
+    def test_completed_counted_in_the_study(self):
+        import optuna
+        from mobile.calibration_engine import DATABASE, STUDY_NAME, calibration_label, completed_trials
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder)
+        record = {"completed": 0, "n_trials": 10, "objectives": [{"name": "a"}], "status": "finished"}
+        self.assertEqual(completed_trials(folder, record), 0)  # No study: the record's count
+        study = optuna.create_study(study_name=STUDY_NAME, storage=f"sqlite:///{folder / DATABASE}")
+        for value in (1.0, 2.0, 3.0):
+            study.add_trial(optuna.trial.create_trial(value=value))
+        study.add_trial(optuna.trial.create_trial(state=optuna.trial.TrialState.FAIL))
+        # As a running job leaves it: the record still says 0 (written when a run ends), the study 3
+        self.assertEqual(completed_trials(folder, record), 3)
+        self.assertIn("3 of 10 trials completed", calibration_label(folder, record))
+        study.add_trial(optuna.trial.create_trial(value=4.0))
+        time.sleep(0.01)
+        os.utime(folder / DATABASE)  # A new modification time: read again
+        self.assertEqual(completed_trials(folder, record), 4)
+
+    def test_ideal_distances(self):
+        from mobile.calibration_run_ui import ideal_distances
+        objectives = [{"direction": "maximize"}, {"direction": "minimize"}, {"direction": "zero"}]
+        front = [{"number": 1, "values": [0.9, 2.0, 0.1]}, {"number": 2, "values": [0.5, 1.0, 0.1]},
+                 {"number": 3, "values": [0.7, 1.5, 0.1]}]
+        distances = ideal_distances(front, objectives)
+        # Scaled 0 (best) to 1 (worst) per objective; the third has one value on the front: 0 for all
+        self.assertAlmostEqual(distances[1], 1.0)  # Best correlation, worst RMSE
+        self.assertAlmostEqual(distances[2], 1.0)
+        self.assertAlmostEqual(distances[3], math.sqrt(0.5**2 + 0.5**2))  # Halfway on both: the closest
+        self.assertEqual(min(distances, key=distances.get), 3)
+
+    def test_sort_by_column(self):
+        from mobile.calibration_run_ui import IDEAL, front_columns, sort_rows
+        front = [{"number": 4, "values": [0.5], "validation": [0.2], "params": {"b": 2.0}, "offsets": {"dT_1": 0.5}},
+                 {"number": 1, "values": [0.9], "validation": None, "params": {"b": 1.0}, "offsets": {"dT_1": -1.0}},
+                 {"number": 7, "values": [0.5], "validation": [0.8], "params": {"b": 3.0}, "offsets": {"dT_1": 0.0}}]
+        distances = {4: 0.3, 1: 0.0, 7: 0.3}
+        numbers = lambda column, descending: [row["number"] for row in sort_rows(front, column, descending, distances)]
+        self.assertEqual(numbers("o0", True), [1, 4, 7])  # High to low; the tie by trial number
+        self.assertEqual(numbers("o0", False), [4, 7, 1])
+        self.assertEqual(numbers("v0", True), [7, 4, 1])  # Without a validation score: last, both ways
+        self.assertEqual(numbers("v0", False), [4, 7, 1])
+        self.assertEqual(numbers(IDEAL, False), [1, 4, 7])
+        self.assertEqual(numbers("p:b", True), [7, 4, 1])
+        self.assertEqual(numbers("t0", False), [1, 7, 4])
+        self.assertEqual(numbers("number", True), [7, 4, 1])
+        record = {"objectives": [{}], "validation": ["1996-01-01", "2003-12-31"], "temperature": {"means": [20.0]},
+                  "parameters": [{"name": "b"}]}
+        self.assertEqual(front_columns(record), {"number", IDEAL, "o0", "v0", "t0", "p:b"})
+
+
+class TestPopulationGrowth(unittest.TestCase):
+    """The growth mode's annual factor: fitted to a population series, checked in a setup, and passed to the model."""
+
+    def write(self, text, name="population.txt"):
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder)
+        (folder / name).write_text(text)
+        return folder / name
+
+    def test_fit_recovers_a_known_growth(self):
+        from mobile.growth import ceiling_needed, fit_growth, growth_over, percent, read_population
+        days = pd.date_range("1975-01-15", "2025-12-15", freq="MS") + pd.Timedelta(days=14)
+        n = 267390 * 1.0213 ** ((days - days[0]).days / 365.25)
+        # As the case data give it: quoted names, a row number, each month twice, spaces between columns
+        lines = ['"date" "PF" "N"'] + [f'"{2 * i + k}" {day.date()} 1 {value:.0f}' for i, (day, value) in enumerate(zip(days, n)) for k in (1, 2)]
+        series = read_population(self.write("\n".join(lines) + "\n"))
+        self.assertEqual(len(series), len(days))  # One value per date
+        found = fit_growth(series, "1980-01-01", "2003-12-31")
+        self.assertAlmostEqual(found["g"], 1.0213, places=5)
+        self.assertLess(found["departure"], 1e-5)
+        self.assertTrue(found["covers"])
+        self.assertEqual(percent(found["g"]), "2.13% a year")
+        self.assertAlmostEqual(growth_over(1.0213, "1980-01-01", "2003-12-31"), 1.0213 ** (8766 / 365.25))
+        self.assertEqual(ceiling_needed(1.0213, "1980-01-01", "2003-12-31"), 2.0)  # x1.659 with 15% headroom: 1.908, up to 2.0
+        self.assertEqual(ceiling_needed(0.99, "1980-01-01", "2003-12-31"), 1.0)  # A decline needs no room
+        # Control: a series that does not grow fits 1, and a comma table with another population name reads too
+        flat = self.write("date,population\n" + "".join(f"{day.date()},{1000}\n" for day in days), "flat.csv")
+        self.assertAlmostEqual(fit_growth(read_population(flat), "1980-01-01", "2003-12-31")["g"], 1.0, places=9)
+
+    def test_what_cannot_be_fitted(self):
+        from mobile.growth import GrowthError, fit_growth, read_population
+        with self.assertRaisesRegex(GrowthError, "population column named one of"):
+            read_population(self.write("date,cases\n2000-01-01,3\n2001-01-01,4\n", "cases.csv"))
+        # One date format: YYYY-MM-DD in a column named date; a month of numbers is not a date, nor is 15/01/2000
+        with self.assertRaisesRegex(GrowthError, r"needs a column named date \(YYYY-MM-DD\)"):
+            read_population(self.write("month,N\n1,100\n13,102\n25,104\n", "months.csv"))
+        with self.assertRaisesRegex(GrowthError, r"line 3: the date '15/01/2001' is not written YYYY-MM-DD"):
+            read_population(self.write("date,N\n2000-01-15,100\n15/01/2001,102\n", "other.csv"))
+        series = read_population(self.write("date,N\n2000-01-01,100\n2000-06-01,101\n2010-01-01,120\n", "short.csv"))
+        with self.assertRaisesRegex(GrowthError, "less than a year within the period"):
+            fit_growth(series, "1980-01-01", "1999-12-31")
+        found = fit_growth(series, "1995-01-01", "2012-12-31")
+        self.assertFalse(found["covers"])  # Fitted on what there is, and said
+
+    def test_setup_check(self):
+        from mobile.config import growth_problems
+        self.assertEqual(growth_problems({"growth": 0}), [])
+        self.assertEqual(growth_problems({"growth": 1.0213, "mortality_file": "NONE"}), [])
+        self.assertIn("out of 0.9 to 1.1", growth_problems({"growth": 2.13})[0])  # A percent typed as a factor
+        self.assertIn("not with mortality_file", growth_problems({"growth": 1.02, "birthrate_file": "/b.txt"})[0])
+        self.assertIn("not with mortality_file", growth_problems({"growth": 1.02, "counterfactual": 1})[0])
+        self.assertIn("annual growth factor", growth_problems({"growth": "1.02"})[0])
+
+    def test_run_script_line(self):
+        from mobile.config import ConfigError
+        from mobile.rundir import growth_value
+        with_line = "            growth='NONE'\nvar_38=\"-G ${growth}\"\n"
+        self.assertEqual(growth_value(with_line, 1.0213), {"growth": "1.021300"})
+        self.assertEqual(growth_value(with_line, 0), {"growth": "'NONE'"})
+        without = "            counterfactual=0\n"
+        self.assertEqual(growth_value(without, 0), {})  # A MoBILE from before the growth mode runs as it did
+        with self.assertRaisesRegex(ConfigError, "needs a MoBILE whose utils/run_MOBILE.sh passes it"):
+            growth_value(without, 1.0213)
+
+class TestResultsStep(unittest.TestCase):
+    """The calibration's Results step is final only when its Run step is: a front while it runs is partial."""
+
+    def test_in_progress_while_the_run_is(self):
+        from mobile.calibration_progress import DOING, DONE, TODO
+        from mobile.calibration_run_ui import results_state
+        for status in ("running", "queued", "stopped", "interrupted"):
+            state, note = results_state(status, 12, 112, 5)
+            self.assertEqual(state, DOING, status)
+            self.assertEqual(note, "partial: Pareto front of 5 from 12 of 112 trials")
+        state, note = results_state("running", 12, 112, 5, refreshed="2026-11-16T13:05:00+00:00")
+        self.assertRegex(note, r"^partial: .*, as of the last Refresh \(16 Nov \d\d:05\)$")
+        # Control: the same trials once the calibration has finished give the final front, with no Refresh time
+        self.assertEqual(results_state("finished", 12, 112, 5, refreshed="2026-11-16T13:05:00+00:00"),
+                         (DONE, "Pareto front of 5"))
+        self.assertEqual(results_state("running", 0, 112, 0), (TODO, None))
+        self.assertEqual(results_state("finished", 3, 3, 0), (DOING, "no front: transmission died out in all"))
+
+
+class TestTrendInTheCard(unittest.TestCase):
+    """A calibration with a temperature trend: said in its description, a column of the Pareto table, sortable."""
+
+    def test_trend_column_and_text(self):
+        from mobile.calibration_run_ui import TREND, front_columns, sort_rows, trend_said
+        objectives = [{"name": "o", "direction": "minimize"}]
+        plain = {"objectives": objectives, "temperature": {"means": [14.0, 16.0], "first": [-3, 3], "gap": [0, 4]}}
+        trended = {**plain, "temperature": {**plain["temperature"], "trend": [-0.5, 1.5], "trend_centre": "1991-12-31"}}
+        self.assertNotIn(TREND, front_columns(plain))  # Control: no trend, no column
+        self.assertIn(TREND, front_columns(trended))
+        self.assertEqual(trend_said(trended["temperature"]), "Temperature trend in -0.5 to 1.5 °C per decade, 0 on 1991-12-31")
+        front = [{"number": n, "values": [v], "params": {}, "offsets": {"dT_1": 0.0, "dT_2": 1.0, "dT_trend": t}}
+                 for n, v, t in ((0, 3.0, 0.4), (1, 2.0, 1.2), (2, 1.0, -0.3))]
+        self.assertEqual([row["number"] for row in sort_rows(front, TREND, True, {})], [1, 0, 2])
+        self.assertEqual([row["number"] for row in sort_rows(front, TREND, False, {})], [2, 0, 1])
+
+
+class TestLogOffsetInCasesInTheGui(unittest.TestCase):
+    """Handover item 35: a log's offset in cases in the step editor (the values' units, as before, or cases ÷ N), the
+    Model box taking the observations' N as the observational model does, and the card refusing it on the model's side
+    without the observational model, as the engine does."""
+
+    @staticmethod
+    def monthly(values, population=None, first="1990-01"):
+        from mobile.calibration_data import Observations
+        start = pd.date_range(first, periods=len(values), freq="MS")
+        index = pd.DataFrame({"start": start.values.astype("datetime64[D]"),
+                              "end": (start + pd.offsets.MonthEnd(0)).values.astype("datetime64[D]")})
+        extra = {} if population is None else {"N": np.asarray(population, float)}
+        return Observations(shape="dated", values=np.asarray(values, float), index=index, units="cases per person",
+                            name="cases", aggregation="sum", extra=extra)
+
+    def test_read_step_writes_the_unit_only_for_a_log_in_cases(self):
+        from mobile.calibration_ui import read_step
+        log = {"uid": "1", "kind": "transform", "transform": "log", "offset": 1e-5, "window": 3}
+        typed = lambda **values: (lambda name: values.get(name))
+        self.assertEqual(read_step(log, typed(offset=1.0, offset_unit="case"))["offset_unit"], "case")
+        self.assertNotIn("offset_unit", read_step(log, typed(offset=1e-5, offset_unit="value")))  # Control: as before
+        self.assertNotIn("offset_unit", read_step({**log, "offset_unit": "case"}, typed(transform="anomaly", offset_unit="case")))
+        # Not drawn (e.g. the choice is not offered): the step keeps what it had
+        self.assertEqual(read_step({**log, "offset_unit": "case"}, typed())["offset_unit"], "case")
+
+    def test_the_choice_where_it_applies(self):
+        from mobile.calibration_ui import offset_unit_control
+        log = {"uid": "1", "kind": "transform", "transform": "log", "offset": 1.0, "window": 3}
+        cases = {**log, "offset_unit": "case"}
+        sid = lambda name: f"data_step_1_{name}"
+        peopled, plain = self.monthly([1.0, 2.0], [1000, 1000]), self.monthly([1.0, 2.0])
+        offered = str(offset_unit_control(log, sid, peopled))  # Data box with N: offered, the formulas with the offset typed
+        self.assertIn('log(value + <span data-offset-of="data_step_1_offset">1</span>): the offset in the values', offered)
+        self.assertIn('log((cases + <span data-offset-of="data_step_1_offset">1</span>)/N): the offset in cases (', offered)
+        self.assertIsNone(offset_unit_control(log, sid, plain))  # Control: without N, not offered
+        self.assertIn("these values have none", str(offset_unit_control(cases, sid, plain)))  # Already in cases: said
+        model = str(offset_unit_control(log, sid, plain, model_population=True))
+        self.assertIn("input.cal_observation", model)  # Model box: offered with the observational model on
+        self.assertIsNone(offset_unit_control(log, sid, plain, model_population=False))
+        self.assertIn("needs the observational model", str(offset_unit_control(cases, sid, plain, model_population=True)))
+        self.assertIn("load observations with one", str(offset_unit_control(cases, sid, plain, model_population=False)))
+
+    def test_model_box_takes_the_observations_population(self):
+        """The Model box gives log(m + 1/N) for a model per person m and the observations' N of each month; control: per
+        value, log(m + 1); without the observations' N, the engine's own error."""
+        from mobile.calibration_data import DataError
+        from mobile.calibration_steps import apply_steps
+        from mobile.calibration_ui import peopled, steps_before
+        model = self.monthly([0.0, 1e-4, 2e-3])
+        data = self.monthly([0.0, 1.0, 20.0], [10000.0, 10000.0, 12000.0])
+        log = {"kind": "transform", "transform": "log", "offset": 1.0, "window": 3, "offset_unit": "case"}
+        steps = [{"kind": "arithmetic", "operation": "multiply", "operand": "number", "column": None, "number": 1.0, "units": ""}, log]
+        [member], rest = peopled([model], steps, {}, data)
+        np.testing.assert_allclose(apply_steps(member, rest, {}).values, np.log(model.values + 1 / data.extra["N"]))
+        np.testing.assert_allclose(apply_steps(model, [{**log, "offset_unit": "value"}], {}).values, np.log(model.values + 1))
+        with self.assertRaisesRegex(DataError, "a column N"):
+            apply_steps(*peopled([model], steps, {}, None)[0], steps, {})
+        self.assertEqual(steps_before(model, steps, {}, data)[1].values.tolist(), model.values.tolist())
+        # The Data box: its own N, the same log of (cases + 1) / N
+        cases = self.monthly(data.values / data.extra["N"], data.extra["N"])
+        np.testing.assert_allclose(apply_steps(cases, [log], {}).values, np.log((data.values + 1) / data.extra["N"]))
+
+    def test_recipe_log_chosen_each_time(self):
+        """A recipe's log: chosen each time, no default; set on the recipe's own log whatever the box had; in cases only
+        where both boxes can take it; a recipe without a log asks nothing (control)."""
+        from mobile.calibration_steps import RECIPES, recipe_steps
+        from mobile.calibration_ui import LOGGED_RECIPES, RECIPE_LOGS, recipe_cases_problems, with_recipe_log
+        self.assertEqual(set(LOGGED_RECIPES), {"seasonal_shape", "decadal_shape", "decadal_level"})
+        self.assertEqual(set(RECIPES) - set(LOGGED_RECIPES), {"decadal_tendency"})
+        self.assertEqual([label for _, label in RECIPE_LOGS.values()],
+                         ["log(cases/N + 1e-5): the offset per person, in the values' units (1e-5)",
+                          "log((cases + 1)/N): the offset in cases (1)"])
+        kept = {"uid": "7", "kind": "transform", "transform": "log", "offset": 1.0, "window": 3, "offset_unit": "case"}
+        steps = recipe_steps("decadal_level", [kept])
+        [log] = [step for step in with_recipe_log(steps, "value") if step["kind"] == "transform"]
+        self.assertEqual((log["offset"], "offset_unit" in log), (1e-5, False))  # Not the box's earlier 1 in cases
+        [log] = [step for step in with_recipe_log(recipe_steps("decadal_level", []), "case") if step["kind"] == "transform"]
+        self.assertEqual((log["offset"], log["offset_unit"]), (1.0, "case"))
+        with_n, without = self.monthly([1.0, 2.0], [1000, 1000]), self.monthly([1.0, 2.0])
+        self.assertEqual(recipe_cases_problems(with_n, True, with_n), [])
+        self.assertEqual([p.split(":")[0] for p in recipe_cases_problems(without, False, None)], ["Data box", "Model box"])
+        self.assertIn("observational model is off", recipe_cases_problems(with_n, False, with_n)[0])
+        self.assertIn("observations have no population N", recipe_cases_problems(with_n, True, None)[0])
+        self.assertIn("have no population N", recipe_cases_problems(None, True, with_n)[0])
+
+    def test_card_refuses_it_without_the_observational_model_as_the_engine(self):
+        from mobile.calibration_engine import CalibrationError, _observation
+        from mobile.calibration_run_ui import observation_problems
+        log = {"kind": "transform", "transform": "log", "offset": 1.0, "window": 3}
+        objective = {"name": "Decadal_level", "metric": "rmse", "steps": [{**log, "offset_unit": "case"}],
+                     "data_steps": [{**log, "offset_unit": "case"}]}
+        [said] = observation_problems(None, [objective])
+        self.assertIn("Decadal_level: a log offset in cases on the model's side needs the observational model", said)
+        with self.assertRaisesRegex(CalibrationError, "a log offset in cases needs the observational model"):
+            _observation(None, [objective])
+        plain = {**objective, "steps": [log]}  # Control: per value on the model's side, in cases on the data's: accepted
+        self.assertEqual(observation_problems(None, [plain]), [])
+        self.assertIsNone(_observation(None, [plain]))
+
+
+class TestObservationModelInTheGui(unittest.TestCase):
+    """The observational model in the card, the Pareto table and the trial plots; checked against the engine's own checks."""
+
+    def setUp(self):
+        from mobile.calibration_data import Observations, write_observations
+        self.folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.folder)
+        start = pd.date_range("1990-01", periods=24, freq="MS")
+        index = pd.DataFrame({"start": start.values.astype("datetime64[D]"),
+                              "end": (start + pd.offsets.MonthEnd(0)).values.astype("datetime64[D]")})
+        self.data = Observations(shape="dated", values=np.arange(1.0, 25.0), units="cases", name="cases", index=index)
+        write_observations(replace(self.data, extra={"N": np.full(24, 1000.0)}), self.folder / "peopled.nc")
+        write_observations(self.data, self.folder / "plain.nc")
+
+    def objective(self, name, path, metric="correlation"):
+        return {"name": name, "metric": metric, "direction": "minimize", "data": str(self.folder / path),
+                "data_raw": str(self.folder / path), "steps": []}
+
+    def test_card_checks_as_the_engine(self):
+        """Each case the card refuses, the engine's own check refuses too; what it accepts, the engine accepts (control)."""
+        from mobile.calibration_engine import CalibrationError, _observation
+        from mobile.calibration_run_ui import observation_problems
+        good = {"rho": [0.05, 1.0], "k": [0.5, 50.0], "draws": 500}
+        peopled = [self.objective("timing", "peopled.nc"), self.objective("band", "peopled.nc", "crps")]
+        self.assertEqual(observation_problems(good, peopled), [])
+        self.assertEqual(_observation(good, peopled)["rho"], [0.05, 1.0])
+        cases = [({**good, "rho": [0.0, 1.0]}, peopled, "ρ̄"), ({**good, "rho": [0.5, 1.2]}, peopled, "ρ̄"),
+                 ({**good, "rho": [0.5, 0.2]}, peopled, "ρ̄"), ({**good, "k": [0.0, 5.0]}, peopled, "k (dispersion)"),
+                 ({**good, "k": [5.0, 1.0]}, peopled, "k (dispersion)"), ({**good, "draws": 10}, peopled, "20 draws"),
+                 (good, [self.objective("timing", "plain.nc")], "column N"), (None, peopled, "CRPS")]
+        for observation, objectives, said in cases:
+            problems = observation_problems(observation, objectives)
+            self.assertTrue(any(said in problem for problem in problems), (observation, problems))
+            with self.assertRaises(CalibrationError, msg=str(observation)):
+                _observation(observation, objectives)
+        self.assertEqual(observation_problems(None, peopled[:1]), [])  # Off, no CRPS: nothing to say
+
+    def test_said_and_table(self):
+        from mobile.calibration_run_ui import IDEAL, coverage_parts, front_columns, observation_said, sort_rows
+        observation = {"model": "negbin", "rho": [0.05, 1.0], "k": [0.5, 50.0], "draws": 500}
+        self.assertEqual(observation_said(observation), "Observational model: reported cases negative binomial around ρ̄ × the "
+                                                        "model's, ρ̄ 0.05–1 and k 0.5–50 (both calibrated, log-uniform), 500 draws per trial")
+        objectives = [{"name": "Timing", "direction": "maximize"}, {"name": "Level", "direction": "minimize"}]
+        record = {"objectives": objectives, "observation": observation, "validation": [["1989-01-01", "1993-12-31"], ["1998-01-01", "2003-12-31"]]}
+        self.assertEqual(coverage_parts(record), [("calibration", "calibration"), ("validation_1", "validation 1"),
+                                                  ("validation_2", "validation 2")])
+        self.assertTrue({"p:obs_rho", "p:obs_k", "c:calibration:0", "c:validation_2:1"} <= front_columns(record))
+        self.assertEqual(coverage_parts({"objectives": objectives, "observation": observation}), [("whole", "")])
+        front = [{"number": n, "values": [0.5, 1.0], "params": {"obs_rho": rho}, "offsets": {},
+                  "coverage": {"calibration": [share, 0.9]}} for n, rho, share in ((0, 0.3, 0.8), (1, 0.1, None), (2, 0.6, 0.95))]
+        numbers = lambda column, descending: [row["number"] for row in sort_rows(front, column, descending, {}, record)]
+        self.assertEqual(numbers("p:obs_rho", True), [2, 0, 1])
+        self.assertEqual(numbers("c:calibration:0", True), [2, 0, 1])  # Trial 1 has no coverage: last
+        # Control: without the observational model, no column of it
+        plain = {"objectives": objectives}
+        self.assertEqual(coverage_parts(plain), [])
+        self.assertEqual(front_columns(plain), {"number", IDEAL, "o0", "o1"})
+        self.assertEqual(observation_said(None), "")
+
+    def test_people_outputs_required(self):
+        """With the observational model on, the outputs the engine needs (Agents per cell, Humans per agent) are required
+        and named; applied, nothing is said; off, nothing is required (control); the objectives' needs keep their wording."""
+        from mobile.calibration_engine import PEOPLE_OUTPUTS
+        from mobile.calibration_run_ui import observation_outputs, outputs_missing
+        on = {"rho": [0.05, 1.0], "k": [0.5, 50.0], "draws": 500}
+        self.assertEqual(set(observation_outputs(on)), set(PEOPLE_OUTPUTS.values()))
+        self.assertEqual(set(observation_outputs(on)), {"out_N", "out_HA"})
+        self.assertEqual(observation_outputs(None), {})
+        said = outputs_missing(observation_outputs(on), ("out_I_new",))
+        self.assertTrue(said.startswith("The observational model needs Agents per cell, Humans per agent, not among"), said)
+        self.assertIn("tick them and press Apply", said)
+        self.assertIsNone(outputs_missing(observation_outputs(on), ("out_I_new", "out_N", "out_HA")))
+        self.assertIsNone(outputs_missing(observation_outputs(None), ()))
+        both = {"out_I_new": ["incidence"], **observation_outputs(on)}
+        said = outputs_missing(both, ("out_HA",))
+        self.assertTrue(said.startswith("The objectives and views and the observational model need New symptomatic cases, "
+                                        "Agents per cell, not"), said)
+        self.assertTrue(outputs_missing({"out_I_new": ["incidence"]}, ()).startswith("The objectives and views need New "
+                                                                                       "symptomatic cases, not"))
+
+    def test_band_on_the_plot(self):
+        """The band on the model's own values (trial_band), drawn over all of them, as the model itself; the metrics' pairs
+        unchanged. Control: no band, the model scaled; a climatology, whiskers at the bars' months."""
+        from mobile.calibration_metrics import pair
+        from mobile.calibration_run_ui import model_band
+        from mobile.plots import REPORTED_BAND, comparison_figure
+        model = replace(self.data, values=self.data.values * 0.5, name="Inew")
+        data = replace(self.data, values=np.r_[np.full(6, np.nan), self.data.values[6:]])  # The first 6 months missing
+        low, high = model.values - 1, model.values + 2
+        band = model_band((low, model.values, high), model)
+        np.testing.assert_allclose(band[0], low)
+        m, d, labels = pair(model, data)
+        figure = comparison_figure(model, data, labels, m, d, scale=True, reported=band)
+        traces = {trace.name: trace for trace in figure.data}
+        self.assertIn(f"Model: {REPORTED_BAND}", traces)
+        median = traces["Model: median of the reported series (observational model)"]
+        np.testing.assert_allclose(median.y, model.values)  # As it is, not scaled, and over all its 24 months
+        np.testing.assert_allclose(traces[f"Model: {REPORTED_BAND}"].y, low)  # The band too, where the data are missing
+        with self.assertRaises(ValueError):
+            model_band((low[:5], model.values[:5], high[:5]), model)
+        # Control: without a band, the model scaled and no band
+        plain = comparison_figure(model, data, labels, m, d, scale=True)
+        self.assertNotIn(f"Model: {REPORTED_BAND}", [trace.name for trace in plain.data])
+        self.assertIsNone(model_band(None, model))
+        # A climatology: the band as whiskers on the model's bars
+        months = replace(self.data, shape="climatology", values=np.arange(1.0, 13.0),
+                         index=pd.DataFrame({"month": np.arange(1, 13)}))
+        m, d, labels = pair(months, months)
+        bars = comparison_figure(months, months, labels, m, d, reported=(m - 1, m + 1))
+        np.testing.assert_allclose(bars.data[1].error_y.array, np.ones(12))
+
+    def test_each_side_over_its_own_months(self):
+        """Handover item 38: the data cut 3 years before the model's end (as a low pass cuts the data where they stop):
+        the model still drawn to its last month, each side's cut months shaded and named as its own. Control: the same
+        months on both sides, every value drawn as before and one plain 'cut'."""
+        from mobile.calibration_metrics import pair
+        from mobile.calibration_steps import EDGE
+        from mobile.plots import comparison_figure
+        start = pd.date_range("2000-01", periods=96, freq="MS")
+        index = pd.DataFrame({"start": start.values.astype("datetime64[D]"),
+                              "end": (start + pd.offsets.MonthEnd(0)).values.astype("datetime64[D]")})
+        values = np.linspace(-8.0, -7.5, 96)
+        model_cut = np.full(96, np.nan)
+        model_cut[84:] = values[84:]  # The model's last year cut
+        model = replace(self.data, values=np.where(np.isfinite(model_cut), np.nan, values), index=index, name="Inew",
+                        extra={EDGE: model_cut})
+        data_cut = np.full(96, np.nan)
+        data_cut[48:] = values[48:] - 1  # The data's last 4 years cut
+        data = replace(self.data, values=np.where(np.isfinite(data_cut), np.nan, values - 1), index=index, extra={EDGE: data_cut})
+        m, d, labels = pair(model, data)
+        self.assertEqual(len(labels), 48)  # The metrics: the first 4 years only
+        figure = comparison_figure(model, data, labels, m, d)
+        model_line = next(trace for trace in figure.data if trace.name and trace.name.startswith("Model: Inew"))
+        drawn = [label for label, y in zip(model_line.customdata, model_line.y) if np.isfinite(y)]
+        self.assertEqual((drawn[0], drawn[-1], len(drawn)), ("2000-01", "2006-12", 84))  # To the model's own last month
+        texts = sorted(annotation.text for annotation in figure.layout.annotations)
+        self.assertEqual(texts, ["data cut", "model cut"])
+        # Control: the same months on both sides, one 'cut' for both
+        same = replace(data, values=np.where(np.isfinite(model_cut), np.nan, values - 1), extra={EDGE: model_cut - 1})
+        m, d, labels = pair(model, same)
+        both = comparison_figure(model, same, labels, m, d)
+        self.assertEqual([annotation.text for annotation in both.layout.annotations], ["cut"])
+        data_line = next(trace for trace in both.data if trace.name and trace.name.startswith("Data"))
+        self.assertEqual(int(np.isfinite(np.asarray(data_line.y, dtype="f8")).sum()), 84)
+
+
+class TestObjectiveLimitsInTheGui(unittest.TestCase):
+    """The Limit field of an objective: its words by metric and steps, the value stored as the engine reads it, and the
+    trials beyond a limit told apart from those where transmission died out."""
+
+    LOG = [{"kind": "transform", "transform": "log", "offset": 1e-5}]
+    LOG10 = [{"kind": "transform", "transform": "log10", "offset": 1e-5}]
+
+    def objective(self, metric, steps=(), limit=None, name="Decadal_level"):
+        from mobile.calibration_metrics import DIRECTIONS
+        return {"name": name, "metric": metric, "direction": DIRECTIONS[metric], "steps": list(steps),
+                **({"limit": limit} if limit is not None else {})}
+
+    def test_words_and_values(self):
+        from mobile.calibration_run_ui import limit_kind, limit_stored, limit_text
+        kinds = [limit_kind(self.objective(metric, steps)) for metric, steps in
+                 (("bias", self.LOG), ("rmse", self.LOG10), ("correlation", self.LOG), ("bias", ()), ("rmse", ()), ("rmse_relative", ()))]
+        self.assertEqual(kinds, ["factor", "typical_factor", "at_least", "abs_at_most", "at_most", "at_most"])
+        # A factor stored as its log in the base of the objective's log; read back as the factor typed
+        stored, problem = limit_stored(self.objective("bias", self.LOG), 3)
+        self.assertIsNone(problem)
+        self.assertAlmostEqual(stored, math.log(3))
+        self.assertAlmostEqual(limit_stored(self.objective("bias", self.LOG10), 3)[0], math.log10(3))
+        self.assertEqual(limit_text(self.objective("bias", self.LOG, stored)), "within ×3")
+        self.assertEqual(limit_text(self.objective("rmse", self.LOG10, limit_stored(self.objective("rmse", self.LOG10), 1.5)[0])),
+                         "within ×1.5")
+        self.assertEqual(limit_text(self.objective("correlation", (), 0.5)), "at least 0.5")
+        self.assertEqual(limit_text(self.objective("bias", (), 2.5)), "|bias| at most 2.5")
+        self.assertEqual(limit_text(self.objective("rmse", (), 40)), "within 40")
+        self.assertEqual(limit_text(self.objective("rmse_relative", (), 0.3)), "within 0.3")
+        # Empty: no limit; refusals
+        self.assertEqual(limit_stored(self.objective("bias", self.LOG), None), (None, None))
+        self.assertEqual(limit_stored(self.objective("bias", self.LOG), ""), (None, None))
+        self.assertIsNone(limit_text(self.objective("bias", self.LOG)))
+        for metric, steps, typed in (("bias", self.LOG, 1), ("bias", self.LOG, 0.5), ("correlation", (), 1.5), ("correlation", (), -1),
+                                     ("rmse", (), 0), ("bias", (), -2), ("rmse", (), True), ("rmse", (), float("nan"))):
+            stored, problem = limit_stored(self.objective(metric, steps), typed)
+            self.assertIsNone(stored, (metric, typed))
+            self.assertTrue(problem, (metric, typed))
+
+    def test_the_engine_reads_it_as_typed(self):
+        """Control: the engine's own words for a trial beyond the stored limit give back the factor typed."""
+        from mobile.calibration_engine import limit_said, limits_said
+        from mobile.calibration_run_ui import limit_stored
+        objective = self.objective("bias", self.LOG)
+        objective["limit"] = limit_stored(objective, 3)[0]
+        self.assertEqual(limit_said(objective, math.log(3.63), objective["limit"]), "Decadal_level ×3.63 off, beyond ×3")
+        [(_, _, _, excess)] = limits_said([objective], [math.log(2.9)])
+        self.assertLess(excess, 0)  # Within ×3
+        [(_, _, _, excess)] = limits_said([objective], [math.log(3.1)])
+        self.assertGreater(excess, 0)
+
+    def test_died_out_or_beyond_a_limit(self):
+        from mobile.calibration_run_ui import infeasible_counts, infeasible_notes, limits_said, results_state
+        from mobile.calibration_results import died_out
+        record = {"objectives": [self.objective("bias", self.LOG, math.log(3)), self.objective("correlation", (), 0.5, "Timing")]}
+        alive, dead = {"died_out": 0, "last": [900, 900, 900], "flat": []}, {"died_out": 2, "last": [10, 20, 900], "flat": []}
+
+        def row(number, violation, persistence, limits=None, state="COMPLETE"):
+            return {"number": number, "state": state, "violation": violation, "persistence": persistence, "limits": limits}
+        rows = [row(0, -1.0, alive, {"Decadal_level": -0.2, "Timing": -0.1}),  # Feasible
+                row(1, 0.5, dead, {"Decadal_level": -0.2}),  # Died out only
+                row(2, 0.3, alive, {"Decadal_level": 0.3, "Timing": -0.1}),  # Beyond one limit only
+                row(3, 0.6, dead, {"Decadal_level": 0.1, "Timing": 0.2}),  # Both
+                row(4, None, None, state="RUNNING")]
+        self.assertEqual([died_out(r["violation"], r["persistence"], r["limits"]) for r in rows], [False, True, False, True, False])
+        self.assertEqual(infeasible_counts(record, rows), (4, 2, {"Decadal_level": 2, "Timing": 1}))
+        notes = infeasible_notes(record, rows)
+        self.assertIn("In 2 of the 4 completed trials transmission died out", notes[0])
+        self.assertEqual(notes[1], "2 of the 4 completed trials are beyond a limit (infeasible: kept out of the front): "
+                                   "Decadal_level (within ×3) 2; Timing (at least 0.5) 1.")
+        self.assertEqual(limits_said(record["objectives"]),
+                         "Limits (beyond them a trial is kept off the front): Decadal_level within ×3; Timing at least 0.5.")
+        self.assertIn("beyond a limit", results_state("finished", 4, 4, 0, limited=True)[1])
+        # Controls: without limits, as before - an infeasible trial is one where transmission died out, with the same note
+        plain = {"objectives": [self.objective("bias", self.LOG)]}
+        old = [row(0, 0.4, None), row(1, -1.0, None)]  # Trials from before persistence was kept
+        self.assertEqual(infeasible_counts(plain, old), (2, 1, {}))
+        self.assertEqual(infeasible_notes(plain, old), ["In 1 of the 2 completed trials transmission died out (infeasible: kept out of "
+                                                        "the front, and the sampler learns where that happens). Results › Epidemic or "
+                                                        "endemic shows them."])
+        self.assertEqual(limits_said(plain["objectives"]), "")
+        self.assertEqual(results_state("finished", 4, 4, 0)[1], "no front: transmission died out in all")
+
+
+class TestFrontTableAndViews(unittest.TestCase):
+    """The Pareto table is sent again only when what it shows changes; a trial is drawn against an objective or a view."""
+
+    def test_table_key(self):
+        from mobile.calibration_run_ui import front_key
+        record = {"objectives": [{"name": "o"}], "parameters": [{"name": "a"}]}
+        row = lambda n, v, state="COMPLETE", **more: {"number": n, "values": [v], "state": state, "offsets": {"dT_1": 0.5},  # noqa: E731
+                                                     "params": {"a": 1.0}, **more}
+        every = [row(0, 2.0), row(1, 1.0), row(2, None, "RUNNING")]
+        key = front_key((record, every, every[:2]))
+        # Read again, as at each refresh: equal although every object is new
+        self.assertEqual(front_key((dict(record), [dict(r) for r in every], [dict(r) for r in every[:2]])), key)
+        # A trial more that is not on the front, and no infeasible one: nothing in the table changes
+        self.assertEqual(front_key((record, [*every, row(3, 9.0)], every[:2])), key)
+        # Control: a trial joins the front, or one more infeasible trial is counted below the table
+        self.assertNotEqual(front_key((record, [*every, row(3, 0.5)], [*every[:2], row(3, 0.5)])), key)
+        dead = [*every, row(3, 9.0, infeasible=True)]
+        self.assertNotEqual(front_key((record, dead, every[:2])), key)
+        self.assertNotEqual(front_key((record, [*dead, row(4, 9.0)], every[:2])), front_key((record, dead, every[:2])))
+        self.assertIsNone(front_key(None))
+
+    def test_objectives_then_views(self):
+        from mobile.calibration_engine import OBJECTIVE, VIEW
+        from mobile.calibration_run_ui import comparison_choice, comparison_choices, comparison_name
+        record = {"objectives": [{"name": "season"}, {"name": "level"}], "views": [{"name": "monthly"}]}
+        self.assertEqual(comparison_choices(record), {"0": "season", "1": "level", "v0": "monthly (view)"})
+        self.assertEqual(comparison_choice("1"), (OBJECTIVE, 1))
+        self.assertEqual(comparison_choice("v0"), (VIEW, 0))
+        self.assertEqual(comparison_name(record, VIEW, 0), "monthly (view, not optimised)")
+        self.assertEqual(comparison_name(record, OBJECTIVE, 1), "level")
+        # Control: a calibration from before the views offers its objectives only
+        self.assertEqual(comparison_choices({"objectives": record["objectives"]}), {"0": "season", "1": "level"})
+
 
 if __name__ == "__main__":
     unittest.main()
