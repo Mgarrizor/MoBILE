@@ -17,6 +17,11 @@ BUILD_DIR := ./build    # Location to build the program
 # Touch these lines if the nf-config shell command does not work for your system
 INC_FLAGS := $(shell nf-config --fflags) # Flags needed to compile a FORTRAN program (NetCDF)
 INC_LIBS  := $(shell nf-config --flibs) $(shell nc-config --libs) # Libraries needed to link a FORTRAN program (NetCDF)
+# macOS: also where those libraries are, for the model to find them when it runs (a NetCDF whose libraries are named
+# @rpath/..., e.g. from conda, is not found otherwise)
+ifeq ($(shell uname -s),Darwin)
+INC_LIBS  += $(foreach dir,$(shell nc-config --libdir) $(shell nf-config --prefix)/lib,-Wl,-rpath,$(dir))
+endif
 # Profiling library (Google performance tools). Opt-in via `make PROFILE=1`: the path is
 # machine-specific, so linking it by default breaks the build wherever gperftools is absent.
 PROF_LIB  :=
