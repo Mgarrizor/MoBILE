@@ -557,7 +557,7 @@ MODULE mo_const
 
       case default
         print *, "Incorrect case, choose disID between: 0 (cholera) and 1 (malaria)"
-        STOP
+        ERROR STOP
       end SELECT
 
       print *, "Disease: ", disease_name
@@ -757,7 +757,7 @@ MODULE mo_const
         ! different row count would silently mis-map ages onto rates.
         if (size(cumm) /= 80) then
             print *, 'demog_build_shape: cumm_age.txt must have exactly 80 rows; found', size(cumm)
-            STOP
+            ERROR STOP
         end if
 
         s(0) = dble(cumm(1))
@@ -767,7 +767,7 @@ MODULE mo_const
 
         if (any(s < 0.d0)) then
             print *, 'demog_build_shape: cumm_age.txt is not monotonically increasing --> STOP'
-            STOP
+            ERROR STOP
         end if
 
         ! The file is written to 4 decimals, so two consecutive tail values can

@@ -31,7 +31,8 @@ usage() { echo "Usage:              \n
                 -a: Number of agents [Integer] \n
                 -u: Spin up [0: no SI ; 1: SU to threshold] \n
                 -v: VECTRI coupling [0: No, 1: Yes] \n
-                -?: Vector ID [0: gambiae, ...] \n
+                -e: Vector ecology only [0: no (default), 1: VECTRI's vectors alone: no agents, mobility or human infection; needs -v 1 -d 1] (Optional) \n
+                -V: Vector species for VECTRI [0: An. gambiae (default), 1: An. funestus, 2: An. sacharovi, 10: Ae. albopictus, 11: Ae. aegypti] (Optional) \n
                 -i: Immunity forcing file \n
                 -M: Age-specific mortality-rate file (Optional; blank = scalar mu) \n
                 -B: Time-varying birth-rate file (Optional; blank = scalar birth_rate) \n
@@ -55,8 +56,10 @@ demog_counterfactual=".false."
 demog_growth="0."
 output_file=""
 prebuilt=""
+vecID=0
+ecology=0
 
-while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:i:l:M:B:T:C:G:O:E:" flag; do
+while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:V:e:i:l:M:B:T:C:G:O:E:" flag; do
  case $flag in
    h) # Handle the -h flag
    # Display script help information
@@ -98,6 +101,12 @@ while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:i:l:M:B:T:C:G:O:E:" flag; do
    ;;
    v) # Handle the -v flag
    vectri=$OPTARG
+   ;;
+   V) # Handle the -V flag (vector species, VECTRI's case in mo_constants.f90)
+   vecID=$OPTARG
+   ;;
+   e) # Handle the -e flag (vector ecology only)
+   ecology=$OPTARG
    ;;
    l) # Handle the -l flag
    name_list=$OPTARG
@@ -168,6 +177,21 @@ while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:i:l:M:B:T:C:G:O:E:" flag; do
    ;;
  esac
 done
+
+if ! [[ ${vecID} =~ ^[0-9]+$ ]]; then
+  echo "-V (vector species) must be a whole number, e.g. 0 for An. gambiae: got '${vecID}'" >&2; exit 1
+fi
+
+if [[ ${ecology} == 1 ]]; then
+  if [[ ${vectri} != 1 || ${disID} != 1 ]]; then
+    echo "-e 1 (vector ecology only) needs VECTRI (-v 1) and the vector-borne path (-d 1)" >&2; exit 1
+  fi
+  ecology_nml=".true."
+elif [[ ${ecology} == 0 ]]; then
+  ecology_nml=".false."
+else
+  echo "-e (vector ecology only) must be 0 or 1: got '${ecology}'" >&2; exit 1
+fi
 
 # 0) Prepare folder to save simulation and namelist options
 
@@ -334,7 +358,9 @@ run_name='${filename}',
 disID=${disID},
 nsteps=${nstep},
 seed=${seed},
-spin_up=${spin_up}
+spin_up=${spin_up},
+vecID=${vecID},
+ecology=${ecology_nml}
 /
 &CLIMA
 rain_file='${rain_file}',
@@ -381,4 +407,5 @@ fi
 #-------------------------------
 mv ${namelist} ${filename}.nc ${filename}.info ${filename}/
 cp $const ${filename}/
+exit $rc   # The model's own status: non-zero when it stopped on an error (ERROR STOP) or crashed
 

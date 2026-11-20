@@ -942,7 +942,7 @@ CONTAINS
 
     
   CASE DEFAULT
-    PRINT *, "case selection incorrect, needs to be from 0,1,2,10,11"
+    PRINT *, "%E: vector species (vecID) ", ivec, " has no case: choose 0, 1, 2, 10 or 11"
     STOP
   END SELECT
   PRINT *, '%I: Vector: ',vector_name

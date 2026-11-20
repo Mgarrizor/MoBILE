@@ -300,7 +300,7 @@ itime = 1
       !
     else
       print *, 'Check point: Input --> STOP'
-      STOP 
+      ERROR STOP 
     end if !----------------------------------------
     !=
     ! Safety check
@@ -308,7 +308,7 @@ itime = 1
       if ((nsteps > ntime) .and. out_rain) then
         print *, nsteps, ntime
         print *, 'Number of simulation steps exceeds length of forcing --> STOP'
-        STOP
+        ERROR STOP
       end if
     !=
     ! By now the following should be defined:
@@ -336,19 +336,37 @@ itime = 1
 #endif
 !=======!
   !
-  ! Initialize distance matrix
-  call mob_dist_init(nxy,x_coord_1d,y_coord_1d,lon_coord,lat_coord,dx,dy,input,Re,Pi,mask_pop,dist)
+  ! Vector ecology only (mobile.sh -e 1): VECTRI per cell, no people modelled, so nothing about them is set up or written
+  if (ecology) then
+    print *, 'Vector ecology only: no agents, no mobility, no human infection'
+    agents = .false. ; gravity = .false. ; diag_age = .false.
+    out_Q = .false. ; out_D = .false. ; out_age = .false. ; out_N = .false. ; out_HA = .false. ; out_N_a = .false.
+    out_S = .false. ; out_E = .false. ; out_I = .false. ; out_Ia = .false. ; out_I_new = .false. ; out_Ia_new = .false.
+    out_A = .false. ; out_Aa = .false. ; out_R = .false. ; out_B = .false. ; out_F = .false.
+    out_EIR = .false. ; out_P1 = .false. ; out_imm = .false. ; out_imm_a = .false. ; out_hbr = .false.
+#ifdef COUPLED
+    out_vecinfc = .false.   ! Infective vectors: with no people only VECTRI's residual seed (safe_diag), not an output
+#endif
+  end if
   !
-  ! We need to know the lenght of the age structure before creating the NetCDF
-  ! output file.
-  call agents_read_age(age_weights,age_counts)
-  !
-  ! Resolve the demographic regime and precompute its rates. Must come after
-  ! agents_read_age: it builds the target age density from age_weights(:).
-  call demog_init()
-  !
-  ! Allocate arrays of disease "disID" (SEIAR)
-  call grid_dis(disID,nxy,S,E,I,A,A_old,R,EIR,imm,hbr)
+  ! Distances, ages, demography and the disease arrays: only where people are modelled
+  if (.not. ecology) then
+    !
+    ! Initialize distance matrix
+    call mob_dist_init(nxy,x_coord_1d,y_coord_1d,lon_coord,lat_coord,dx,dy,input,Re,Pi,mask_pop,dist)
+    !
+    ! We need to know the lenght of the age structure before creating the NetCDF
+    ! output file.
+    call agents_read_age(age_weights,age_counts)
+    !
+    ! Resolve the demographic regime and precompute its rates. Must come after
+    ! agents_read_age: it builds the target age density from age_weights(:).
+    call demog_init()
+    !
+    ! Allocate arrays of disease "disID" (SEIAR)
+    call grid_dis(disID,nxy,S,E,I,A,A_old,R,EIR,imm,hbr)
+    !
+  end if
   !
   !**********************************
   !
@@ -373,7 +391,7 @@ itime = 1
   if ((network)) then ! [Non-functional]
     print *, 'Mobility scheme: empirical network'
     print *, 'Check point: mobility scheme -> Empirical network non-functional --> STOP'
-    STOP 
+    ERROR STOP 
   !
   ! 0.3.2 Gravity model
   elseif ((gravity)) then
@@ -385,7 +403,7 @@ itime = 1
   elseif ((radiation)) then ! [Non-functional]
     print *, 'Mobility scheme: radiation model'
     print *, 'Check point: mobility scheme -> Radiation model non-functional --> STOP'
-    STOP
+    ERROR STOP
     !
     ! call mob_radiation_init(??) 
     !
@@ -396,7 +414,7 @@ itime = 1
       deallocate(Q)
   end if
   !
-  if (.not. out_D) then 
+  if ((.not. out_D) .and. allocated(dist)) then 
     deallocate(dist)
   end if
   !
@@ -404,7 +422,14 @@ itime = 1
   !
   ! 0.4.1 Agents
   print *, '------------------------'
-  if ((agents)) then
+  if (ecology) then
+    print *, "People representation: none (vector ecology only)"
+    allocate(npeop(nxy), HA(nxy))
+    npeop(:) = 0 ; HA(:) = 0.   ! No hosts: no host-to-vector transmission (source_integrate_VECTRI)
+#ifdef COUPLED
+    nbites(:) = 0
+#endif
+  elseif ((agents)) then
     print *, "People representation: Agents"
     !
      if (random .and. (.not. rand_seed)) then
@@ -526,12 +551,20 @@ if (spin_up==1) then
 
     case (1) ! Malaria
       !
+#ifdef COUPLED
+      if (ecology) then
+        SU_new(:) = SU_new(:) + zvect_density(:)   ! Adult vector density
+      else
+        SU_new(:) = SU_new(:) + imm(:)
+      end if
+#else
       SU_new(:) = SU_new(:) + imm(:)
+#endif
       !SU_new(:) = imm(:)
       !
     case default
       print *, "Incorrect case, choose disID between: 0 (cholera) and 1 (malaria)"
-    STOP
+    ERROR STOP
     end SELECT
     !
     end do spin_up_loop
@@ -539,14 +572,23 @@ if (spin_up==1) then
     SU_new(:) = SU_new(:)/365
     !
     ! Convergence to equilibrium by Direct Integration (SI) --> To Do: Implement Anderson Acceleration (AA) and select method from flag
+    ! For the vectors (ecology only), by their relative change
+#ifdef COUPLED
+    if (ecology) then
+      call DI_relative(SU_new,SU_old,SU_tol,SU_conv)
+    else
+      call DI(SU_new,SU_old,SU_tol,SU_conv)
+    end if
+#else
     call DI(SU_new,SU_old,SU_tol,SU_conv)
+#endif
     ispinup = ispinup + 1
     !
   end do
   !
   if (.not. SU_conv) then
       print *, 'Warning: spin-up hit max_spinup_years =', max_spinup_years, &
-               '; mean immunity did not converge to SU_tol =', SU_tol
+               '; did not converge to SU_tol =', SU_tol
   end if
   !
   in_spinup = .false. ! Real simulation starts fresh: the real b(t)/mu(a,t) apply below
@@ -557,14 +599,16 @@ if (spin_up==1) then
   ! would carry spin-up's net population change into the real run as a
   ! spurious transmission scaling. By definition the real run starts at an
   ! active fraction of 1.
-  npeop(:) = sum(npeop_thread(:,:), dim=2)
-  print '("Spin-up population: ",i0," -> ",i0," agents (",f6.2,"%)")', &
-        sum(npeop_init(:)), sum(npeop(:)), &
-        100.*real(sum(npeop(:)))/real(sum(npeop_init(:)))
-  npeop_init(:) = npeop(:)
-  ! Flush the spin-up birth counters so they don't contaminate the first
-  ! yearly report of the real run.
-  call agents_report_birth_capacity()
+  if (.not. ecology) then
+    npeop(:) = sum(npeop_thread(:,:), dim=2)
+    print '("Spin-up population: ",i0," -> ",i0," agents (",f6.2,"%)")', &
+          sum(npeop_init(:)), sum(npeop(:)), &
+          100.*real(sum(npeop(:)))/real(sum(npeop_init(:)))
+    npeop_init(:) = npeop(:)
+    ! Flush the spin-up birth counters so they don't contaminate the first
+    ! yearly report of the real run.
+    call agents_report_birth_capacity()
+  end if
   !
   ! Swap t2m/rainfall back to the real driver record for the main loop.
   call restore_spinup_forcing()
@@ -593,7 +637,7 @@ end if
 !=
 !
 ! Write initial conditions (after spin-up)
-call agents_update_age_counts() ! itime = 1 is always a year boundary
+if (.not. ecology) call agents_update_age_counts() ! itime = 1 is always a year boundary
 call netcdf_3D_output(1,Var3D) ! itime = 1
 ! 
 print '("Integrate: ",i6," days.")', nsteps
@@ -608,15 +652,17 @@ time_loop: do itime=2,nsteps
   WRITE(*,'(1a1,A11,I6,A2,I6,A2,F6.1,A2)', advance='no') char(13),'Integrating',itime,' /',nsteps,' -',(real(itime)/(nsteps)*100.),' %'
   !
   ! Write 3D fields (x,y,t) here
-  if (mod(itime-1, 365) == 0) then
+  if ((mod(itime-1, 365) == 0) .and. (.not. ecology)) then
       call agents_update_age_counts()
   end if
   call netcdf_3D_output(itime,Var3D)
   !
 end do time_loop
 write(*,*) ' ' ! close the in-place progress line before printing below it
-call agents_report_birth_capacity() ! whole-run total
-call agents_report_saturation()
+if (.not. ecology) then
+  call agents_report_birth_capacity() ! whole-run total
+  call agents_report_saturation()
+end if
 !********************************************************
 !
 ! Write 2D fields (x,y) here and close NetCDF file

@@ -30,9 +30,11 @@ MODULE mo_namelist
             character(len=1000) :: line
             integer:: file_unit, iostats
             integer:: arg_num,ierr
+            integer :: vecID   ! Vector species: VECTRI's case (mo_constants: ivec); 0, An. gambiae, if the namelist has none
             
             ! Define namelist
-            namelist /INOUT/ run_name, disID, nsteps, seed, spin_up
+            namelist /INOUT/ run_name, disID, nsteps, seed, spin_up, vecID, ecology
+            vecID = 0
 
             arg_num = 1
             ! Read first command line argument (namelist name)
@@ -58,10 +60,11 @@ MODULE mo_namelist
                 backspace(file_unit)
                 read(file_unit,fmt='(A)') line
                 write(stderr,'(A)') 'Invalid line in namelist is: '//trim(line)
-                STOP
+                ERROR STOP
             end if
             
             close (file_unit)
+            ivec = vecID   ! Read before init_constants, which sets the species' values from it
 
         end subroutine namelist_inout
 
@@ -109,7 +112,7 @@ MODULE mo_namelist
                 backspace(file_unit)
                 read(file_unit,fmt='(A)') line
                 write(stderr,'(A)') 'Invalid line in namelist is: '//trim(line)
-                STOP
+                ERROR STOP
             end if
 
             if (len(trim(imm_file)) /= 0) then
@@ -155,7 +158,7 @@ MODULE mo_namelist
                 backspace(file_unit)
                 read(file_unit,fmt='(A)') line
                 write(stderr,'(A)') 'Invalid line in namelist is: '//trim(line)
-                STOP
+                ERROR STOP
             end if
 
             if (len(trim(rain_file)) == 0) then
@@ -238,7 +241,7 @@ MODULE mo_namelist
                 backspace(file_unit)
                 read(file_unit,fmt='(A)') line
                 write(stderr,'(A)') 'Invalid line in namelist is: '//trim(line)
-                STOP
+                ERROR STOP
             end if
 
             close (file_unit)
@@ -329,7 +332,7 @@ MODULE mo_namelist
                 backspace(file_unit)
                 read(file_unit,fmt='(A)') line
                 write(stderr,'(A)') 'Invalid line in namelist is: '//trim(line)
-                STOP
+                ERROR STOP
             end if
 
             close (file_unit)

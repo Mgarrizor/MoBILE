@@ -35,7 +35,7 @@ subroutine build_spinup_climatology()
     nyears_avail = nsteps / ndays_year
     if (nyears_avail < 1) then
         print *, 'Cannot build spin-up climatology: less than 1 full year of driver data --> Exit'
-        STOP
+        ERROR STOP
     end if
     nyears_use = min(nyears_avail, max_clim_years)
 
@@ -111,7 +111,7 @@ subroutine DI(x_new,x_old,tol_SU,conv)
         print *, sum(x_new(:)), sum(x_old(:))
     else 
         print*, 'Cannot compute mean during Spin-up --> Exit'
-        STOP
+        ERROR STOP
     end if
     !
     if (eps_SU <= tol_SU) then
@@ -119,6 +119,33 @@ subroutine DI(x_new,x_old,tol_SU,conv)
     end if
     !
 end subroutine DI
+
+
+subroutine DI_relative(x_new,x_old,tol_SU,conv)
+    ! Convergence of a spin-up year by the relative change of a field: the total change over the cells as a share of
+    ! the total, sum|x_new - x_old| / sum(x_new); converged when at most tol_SU (e.g. 0.015, 1.5 %). For fields of any
+    ! scale, e.g. vector densities, where DI's absolute tolerance would pass at once
+
+    implicit none
+
+    real, allocatable, intent(inout) :: x_new(:) ! Field averaged over the spin-up year, per cell
+    real, allocatable, intent(inout) :: x_old(:) ! The same, the year before
+    real, intent(in) :: tol_SU                   ! Tolerance of convergence (a share of the total)
+    logical, intent(out) :: conv                 ! Convergence boolean
+
+    ! Local use only
+    real :: eps_SU   ! Relative change of the year
+
+    if (.not. (sum(x_new(:)) > 0.)) then
+        print *, 'Cannot compute the relative change during spin-up: the field is zero everywhere --> Exit'
+        ERROR STOP
+    end if
+    eps_SU = sum(abs(x_new(:) - x_old(:)))/sum(x_new(:))
+    WRITE(*,'(1a1,A20,F6.4,A5,F6.4)', advance='no') char(13),'Spin-up convergence ',eps_SU,' <=? ',tol_SU
+    print *, sum(x_new(:)), sum(x_old(:))
+    conv = (eps_SU <= tol_SU)
+
+end subroutine DI_relative
 
 ! Anderson acceleration method
 subroutine AA()

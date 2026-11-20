@@ -157,7 +157,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             if (norm_check < nagent) then
                 print *, 'More agents than people in simulated cells (with rain and temperature data):', &
                          norm_check, '< nagent =', nagent, ' --> STOP'
-                STOP
+                ERROR STOP
             end if
             !
             P_a = norm_check/nagent
@@ -378,7 +378,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             ! more than nagent it would never terminate and overrun people(:).
             if (indx > (nagent+1)) then
                 print *, 'First pass placed', indx-1, 'agents > nagent =', nagent, ' --> STOP'
-                STOP
+                ERROR STOP
             end if
             do while (indx /= (nagent+1))
                !
@@ -499,7 +499,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             ! Cells with fewer than one person are capped at zero agents above, whatever nagent is.
             if (any(mask_pop .and. npeop==0 .and. pop_dens*A_cell>=1.)) then
                 print *, count(mask_pop .and. npeop==0 .and. pop_dens*A_cell>=1.), 'populated cells have no agents; nagent =', nagent, ' is too low --> STOP'
-                STOP
+                ERROR STOP
             end if
             !
             ! Extra growth-capacity slots (nagent+1..nagent_max): distributed
@@ -614,7 +614,7 @@ USE, INTRINSIC :: ISO_C_BINDING
 
             if (omp_get_max_threads() > 32) then
                 print *, 'RNGLIB supports at most 32 independent generators --> STOP'
-                STOP
+                ERROR STOP
             end if
 
             ! Seed the serial-mode RNG state directly, outside any parallel region.
@@ -917,7 +917,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             case default
                 print *, "Dengue [Non-functional] - choose disID between: 0 (cholera) & 1 (malaria)"
-                STOP
+                ERROR STOP
             end SELECT
             !
         !===
@@ -939,19 +939,19 @@ USE, INTRINSIC :: ISO_C_BINDING
             if (demog_growth /= 0.) then
                 if (demog_growth <= 0.) then
                     print *, 'demog_init: demog_growth must be a positive annual growth factor (e.g. 1.02), or 0 for off --> STOP'
-                    STOP
+                    ERROR STOP
                 end if
                 if (have_files .or. demog_counterfactual) then
                     print *, 'demog_init: demog_growth sets the rates itself: give it without the rate files ' // &
                              '(-M/-B/-T) and without counterfactual mode --> STOP'
-                    STOP
+                    ERROR STOP
                 end if
             end if
 
             if (demog_counterfactual .and. (.not. have_files)) then
                 print *, 'demog_init: counterfactual mode needs the FACTUAL rate files ' // &
                          '(-M/-B/-T) -- the shadow population has nothing to integrate --> STOP'
-                STOP
+                ERROR STOP
             end if
 
             if (demog_growth > 0.) then
@@ -1226,7 +1226,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             case default
                 print *, "Incorrect case, choose disID between: 0 (cholera) & 1 (malaria)"
-                STOP
+                ERROR STOP
             end SELECT
             !
         !===
@@ -1394,7 +1394,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             case default
                 print *, "Incorrect case, choose disID between: 0 (cholera) & 1 (malaria)"
-                STOP
+                ERROR STOP
             end SELECT
             !
         !===
@@ -1433,7 +1433,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             case default
                 print *, "Incorrect case, choose disID between: 0 (cholera), 1 (malaria)"
-                STOP
+                ERROR STOP
             end SELECT
         !===
         end subroutine agents_update

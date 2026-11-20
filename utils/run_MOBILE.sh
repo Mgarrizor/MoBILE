@@ -99,14 +99,17 @@ fi
          #   imm_forcing='experiments/imm_knockout/forcing/imm_bulk_counterfactual.nc'
             imm_forcing='NONE'
 
-#           -?? vectorID        [Non-functional]
+#           -V Vector species   (VECTRI)
 #                               -- Anophelines --
-            vectorID=0       # 0: An. gambiae s. s. 
-#                              1: An. funestus
+            vectorID=0       # 0: An. gambiae s. s.
+#                              1: An. funestus  [not evaluated]
 #                              2: An. sacharovi
-#                                 -- Aedes --     
-#                             10: Ae. albopictus [Dengue non-functional]
-#                             11: Ae. aegypti    [Dengue --> in development]
+#                                 -- Aedes --
+#                             10: Ae. albopictus [Dengue not written]
+#                             11: Ae. aegypti    [Dengue not written]
+
+#           -e Vector ecology only (0: no ; 1: VECTRI's vectors alone, no people modelled; needs -v 1 -d 1)
+            ecology=0
 
 #           -d vectorDis       [Non-functional]
             vectorDis=0       
@@ -115,7 +118,6 @@ fi
 #          |==============
 #          Future developments
 #          |==============
-#          -i Vector ID       [Non-functional] --> for now we can only use the VECTRI default
 #          -d Vector disease  [Non-functional] (Dengue + Yellow Fever?)
 #          -m Mobility file   [Non-functional]
 #          -w Hydrology file  [Non-functional]
@@ -168,6 +170,8 @@ var_42="-E ${prebuilt}"
 
 # VECTRI
 var_50="-v ${vectri}"
+var_51="-V ${vectorID}"
+var_52="-e ${ecology}"
 
 
 read -r -d '' command << EOM
@@ -199,6 +203,8 @@ $var_41
 $var_42
 
 $var_50
+$var_51
+$var_52
 
 EOM
 
