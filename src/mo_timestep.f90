@@ -103,7 +103,7 @@ subroutine time_step(disID,itime)
                !
             !==
             ! 2.2) Update health status (bulk)
-              if (.not. agents) then ! [Non-functional]
+              if ((.not. agents) .and. (.not. ecology)) then ! [Non-functional]
                 ! Densities S(t) --> S(t + dt), ...
                 !call bulk_integrate_SEIR_malaria(ixy,V,...) --> this is the way malaria is currently handled in VECTRI
                 print*, "Bulk (VECTRI) malaria subroutine is non-functional yet --> Stop"

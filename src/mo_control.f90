@@ -10,6 +10,8 @@ MODULE mo_control
     ! These are overwritten by the input command when running MOBILE (when namelist_inout is called)
     logical :: input    =.true.  ! External population, driving files and model parameters
     logical :: agents   =.true.  ! Use agents, if false the program falls back to density
+    logical :: ecology  =.false. ! Vector ecology only (mobile.sh -e 1): VECTRI's ponds, larvae and adult vectors per cell
+                                 ! from rain and temperature; no agents, no mobility, no human infection
     logical :: coupling =.true. ! Use VECTRI
     logical :: gravity  =.true.  ! Use gravity model
     logical :: radial   =.false. ! If .true. build radial city, otherwise uniform 

@@ -33,7 +33,7 @@ MODULE mo_namelist
             integer :: vecID   ! Vector species: VECTRI's case (mo_constants: ivec); 0, An. gambiae, if the namelist has none
             
             ! Define namelist
-            namelist /INOUT/ run_name, disID, nsteps, seed, spin_up, vecID
+            namelist /INOUT/ run_name, disID, nsteps, seed, spin_up, vecID, ecology
             vecID = 0
 
             arg_num = 1
