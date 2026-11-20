@@ -4012,13 +4012,22 @@ echo "$*" >> "$HOME/saldo.txt"
 echo "account                start         end         total        localCluster   totConsumed     totConsumed     monthTotal     monthConsumed"
 echo "                                             (local h)   Consumed(local h)     (local h)               %      (local h)         (local h)"
 echo "-----------------------------------------------------------------------------------------------------------------------------------------"
-[ "$2" = "-a" ] && [ "$3" = "try26_garrido" ] &&  # Asked per user, it lists no project (LEONARDO, a new account)
-echo "try26_garrido       20260923    20261125          7500                 555           555             7.4          3571                 135"
-true
+# As LEONARDO on 20 Nov 2026: per user, only with --dcgp; by project, only by CINECA's spelling (IscrC_MALAGIC, not
+# Slurm's iscrc_malagic)
+try26='echo "try26_garrido       20260923    20261125          7500                 555           555             7.4          3571                 135"'
+malagic='echo "IscrC_MALAGIC       20261123    20270823         66000                   0             0             0.0             0                   0"'
+case "$*" in
+  "-b --dcgp") eval "$try26"; eval "$malagic";;
+  "-b") echo "username not existing"; exit 1;;
+  "-b -a try26_garrido"*) eval "$try26";;
+  "-b -a IscrC_MALAGIC"*) eval "$malagic";;
+  *) echo "account not existing"; exit 1;;
+esac
 """,
             "sacctmgr": """#!/bin/bash
 case "$*" in
-  *assoc*) echo "try26_garrido||normal,dcgp_qos_dbg"; echo "try26_garrido|dcgp_usr_prod|dcgp_qos_lprod,dcgp_qos_bprod";;
+  *assoc*) echo "try26_garrido||normal,dcgp_qos_dbg"; echo "try26_garrido|dcgp_usr_prod|dcgp_qos_lprod,dcgp_qos_bprod"
+           echo "iscrc_malagic||normal,dcgp_qos_dbg";;
   *qos*) printf "dcgp_qos_bprod||node=128||\ndcgp_qos_dbg|00:30:00|cpu=224,mem=988000M,node=2|2|2\n"  # LEONARDO, 17 Nov 2026
          printf "dcgp_qos_lprod|4-00:00:00|cpu=336,mem=1482000M,node=3||\nnormal||||\n";;
 esac
@@ -4030,7 +4039,8 @@ echo "PartitionName=lrd_all_serial DefaultTime=00:30:00 MaxNodes=UNLIMITED MaxTi
 """,
             "sacct": """#!/bin/bash
 case " $* " in
-  *" -a "*) echo "$*" > "$HOME/sacct_usage.txt"; printf "2000000\n55600\n";;
+  *" -A try26_garrido "*) echo "$*" >> "$HOME/sacct_usage.txt"; printf "2000000\n55600\n";;
+  *" -A iscrc_malagic "*) echo "$*" >> "$HOME/sacct_usage.txt";;  # Not started: no jobs
   *) echo "64190103|FAILED|28440"; echo "64192142|FAILED|25920";;
 esac
 """,
@@ -4049,16 +4059,25 @@ echo "64200001|cal_x|PENDING|0:00|20:00|(Priority)"
         cluster._write_cluster(folder, {"host": "leonardo", "folder": "x", "jobs": [{"id": "64190103"}, {"id": "64192142"}]})
         given = replace(settings, account="try26_garrido", qos="dcgp_qos_dbg", partition="dcgp_usr_prod", time="01:00:00", cpus=32)
         sections = cluster_info(given, folder)
-        self.assertIn("-S 2026-09-23 -E now", (home / "sacct_usage.txt").read_text())  # From the project's start, as saldo says
+        asked = (home / "sacct_usage.txt").read_text()
+        self.assertIn("-A try26_garrido -S 2026-09-23 -E now", asked)  # From each project's start, as saldo says
+        self.assertIn("-A iscrc_malagic -S 2026-11-23 -E now", asked)  # Slurm's name, saldo's start (its own spelling)
         record = {**read_calibration(folder), "completed": 78}
-        rows = {what: (value, warning) for what, value, _, warning in info_rows(sections, given, record, today=datetime.date(2026, 11, 12))}
+        listed = info_rows(sections, given, record, today=datetime.date(2026, 11, 12))
+        rows = {what: (value, warning) for what, value, _, warning in listed}
+        # The projects first, then for each its budget and its use, one row each
+        self.assertEqual([what for what, *_ in listed[:5]], ["Your projects and QOS", "Budget of IscrC_MALAGIC", "Used now by IscrC_MALAGIC",
+                                                              "Budget of try26_garrido", "Used now by try26_garrido"])
+        self.assertEqual(rows["Budget of IscrC_MALAGIC"], ("0 of 66,000 core-hours used (0.0 %); from 23 Nov 2026 to 23 Aug 2027, starts in "
+                                                          "11 days", False))
+        self.assertEqual(rows["Used now by IscrC_MALAGIC"], ("none yet: starts on 23 Nov 2026", False))
         self.assertEqual(rows["Budget of try26_garrido"], ("555 of 7,500 core-hours used (7.4 %); from 23 Sep 2026 to 25 Nov 2026, "
                                                           "13 days left", True))  # Less than 2 weeks left
         self.assertEqual(rows["Used now by try26_garrido"], ("571 core-hours since 23 Sep 2026: 6,929 left", False))
         # sacct over the whole project timing out (24 s of the earlier 25 on LEONARDO, 12 Nov): said, never as 0 core-hours
-        timed = {what: value for what, value, *_ in info_rows({**sections, "usage": ["20260923", "sacct-exit: 124", "0"]}, given)}
+        timed = {what: value for what, value, *_ in info_rows({**sections, "usage": ["try26_garrido|20260923|124|0"]}, given)}
         self.assertEqual(timed["Used now by try26_garrido"], "sacct did not answer within 120 s (it is slow over a whole project): Check again later")
-        self.assertEqual(rows["Your projects and QOS"][0], "try26_garrido: dcgp_qos_bprod, dcgp_qos_dbg, dcgp_qos_lprod, normal")
+        self.assertEqual(rows["Your projects and QOS"][0], "iscrc_malagic: dcgp_qos_dbg, normal; try26_garrido: dcgp_qos_bprod, dcgp_qos_dbg, dcgp_qos_lprod, normal")
         value, warning = rows["QOS dcgp_qos_dbg"]
         self.assertTrue(warning)
         self.assertIn("a job runs at most 30 min (its own), you may use at most 224 CPUs, 965 GB of memory, 2 nodes at a time, run at most 2 "
@@ -4072,7 +4091,8 @@ echo "64200001|cal_x|PENDING|0:00|20:00|(Priority)"
         # The choices offered after a Check: the projects with their budget, the partitions and the QOS of the account, with
         # their limits and what those make them for
         offered = cluster.choices(sections, "try26_garrido", "dcgp_usr_prod")
-        self.assertEqual(offered["account"], [("try26_garrido", "try26_garrido: 6,945 of 7,500 core-hours left, ends 25 Nov 2026")])
+        self.assertEqual(offered["account"], [("iscrc_malagic", "iscrc_malagic: 66,000 of 66,000 core-hours left, ends 23 Aug 2027"),
+                                              ("try26_garrido", "try26_garrido: 6,945 of 7,500 core-hours left, ends 25 Nov 2026")])
         self.assertEqual([name for name, _ in offered["partition"]], ["boost_usr_prod", "dcgp_usr_prod", "lrd_all_serial"])
         labels = dict(offered["qos"])
         self.assertEqual(sorted(labels), ["dcgp_qos_bprod", "dcgp_qos_dbg", "dcgp_qos_lprod", "normal"])
@@ -4103,16 +4123,21 @@ echo "64200001|cal_x|PENDING|0:00|20:00|(Priority)"
         self.assertEqual(rows["Nodes of dcgp_usr_prod"][0], "80 idle, 408 mixed, 942 allocated, 12 other (down, drained, reserved…)")
         # Without an account, QOS or partition: those parts are not asked, and the rest still said
         rows = {what for what, *_ in info_rows(cluster_info(replace(settings, account="", qos="", partition="")), settings)}
-        self.assertEqual(rows, {"Budget of try26_garrido", "Your projects and QOS", "Your jobs"})
+        # (no partition, so no --dcgp: saldo lists the new project neither per user nor by Slurm's name, which is said)
+        self.assertEqual(rows, {"Your projects and QOS", "Budget of try26_garrido", "Used now by try26_garrido", "Budget of iscrc_malagic",
+                                "Used now by iscrc_malagic", "Your jobs"})
         self.assertIn("saldo-exit: 0", sections["saldo"])
-        self.assertEqual((home / "saldo.txt").read_text().splitlines(), ["-b -a try26_garrido --dcgp", "-b -a try26_garrido"])  # By project, once a Check; --dcgp for a DCGP partition
+        # Per user and by project, once a Check; --dcgp for a DCGP partition
+        self.assertEqual(sorted((home / "saldo.txt").read_text().splitlines()),
+                         ["-b", "-b --dcgp", "-b -a iscrc_malagic", "-b -a iscrc_malagic --dcgp", "-b -a try26_garrido", "-b -a try26_garrido --dcgp"])
         # saldo too slow (timeout's exit 124), or not there: said as such, and the usage that needs its start date too
         for code, said in (("124", "saldo did not answer within 120 s for your projects (it is often slow): Check again later"),
                            ("127", "saldo is not there (not CINECA?)")):
             rows = {what: value for what, value, *_ in info_rows({**sections, "saldo": [f"saldo-exit: {code}"], "usage": []}, given)}
             self.assertEqual((rows["Budget"], rows["Used now by try26_garrido"]), (said, "needs the start of the project, from saldo"))
         rows = {what: value for what, value, *_ in info_rows({**sections, "usage": []}, replace(given, account="other"))}  # Not in saldo: no usage
-        self.assertEqual(rows["Used now by other"], "not in what saldo listed: is the Account right?")
+        self.assertEqual((rows["Budget of other"], rows["Used now by other"]),
+                         ("not in what saldo listed: is the Account right?", "needs the start of the project, from saldo"))
         # Times and costs
         self.assertEqual([wall_seconds(text) for text in ("00:30:00", "1-00:00:00", "30", "10:00", "UNLIMITED", "")],
                          [1800, 86400, 1800, 600, None, None])
