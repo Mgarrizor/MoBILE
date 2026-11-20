@@ -9,7 +9,8 @@ from pathlib import Path
 from shiny import reactive, render, ui
 
 from .calibration_engine import CalibrationError, _clock, _seconds_since, read_calibration, read_cluster
-from .cluster import (ClusterError, ClusterSettings, certificate, choices, cluster_info, info_rows, job_cost, last_log,
+from .cluster import (ClusterError, ClusterSettings, account_advice, certificate, choices, cluster_info, folder_advice, info_rows,
+                      job_cost, last_log,
                       load_settings, observation_files, refresh, remote_folder, runs_at_once, save_settings, send, stop, submit,
                       time_limit, wall_seconds)
 from .config import MAX_THREADS
@@ -57,6 +58,7 @@ def cluster_section():
                                                 "~ and $VARIABLES are those of the cluster."), value=saved.folder),
                      "On $WORK or $FAST, not on scratch: files there are deleted after 40 days. Short: the paths of the runs "
                      "must stay under 160 characters."),
+                ui.output_ui("cl_folder_advice"),
                 _box(text("cl_mobile", with_tip("MoBILE there", "The clone the job builds the model from, at the same commit "
                                                 "as here."), value=saved.mobile, placeholder="$MOBILE"),
                      "Empty: $MOBILE, as the setup lines set it (e.g. ~/mobile_env.sh)."),
@@ -69,6 +71,7 @@ def cluster_section():
                 _box(choice("cl_account", with_tip("Account", "The project the job is billed to (#SBATCH --account). "
                                                    "Check (Cluster information, above) lists yours, with what is left."),
                             saved.account), CHOOSE),
+                ui.output_ui("cl_account_advice"),
                 _box(choice("cl_partition", with_tip("Partition", "The nodes the job runs on (#SBATCH --partition). Check "
                                                      "lists them with their limits."), saved.partition),
                      "dcgp_usr_prod: LEONARDO's CPU nodes, 112 cores each."),
@@ -335,6 +338,39 @@ def cluster_server(input, output, session, chosen, changed):
             if current and current not in options:
                 options[current] = f"{current} (not in what the cluster listed)"
             ui.update_selectize(name, choices=options, selected=current or None)
+
+    @render.ui
+    def cl_account_advice():
+        """After a Check: the project chosen ends within days, has ended or has not started; the others, to switch to."""
+        found = asked()
+        if not found or found[2]:
+            return None
+        advice = account_advice(found[1], input.cl_account() or "")
+        if advice is None:
+            return None
+        said, offers = advice
+        buttons = [ui.tags.button(label, type="button", class_="btn btn-sm btn-outline-secondary py-0 me-1 mb-1",
+                                  onclick=f"Shiny.setInputValue('cl_use_account', '{name}', {{priority: 'event'}})")
+                   for name, label in offers]
+        return ui.div(ui.p(said, class_="small text-warning-emphasis mb-1"), *buttons, class_="mt-n1 mb-2")
+
+    @reactive.effect
+    @reactive.event(input.cl_use_account)
+    def use_account():
+        """A project offered under the Account: chosen (in the cluster's list after a Check), to be saved like the rest."""
+        name = input.cl_use_account()
+        found = asked()
+        options = dict(choices(found[1], name)["account"]) if found and not found[2] else {}
+        ui.update_selectize("cl_account", choices=options or {name: name}, selected=name)
+
+    @render.ui
+    def cl_folder_advice():
+        """After a Check: the folder lies in another project's work area than the Account's."""
+        found = asked()
+        if not found or found[2]:
+            return None
+        said = folder_advice(found[1], input.cl_folder() or "", input.cl_account() or "")
+        return ui.p(said, class_="small text-warning-emphasis mt-n1 mb-2") if said else None
 
     @render.ui
     def cl_info_table():

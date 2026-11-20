@@ -574,7 +574,13 @@ together (the Pareto front):
   action uses `ssh -o BatchMode=yes <host>`: log in first (e.g. CINECA's certificate of the day), or it says so at
   once. The **Cluster settings** (host, folder there, MoBILE there, setup lines, account, partition, QOS, time limit,
   CPUs, whole node, runs at the same time, a guess of how long a trial takes) each have an ⓘ and what to put; they
-  are kept for the next session. Defaults: CINECA LEONARDO, a DCGP node of 112 cores, where 16 runs × 7 threads per
+  are kept for the next session. After a Check, under the **Account**: when the project chosen ends within a week, has
+  ended, or has not started (by saldo's dates), a line says so, with a button for each other project of yours still
+  running (e.g. "Use iscrc_malagic (66,000 core-hours left, to 23 Aug 2027)") that chooses it. Under the **Folder
+  there**: when its path names another of your projects than the Account (its work area), a line says to move it to
+  the Account's work area once that exists; a calibration already sent keeps refreshing from the folder it was sent to
+  (its own `cluster.json`). In the Cluster information, the project chosen is marked "(the Account chosen)", and Slurm's
+  name of a project is followed by CINECA's where they differ (iscrc_malagic (IscrC_MALAGIC)). Defaults: CINECA LEONARDO, a DCGP node of 112 cores, where 16 runs × 7 threads per
   run did best for Senegal 1998–2003 (9.85 M agents); other setups may differ.
 - **Results**, for the calibration running or chosen, its figure chosen from a menu, of the objective chosen where the
   figure is of one, with what it shows and a link to Optuna's documentation: the **distributions of the calibrated
