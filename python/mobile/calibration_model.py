@@ -329,16 +329,48 @@ def process_observed(members, counts, model_steps, data, data_steps, observation
     return median_of(processed, shape), data_out, span, processed
 
 
+def _period_words(series):
+    """The typical period of a dated series' values, in words ("days", "weeks", "months", "years" ...), and its length in
+    days (the median of the values' spans)."""
+    days = float(np.median((pd.to_datetime(series.index["end"]) - pd.to_datetime(series.index["start"])).dt.days + 1))
+    for words, low, high in (("days", 1, 1), ("weeks", 6, 8), ("months", 28, 31), ("quarters", 89, 92), ("years", 365, 366)):
+        if low <= days <= high:
+            return words, days
+    return f"periods of about {days:.0f} days", days
+
+
 def _population(model, data):
-    """The observations' population N for each value of the model's series (dated, as the model's), by its start."""
-    if "N" not in data.extra or data.shape != "dated" or model.shape != "dated":
-        raise DataError("the observational model needs the observations' population (a column N) for each month")
+    """The observations' population N for each value of the model's series (dated, as the model's), matched to the
+    observations' value of the same period (the nearest start, within half a period). Errors say what is wrong in
+    general terms: no N, periods that differ (the model's series not yet in the observations' periods), or N missing."""
+    if data.shape != "dated" or model.shape != "dated" or "N" not in data.extra:
+        raise DataError("the observational model needs dated observations with their population for each value (a column "
+                        "N), to make the reported cases it draws per person as the observations are")
+    data_words, data_days = _period_words(data)
+    model_words, model_days = _period_words(model)
+    if not 0.75 <= model_days / data_days <= 1.33:
+        raise DataError(f"the observational model draws reported cases for each period the observations are given in "
+                        f"({data_words}), but the model's series is in {model_words} at that point: aggregate it into "
+                        f"{data_words} first (an Aggregate step at the start of the model's steps)")
     known = pd.Series(np.asarray(data.extra["N"], dtype="f8"), index=pd.to_datetime(data.index["start"]))
     known = known[~known.index.duplicated()].sort_index()
     starts = pd.to_datetime(model.index["start"])
-    found = known.reindex(starts, method="nearest", tolerance=pd.Timedelta(days=16)).to_numpy()
-    if np.isnan(found).any() or np.any(found <= 0):
-        raise DataError("the observations' population N is missing for some months of the model")
+    matched = pd.Series(np.arange(len(known), dtype="f8"), index=known.index).reindex(
+        starts, method="nearest", tolerance=pd.Timedelta(days=data_days / 2)).to_numpy()
+    found = np.full(len(starts), np.nan)
+    found[~np.isnan(matched)] = known.to_numpy()[matched[~np.isnan(matched)].astype(int)]
+    def span(mask):
+        dates = starts[mask]
+        return f"{dates.min():%Y-%m-%d} to {dates.max():%Y-%m-%d}"
+    if np.isnan(matched).any():
+        raise DataError(f"{int(np.isnan(matched).sum())} of the model's {len(starts)} periods ({span(np.isnan(matched))}) "
+                        "have no period of the observations to match: compare the model over the periods the "
+                        "observations cover")
+    bad = ~(found > 0)
+    if bad.any():
+        raise DataError(f"the observations' population N is missing or not above 0 for {int(bad.sum())} of the "
+                        f"{len(starts)} periods compared ({span(bad)}): give N for them, or compare periods where it "
+                        "is known")
     return found
 
 
