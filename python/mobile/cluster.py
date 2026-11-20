@@ -488,9 +488,12 @@ SALDO_SECONDS = 120  # saldo and the project's usage (sacct -a), slow: 18 s and 
 INFO_SCRIPT = r"""export PATH="$PATH:/cineca/bin"
 t() { if command -v timeout > /dev/null; then timeout "$1" "${@:2}"; else "${@:2}"; fi 2> /dev/null; }
 echo @@assoc; assoc=$(t {seconds} sacctmgr -n -P show assoc user="$USER" format=account,partition,qos); echo "$assoc"
-# saldo by project (asked per user, it lists none for a new account), each alongside the rest: it is often slow
+# saldo for all the user's projects, and by project too (asked per user, it listed none for a new account; by project,
+# it knows a project only by CINECA's spelling, e.g. IscrC_X where Slurm says iscrc_x), all alongside the rest: often slow
+accounts=$( (echo {account}; echo "$assoc" | cut -d'|' -f1) | grep . | sort -u)
 saldo_dir=$(mktemp -d)
-for a in $( (echo {account}; echo "$assoc" | cut -d'|' -f1) | grep . | sort -u); do
+(t {saldo_seconds} saldo -b {saldo_flags}; echo "saldo-exit: $?") > "$saldo_dir/@user" &
+for a in $accounts; do
   (t {saldo_seconds} saldo -b -a "$a" {saldo_flags}; echo "saldo-exit: $?") > "$saldo_dir/$a" &
 done
 # The limits of every QOS this user may use (and of the one chosen), and of every partition: for the choices offered
@@ -501,11 +504,16 @@ echo @@calibration; [ -n {ids} ] && t {seconds} sacct -n -X -P -j {ids} -o JobID
 echo @@mine; t {seconds} squeue --me -h -o '%A|%j|%T|%M|%l|%R'
 echo @@load; [ -n {partition} ] && t {seconds} sinfo -p {partition} -h -o '%T %D'
 wait; echo @@saldo; s=$(cat "$saldo_dir"/* 2> /dev/null); rm -rf "$saldo_dir"; echo "$s"
-echo @@usage; start=$(echo "$s" | awk -v a={account} '$1 == a && $2 ~ /^[0-9]{8}$/ {print $2}')
-if [ -n "$start" ]; then
-  echo "$start"; u=$(t {saldo_seconds} sacct -n -X -P -a -A {account} -S "${start:0:4}-${start:4:2}-${start:6:2}" -E now -o CPUTimeRAW)
-  echo "sacct-exit: $?"; echo "$u" | awk '{n += $1} END {print n + 0}'
-fi
+# What Slurm counted for each project since it started (its start from saldo, whatever the case of its name): one line
+# each, account|start|sacct's exit|CPU seconds, all alongside each other
+echo @@usage; usage_dir=$(mktemp -d)
+for a in $accounts; do
+  start=$(echo "$s" | awk -v a="$a" 'tolower($1) == tolower(a) && $2 ~ /^[0-9]{8}$/ {print $2; exit}')
+  [ -n "$start" ] || continue
+  (u=$(t {saldo_seconds} sacct -n -X -P -a -A "$a" -S "${start:0:4}-${start:4:2}-${start:6:2}" -E now -o CPUTimeRAW); e=$?
+   echo "$a|$start|$e|$(echo "$u" | awk '{n += $1} END {print n + 0}')") > "$usage_dir/$a" &
+done
+wait; cat "$usage_dir"/* 2> /dev/null; rm -rf "$usage_dir"
 echo @@end
 """
 
@@ -648,6 +656,18 @@ def _partition_said(fields):
     return ", ".join(part for part in parts if part)
 
 
+def _budgets(sections):
+    """{project name in lower case: {name (as saldo writes it), start, end, total, used, share}} of what saldo listed (each
+    project once, however many times it was asked)."""
+    found = {}
+    for line in sections.get("saldo", []):
+        parts = line.split()
+        if len(parts) >= 7 and len(parts[1]) == 8 and parts[1].isdigit() and parts[3].replace(".", "").isdigit():
+            found.setdefault(parts[0].lower(), {"name": parts[0], "start": parts[1], "end": parts[2], "total": float(parts[3]),
+                                                "used": float(parts[5]), "share": parts[6]})
+    return found
+
+
 def choices(sections, account=None, partition=None):
     """{"account", "partition", "qos": [(value, label)]} of what a Check found, for choosing rather than typing: the
     projects of this user (with their budget, if saldo said it), the partitions (their limits) and the QOS of the account
@@ -657,13 +677,9 @@ def choices(sections, account=None, partition=None):
         parts = line.split("|")
         if len(parts) >= 3 and parts[0]:
             allowed.setdefault(parts[0], set()).update(qos for qos in parts[2].split(",") if qos)
-    budgets = {}
-    for line in sections.get("saldo", []):
-        parts = line.split()
-        if len(parts) >= 7 and len(parts[1]) == 8 and parts[1].isdigit() and parts[3].replace(".", "").isdigit():
-            budgets.setdefault(parts[0], f"{float(parts[3]) - float(parts[5]):,.0f} of {float(parts[3]):,.0f} core-hours left, "
-                                         f"ends {_date(parts[2])}")
-    accounts = [(name, f"{name}: {budgets[name]}" if name in budgets else name) for name in sorted(allowed)]
+    budgets = {key: f"{budget['total'] - budget['used']:,.0f} of {budget['total']:,.0f} core-hours left, ends {_date(budget['end'])}"
+               for key, budget in _budgets(sections).items()}
+    accounts = [(name, f"{name}: {budgets[name.lower()]}" if name.lower() in budgets else name) for name in sorted(allowed)]
     partitions = [(name, f"{name}: {_partition_said(fields)}") for name, fields in sorted(partition_limits(sections).items())]
     limits = qos_limits(sections)
     qos = [(name, f"{name}: {_qos_said(name, limits[name], sections, partition)}" if name in limits else name)
@@ -677,42 +693,9 @@ def info_rows(sections, settings, record=None, today=None, folder=None):
     record has only once a run has ended). warning: the value needs attention."""
     today = today or datetime.date.today()
     rows = []
-    # The budget of each project, as CINECA last counted it
-    budgets = []
-    for line in sections.get("saldo", []):
-        parts = line.split()
-        if len(parts) >= 7 and len(parts[1]) == 8 and parts[1].isdigit() and parts[3].replace(".", "").isdigit():
-            account, start, end, total, used, share = parts[0], parts[1], parts[2], float(parts[3]), float(parts[5]), parts[6]
-            if any(account == known for known, *_ in budgets):
-                continue
-            left = (datetime.datetime.strptime(end, "%Y%m%d").date() - today).days
-            budgets.append((account, start, total))
-            rows.append((f"Budget of {account}", f"{used:,.0f} of {total:,.0f} core-hours used ({share} %); "
-                         f"from {_date(start)} to {_date(end)}" + (f", {left} days left" if left >= 0 else ", ended"),
-                         f"saldo -b -a {account} (as of CINECA's last update: it lags)", left < 14 or used > 0.9 * total))
-    exits = {line.split(":")[1].strip() for line in sections.get("saldo", []) if line.startswith("saldo-exit:")}
-    if "124" in exits:
-        rows.append(("Budget", f"saldo did not answer within {SALDO_SECONDS} s for "
-                     + ("a project" if budgets else "your projects") + " (it is often slow): Check again later", "saldo -b -a", True))
-    elif not budgets:
-        said = "saldo is not there (not CINECA?)" if "127" in exits else "saldo listed no project"
-        rows.append(("Budget", said, "saldo -b -a", True))
-    # Up to date: what Slurm counted since the project started, all its users
-    usage = sections.get("usage", [])
-    if settings.account and len(usage) >= 3 and usage[1] == "sacct-exit: 0" and usage[2].replace(".", "").isdigit():
-        total = next((total for account, _, total in budgets if account == settings.account), None)
-        used = float(usage[2]) / 3600
-        rows.append((f"Used now by {settings.account}", f"{used:,.0f} core-hours since {_date(usage[0])}"
-                     + (f": {total - used:,.0f} left" if total else ""), "sacct, all jobs of the project (up to date)",
-                     bool(total) and used > 0.9 * total))
-    elif settings.account and len(usage) >= 2:
-        rows.append((f"Used now by {settings.account}", f"sacct did not answer within {SALDO_SECONDS} s (it is slow over a whole "
-                     "project): Check again later" if usage[1] == "sacct-exit: 124" else f"sacct failed ({usage[1]})", "sacct", True))
-    elif settings.account and budgets:
-        rows.append((f"Used now by {settings.account}", "not in what saldo listed: is the Account right?", "sacct", True))
-    elif settings.account:
-        rows.append((f"Used now by {settings.account}", "needs the start of the project, from saldo", "sacct", False))
-    # The projects and QOS this user may use
+    # The projects and QOS this user may use, first; then, for each project, its budget (as CINECA last counted it) and
+    # what Slurm has counted since it started (up to date). A project is matched by its name whatever its case (Slurm's
+    # iscrc_x is CINECA's IscrC_X), and named as CINECA writes it.
     allowed = {}
     for line in sections.get("assoc", []):
         parts = line.split("|")
@@ -720,7 +703,50 @@ def info_rows(sections, settings, record=None, today=None, folder=None):
             allowed.setdefault(parts[0], set()).update(qos for qos in parts[2].split(",") if qos)
     if allowed:
         rows.append(("Your projects and QOS", "; ".join(f"{account}: {', '.join(sorted(qos))}" for account, qos in sorted(allowed.items())),
-                     "sacctmgr show assoc", bool(settings.account) and settings.account not in allowed))
+                     "sacctmgr show assoc", bool(settings.account) and settings.account.lower() not in {a.lower() for a in allowed}))
+    budgets = _budgets(sections)
+    usage = {}
+    for line in sections.get("usage", []):
+        parts = line.split("|")
+        if len(parts) == 4:
+            usage[parts[0].lower()] = parts[1:]
+    names = {key: budget["name"] for key, budget in budgets.items()}
+    for name in list(allowed) + ([settings.account] if settings.account else []):
+        names.setdefault(name.lower(), name)
+    exits = {line.split(":")[1].strip() for line in sections.get("saldo", []) if line.startswith("saldo-exit:")}
+    if not budgets:
+        if "124" in exits:
+            said = f"saldo did not answer within {SALDO_SECONDS} s for your projects (it is often slow): Check again later"
+        else:
+            said = "saldo is not there (not CINECA?)" if "127" in exits else "saldo listed no project"
+        rows.append(("Budget", said, "saldo -b", True))
+    for key in sorted(names, key=lambda key: names[key].lower()):
+        name, budget = names[key], budgets.get(key)
+        if budget:
+            left = (datetime.datetime.strptime(budget["end"], "%Y%m%d").date() - today).days
+            begins = (datetime.datetime.strptime(budget["start"], "%Y%m%d").date() - today).days
+            rows.append((f"Budget of {name}", f"{budget['used']:,.0f} of {budget['total']:,.0f} core-hours used ({budget['share']} %); "
+                         f"from {_date(budget['start'])} to {_date(budget['end'])}"
+                         + (f", starts in {begins} day{'s' if begins != 1 else ''}" if begins > 0 else f", {left} days left" if left >= 0 else ", ended"),
+                         f"saldo -b (as of CINECA's last update: it lags)", begins <= 0 and (left < 14 or budget["used"] > 0.9 * budget["total"])))
+        elif budgets:
+            rows.append((f"Budget of {name}", "not in what saldo listed" + (": is the Account right?" if key not in {a.lower() for a in allowed} else ""),
+                         "saldo -b", key == settings.account.lower()))
+        found = usage.get(key)
+        if found and found[1] == "0" and found[2].replace(".", "").isdigit():
+            used = float(found[2]) / 3600
+            total = budget["total"] if budget else None
+            if datetime.datetime.strptime(found[0], "%Y%m%d").date() > today:
+                said, warning = f"none yet: starts on {_date(found[0])}", False
+            else:
+                said = f"{used:,.0f} core-hours since {_date(found[0])}" + (f": {total - used:,.0f} left" if total else "")
+                warning = bool(total) and used > 0.9 * total
+            rows.append((f"Used now by {name}", said, "sacct, all jobs of the project (up to date)", warning))
+        elif found:
+            rows.append((f"Used now by {name}", f"sacct did not answer within {SALDO_SECONDS} s (it is slow over a whole project): "
+                         "Check again later" if found[1] == "124" else f"sacct failed (exit {found[1]})", "sacct", True))
+        elif not budget:
+            rows.append((f"Used now by {name}", "needs the start of the project, from saldo", "sacct", False))
     # The limits of the QOS chosen, and the time limit against them (the partition's, where the QOS has none of its own)
     found = qos_limits(sections).get(settings.qos)
     if found:
