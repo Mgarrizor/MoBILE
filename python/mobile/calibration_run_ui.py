@@ -693,15 +693,16 @@ def coverage_parts(record):
                                                for k, part in enumerate(parts, start=1)]
 
 
-def paired_band(band, model, data):
-    """(low, high) of a band of reported series (trial_band: on the values of the model series) on the periods the model
-    and the data are paired on, as the plots draw them; None without a band."""
+def model_band(band, model):
+    """(low, high) of a band of reported series (trial_band) on the values of the model series, as comparison_figure
+    draws it over all the model's values (also where the data were cut); None without a band. Raises ValueError if it
+    does not match the model series."""
     if band is None:
         return None
     low, _, high = band
-    if len(low) != len(model.values):
+    if len(low) != len(model.values) or len(high) != len(model.values):
         raise ValueError("its band of reported series does not match its model series")
-    return pair(replace(model, values=np.asarray(low, dtype="f8")), data)[0], pair(replace(model, values=np.asarray(high, dtype="f8")), data)[0]
+    return np.asarray(low, dtype="f8"), np.asarray(high, dtype="f8")
 
 
 def coverage_of(row, part, index):
@@ -2063,7 +2064,7 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
                 if window and data.shape != "dated":  # E.g. a climatology: that of the calibration years, as scored
                     part = "calibration"
                     model, data, m, d, labels = trial_comparison(folder, number, index, part, kind=kind)
-                reported = paired_band(trial_band(folder, number, index, part, kind), model, data)
+                reported = model_band(trial_band(folder, number, index, part, kind), model)
             except (DataError, OSError, KeyError, ValueError) as error:
                 return f"Trial {number} cannot be drawn: {error}.", None
             # The drivers of the run of the trial (its first seed), within the periods the model and the data share
