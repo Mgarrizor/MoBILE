@@ -108,6 +108,9 @@ fi
 #                             10: Ae. albopictus [Dengue not written]
 #                             11: Ae. aegypti    [Dengue not written]
 
+#           -e Vector ecology only (0: no ; 1: VECTRI's vectors alone, no people modelled; needs -v 1 -d 1)
+            ecology=0
+
 #           -d vectorDis       [Non-functional]
             vectorDis=0       
 
@@ -168,6 +171,7 @@ var_42="-E ${prebuilt}"
 # VECTRI
 var_50="-v ${vectri}"
 var_51="-V ${vectorID}"
+var_52="-e ${ecology}"
 
 
 read -r -d '' command << EOM
@@ -200,6 +204,7 @@ $var_42
 
 $var_50
 $var_51
+$var_52
 
 EOM
 
