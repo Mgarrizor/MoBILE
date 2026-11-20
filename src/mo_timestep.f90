@@ -107,13 +107,13 @@ subroutine time_step(disID,itime)
                 ! Densities S(t) --> S(t + dt), ...
                 !call bulk_integrate_SEIR_malaria(ixy,V,...) --> this is the way malaria is currently handled in VECTRI
                 print*, "Bulk (VECTRI) malaria subroutine is non-functional yet --> Stop"
-                STOP
+                ERROR STOP
               end if
               !
 #endif  
             case default
               print *, "Incorrect case, choose disID between: 0 (cholera) and 1 (malaria)"
-            STOP
+            ERROR STOP
             end SELECT
             !
           !=
