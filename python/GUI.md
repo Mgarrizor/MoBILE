@@ -313,7 +313,10 @@ The **Data** box:
      more, each at 8 phases, on a series as long, and compared with the same cycles far from the ends (times the
      filter's gain there). The ends reach as far as the error exceeds **Error kept** (5% of a cycle's amplitude at
      first). **Cut them** (the default): they are missing, so never compared with the model, and the plots still show
-     them, dotted, over a red band marked "cut". **Keep them**: only a note says how far they reach. Either way the
+     them, dotted, over a red band marked "cut" (in a comparison of the model and the data, "model cut" or "data cut"
+     at the start of the side's own cut months, "cut" where both sides were cut alike). In such a comparison over time,
+     each side is drawn over all its own values, the model and its band also where the data were cut, and the other
+     way round; the metrics compare only the months both have. **Keep them**: only a note says how far they reach. Either way the
      notes give the reach, the test cycles and the largest error. A filter that, once cut, leaves less than two of its
      longest periods is refused, with the length it needs. As a guide, on monthly values with a 5% error: a low pass at
      2 years cuts 1 to 2 years at each end; a high pass at 18 months, 20 months; a band of 1.5 to 3 years needs about

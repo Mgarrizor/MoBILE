@@ -577,16 +577,26 @@ def cut_spans(observations):
     return [(start.iloc[a], end.iloc[b - 1] + pd.Timedelta(days=1)) for a, b in zip(np.flatnonzero(edges == 1), np.flatnonzero(edges == -1))]
 
 
-def mark_cut(figure, *series, row=None):
+def mark_cut(figure, *series, row=None, names=None):
     """Shade in red, behind the traces, the periods a filter cut at the ends of any of series, each with a small 'cut'
-    at its top that says why on hover."""
-    spans = sorted({span for observations in series for span in cut_spans(observations)})
+    at its top that says why on hover. names: what each series is (e.g. "model", "data"), for a label saying whose
+    values were cut ("model cut", "data cut"; "cut" where all of them were), the first at the top, the next below it, so
+    that spans drawn over each other stay apart."""
+    whose = {}
+    for k, observations in enumerate(series):
+        for span in cut_spans(observations):
+            whose.setdefault(span, []).append(k)
     where = {"row": row, "col": 1} if row else {}
-    for x0, x1 in spans:
+    for (x0, x1), cut in sorted(whose.items()):
         figure.add_vrect(x0=x0, x1=x1, fillcolor=CUT_FILL, line_width=0, layer="below", **where)
-        figure.add_annotation(x=x0 + (x1 - x0) / 2, y=1, yref=f"{'y' if not row or row == 1 else f'y{row}'} domain",
-                              xref="x" if not row or row == 1 else f"x{row}", text="cut", showarrow=False, yanchor="top",
-                              font={"size": 10, "color": CUT_TEXT}, hovertext=CUT_HOVER)
+        alone = names is not None and len(cut) < len(series)
+        text = f"{names[cut[0]]} cut" if alone else "cut"
+        hover = (f"{names[cut[0]].capitalize()}: " + CUT_HOVER[0].lower() + CUT_HOVER[1:]) if alone else CUT_HOVER
+        # A side's own label at the start of its span, where it begins: centred, it could sit over the other side's
+        figure.add_annotation(x=x0 if alone else x0 + (x1 - x0) / 2, xanchor="left" if alone else "center", xshift=3 if alone else 0,
+                              y=1, yref=f"{'y' if not row or row == 1 else f'y{row}'} domain",
+                              xref="x" if not row or row == 1 else f"x{row}", text=text, showarrow=False, yanchor="top",
+                              yshift=-14 * cut[0] if alone else 0, font={"size": 10, "color": CUT_TEXT}, hovertext=hover)
     return figure
 
 
@@ -725,32 +735,42 @@ REPORTED_BAND = "95 % of the reported series (observational model)"
 
 
 def comparison_figure(model, data, labels, model_values, data_values, scale=False, drivers=(), reported=None):
-    """The model and the observations on the periods (months, seasons, years, age bands) they share, as paired by
-    calibration_metrics.pair. With scale, the model times the ratio of the means, to compare timing by eye; the legend
-    says by how much. drivers are (name, label, observations) of possible drivers such as rainfall, each drawn in a panel
-    below, sharing the time (or month) axis when they are on it too. reported: (low, high) of the band of reported series
-    of the observational model on the paired periods, the model then being their median (not scaled)."""
+    """The model and the observations: over time, each side over all its own values (the model where the data were cut
+    too, and the other way round), each side's values cut by a filter dotted and shaded as its own; other shapes (months,
+    seasons, years, age bands) as bars on the periods they share, as paired by calibration_metrics.pair. model_values and
+    data_values are the paired values, which the metrics compare. With scale, the model times the ratio of the means of
+    the paired values, to compare timing by eye; the legend says by how much. drivers are (name, label, observations) of
+    possible drivers such as rainfall, each drawn in a panel below, sharing the time (or month) axis when they are on it
+    too. reported: (low, high) of the band of reported series of the observational model, on the values of the model
+    series (as trial_band keeps it), the model then being their median (not scaled)."""
     factor = float(np.mean(data_values) / np.mean(model_values)) if scale and reported is None and np.mean(model_values) > 0 else 1.0
     middle = ", median across seeds" if "lowest" in model.extra else ""
     model_label = f"Model{middle} × {factor:.3g} (scaled to the mean of the data)" if factor != 1.0 else f"Model: {model.name}{middle}"
     if reported is not None:
         model_label = "Model: median of the reported series (observational model)"
+    model_at = {model.label(i): i for i in range(len(model))}
+    if reported is not None and any(len(side) != len(model.values) for side in reported):
+        raise ValueError("the band of reported series does not match the model series")
     if data.shape == "dated":
-        middle = {data.label(i): pd.Timestamp(data.index["start"].iloc[i]) + (pd.Timestamp(data.index["end"].iloc[i])
-                  - pd.Timestamp(data.index["start"].iloc[i])) / 2 for i in range(len(data))}
-        x = [middle[label] for label in labels]
+        def middles(series):  # Each value at the middle of its period
+            start = pd.to_datetime(series.index["start"]).to_numpy()
+            return start + (pd.to_datetime(series.index["end"]).to_numpy() - start) / 2
+
+        data_x, model_x = middles(data), middles(model)
+        data_labels, model_labels = [data.label(i) for i in range(len(data))], list(model_at)
         spread = []
-        model_at = {model.label(i): i for i in range(len(model))}
-        found = _spread(model, [model_at[label] for label in labels])
-        if found:  # A seed band: its spread over the seeds, on the paired periods
-            spread = _band(x, found[0], found[1], MODELLED, "Model", found[2], factor)
+        found = _spread(model)
+        if found:  # A seed band: its spread over the seeds, wherever the model has values
+            spread = _band(model_x, found[0], found[1], MODELLED, "Model", found[2], factor)
         if reported is not None:  # The band of the reported series instead
-            spread = _band(x, np.asarray(reported[0]), np.asarray(reported[1]), MODELLED, "Model", REPORTED_BAND)
-        traces = [go.Scatter(x=x, y=data_values, mode="lines+markers", line={"color": OBSERVED, "width": 1.5}, marker={"size": 4},
-                             name=f"Data: {data.name}", customdata=labels, hovertemplate="Data, %{customdata}: %{y:.4g}<extra></extra>"),
+            spread = _band(model_x, np.asarray(reported[0], dtype="f8"), np.asarray(reported[1], dtype="f8"), MODELLED, "Model",
+                           REPORTED_BAND)
+        traces = [go.Scatter(x=data_x, y=np.asarray(data.values, dtype="f8"), mode="lines+markers", line={"color": OBSERVED, "width": 1.5},
+                             marker={"size": 4}, name=f"Data: {data.name}", customdata=data_labels,
+                             hovertemplate="Data, %{customdata}: %{y:.4g}<extra></extra>"),
                   *spread,
-                  go.Scatter(x=x, y=model_values * factor, mode="lines+markers", line={"color": MODELLED, "width": 1.5},
-                             marker={"size": 4}, name=model_label, customdata=labels,
+                  go.Scatter(x=model_x, y=np.asarray(model.values, dtype="f8") * factor, mode="lines+markers",
+                             line={"color": MODELLED, "width": 1.5}, marker={"size": 4}, name=model_label, customdata=model_labels,
                              hovertemplate="Model, %{customdata}: %{y:.4g}<extra></extra>")]
         # The values a filter cut at the ends, of each: dotted, not compared
         for series, colour, label, scaled in ((data, OBSERVED, "Data", 1.0), (model, MODELLED, "Model", factor)):
@@ -761,13 +781,14 @@ def comparison_figure(model, data, labels, model_values, data_values, scale=Fals
                 traces.append(_edge_trace(replace(series, extra={EDGE: ends * scaled}), colour, label, at,
                                           [series.label(i) for i in range(len(series))]))
     else:
+        rows = [model_at[label] for label in labels]  # The band at the bars' periods
         band = {} if reported is None else {"error_y": {  # The band of the reported series as whiskers
-            "type": "data", "symmetric": False, "array": np.asarray(reported[1]) - model_values,
-            "arrayminus": model_values - np.asarray(reported[0]), "color": "#475569", "thickness": 1.2}}
+            "type": "data", "symmetric": False, "array": np.asarray(reported[1], dtype="f8")[rows] - model_values,
+            "arrayminus": model_values - np.asarray(reported[0], dtype="f8")[rows], "color": "#475569", "thickness": 1.2}}
         traces = [go.Bar(x=labels, y=data_values, marker={"color": OBSERVED}, name=f"Data: {data.name}"),
                   go.Bar(x=labels, y=model_values * factor, marker={"color": MODELLED},
                          name=model_label + (f"; whiskers: {REPORTED_BAND}" if reported is not None else ""), **band)]
-    title = "Model and data, on the periods they share"
+    title = "Model and data" if data.shape == "dated" else "Model and data, on the periods they share"
     if not drivers:
         figure = go.Figure(traces, layout=_base_layout(title=title))
         figure = _plain_axes(figure, X_TITLES[data.shape], data.units)
@@ -775,7 +796,7 @@ def comparison_figure(model, data, labels, model_values, data_values, scale=Fals
                              legend={"orientation": "h", "x": 0.5, "xanchor": "center", "y": -0.22, "yanchor": "top"})
         if data.shape != "dated":
             figure.update_xaxes(type="category")
-        return mark_cut(figure, model, data)
+        return mark_cut(figure, model, data, names=("model", "data"))
     rows = 1 + len(drivers)
     panels = [(name, label, _panel(observations)) for name, label, observations in drivers]
     shared = all(series.shape == data.shape for _, _, panel in panels for _, series in panel)
@@ -822,7 +843,7 @@ def comparison_figure(model, data, labels, model_values, data_values, scale=Fals
     if data.shape != "dated":
         figure.update_xaxes(type="category")
     figure.update_annotations(font={"size": 12})
-    return mark_cut(figure, model, data, row=1)
+    return mark_cut(figure, model, data, row=1, names=("model", "data"))
 
 
 def message_figure(text):

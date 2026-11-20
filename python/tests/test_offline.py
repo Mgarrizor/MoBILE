@@ -5196,34 +5196,69 @@ class TestObservationModelInTheGui(unittest.TestCase):
                                                                                        "symptomatic cases, not"))
 
     def test_band_on_the_plot(self):
+        """The band on the model's own values (trial_band), drawn over all of them, as the model itself; the metrics' pairs
+        unchanged. Control: no band, the model scaled; a climatology, whiskers at the bars' months."""
         from mobile.calibration_metrics import pair
-        from mobile.calibration_run_ui import paired_band
+        from mobile.calibration_run_ui import model_band
         from mobile.plots import REPORTED_BAND, comparison_figure
         model = replace(self.data, values=self.data.values * 0.5, name="Inew")
         data = replace(self.data, values=np.r_[np.full(6, np.nan), self.data.values[6:]])  # The first 6 months missing
         low, high = model.values - 1, model.values + 2
-        band = paired_band((low, model.values, high), model, data)
+        band = model_band((low, model.values, high), model)
+        np.testing.assert_allclose(band[0], low)
         m, d, labels = pair(model, data)
-        self.assertEqual(len(band[0]), len(labels))
-        np.testing.assert_allclose(band[0], m - 1)
-        np.testing.assert_allclose(band[1], m + 2)
         figure = comparison_figure(model, data, labels, m, d, scale=True, reported=band)
-        names = [trace.name for trace in figure.data]
-        self.assertIn(f"Model: {REPORTED_BAND}", names)
-        self.assertIn("Model: median of the reported series (observational model)", names)
-        np.testing.assert_allclose(figure.data[-1].y, m)  # The median as it is: not scaled to the data
+        traces = {trace.name: trace for trace in figure.data}
+        self.assertIn(f"Model: {REPORTED_BAND}", traces)
+        median = traces["Model: median of the reported series (observational model)"]
+        np.testing.assert_allclose(median.y, model.values)  # As it is, not scaled, and over all its 24 months
+        np.testing.assert_allclose(traces[f"Model: {REPORTED_BAND}"].y, low)  # The band too, where the data are missing
         with self.assertRaises(ValueError):
-            paired_band((low[:5], model.values[:5], high[:5]), model, data)
+            model_band((low[:5], model.values[:5], high[:5]), model)
         # Control: without a band, the model scaled and no band
         plain = comparison_figure(model, data, labels, m, d, scale=True)
         self.assertNotIn(f"Model: {REPORTED_BAND}", [trace.name for trace in plain.data])
-        self.assertIsNone(paired_band(None, model, data))
+        self.assertIsNone(model_band(None, model))
         # A climatology: the band as whiskers on the model's bars
         months = replace(self.data, shape="climatology", values=np.arange(1.0, 13.0),
                          index=pd.DataFrame({"month": np.arange(1, 13)}))
         m, d, labels = pair(months, months)
         bars = comparison_figure(months, months, labels, m, d, reported=(m - 1, m + 1))
         np.testing.assert_allclose(bars.data[1].error_y.array, np.ones(12))
+
+    def test_each_side_over_its_own_months(self):
+        """Handover item 38: the data cut 3 years before the model's end (as a low pass cuts the data where they stop):
+        the model still drawn to its last month, each side's cut months shaded and named as its own. Control: the same
+        months on both sides, every value drawn as before and one plain 'cut'."""
+        from mobile.calibration_metrics import pair
+        from mobile.calibration_steps import EDGE
+        from mobile.plots import comparison_figure
+        start = pd.date_range("2000-01", periods=96, freq="MS")
+        index = pd.DataFrame({"start": start.values.astype("datetime64[D]"),
+                              "end": (start + pd.offsets.MonthEnd(0)).values.astype("datetime64[D]")})
+        values = np.linspace(-8.0, -7.5, 96)
+        model_cut = np.full(96, np.nan)
+        model_cut[84:] = values[84:]  # The model's last year cut
+        model = replace(self.data, values=np.where(np.isfinite(model_cut), np.nan, values), index=index, name="Inew",
+                        extra={EDGE: model_cut})
+        data_cut = np.full(96, np.nan)
+        data_cut[48:] = values[48:] - 1  # The data's last 4 years cut
+        data = replace(self.data, values=np.where(np.isfinite(data_cut), np.nan, values - 1), index=index, extra={EDGE: data_cut})
+        m, d, labels = pair(model, data)
+        self.assertEqual(len(labels), 48)  # The metrics: the first 4 years only
+        figure = comparison_figure(model, data, labels, m, d)
+        model_line = next(trace for trace in figure.data if trace.name and trace.name.startswith("Model: Inew"))
+        drawn = [label for label, y in zip(model_line.customdata, model_line.y) if np.isfinite(y)]
+        self.assertEqual((drawn[0], drawn[-1], len(drawn)), ("2000-01", "2006-12", 84))  # To the model's own last month
+        texts = sorted(annotation.text for annotation in figure.layout.annotations)
+        self.assertEqual(texts, ["data cut", "model cut"])
+        # Control: the same months on both sides, one 'cut' for both
+        same = replace(data, values=np.where(np.isfinite(model_cut), np.nan, values - 1), extra={EDGE: model_cut - 1})
+        m, d, labels = pair(model, same)
+        both = comparison_figure(model, same, labels, m, d)
+        self.assertEqual([annotation.text for annotation in both.layout.annotations], ["cut"])
+        data_line = next(trace for trace in both.data if trace.name and trace.name.startswith("Data"))
+        self.assertEqual(int(np.isfinite(np.asarray(data_line.y, dtype="f8")).sum()), 84)
 
 
 class TestObjectiveLimitsInTheGui(unittest.TestCase):
