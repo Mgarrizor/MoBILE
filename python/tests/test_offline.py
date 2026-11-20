@@ -2539,6 +2539,31 @@ class TestLogOffsetInCases(unittest.TestCase):
             np.testing.assert_allclose(processed, np.array([expected(row) for row in drawn]), rtol=1e-10)
             self.assertTrue(np.all(np.isfinite(processed)))
 
+    def test_population_errors_say_what_is_wrong(self):
+        """The observational model's population of each period, matched to the model's series: its errors name the case in
+        general terms (periods that differ, periods not covered, N missing), and a series in the same periods passes."""
+        from mobile.calibration_data import DataError, Observations
+        from mobile.calibration_model import _population
+
+        def daily(first, last):
+            days = pd.date_range(first, last, freq="D")
+            index = pd.DataFrame({"start": days.values.astype("datetime64[D]"), "end": days.values.astype("datetime64[D]")})
+            return Observations(shape="dated", values=np.ones(len(days)), index=index, units="cases", name="cases", aggregation="sum")
+
+        population = np.linspace(3e5, 4e5, 24)
+        data = self.monthly(np.full(24, 30.0), population)
+        np.testing.assert_allclose(_population(self.monthly(np.ones(24)), data), population)  # Control: same periods
+        with self.assertRaisesRegex(DataError, r"given in \(months\), but the model's series is in days.*aggregate it into months"):
+            _population(daily("1990-01-01", "1991-12-31"), data)
+        with self.assertRaisesRegex(DataError, r"6 of the model's 30 periods \(1992-01-01 to 1992-06-01\) have no period of the observations"):
+            _population(self.monthly(np.ones(30)), data)
+        gaps = population.copy()
+        gaps[[3, 4]] = np.nan
+        with self.assertRaisesRegex(DataError, r"N is missing or not above 0 for 2 of the 24 periods compared \(1990-04-01 to 1990-05-01\)"):
+            _population(self.monthly(np.ones(24)), self.monthly(np.full(24, 30.0), gaps))
+        with self.assertRaisesRegex(DataError, "a column N"):
+            _population(self.monthly(np.ones(24)), self.monthly(np.full(24, 30.0)))
+
     def test_refused_without_the_observational_model(self):
         from mobile.calibration_engine import CalibrationError, _observation
         objective = {"name": "level", "metric": "rmse", "steps": [self.LOG]}
