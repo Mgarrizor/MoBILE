@@ -300,7 +300,7 @@ itime = 1
       !
     else
       print *, 'Check point: Input --> STOP'
-      STOP 
+      ERROR STOP 
     end if !----------------------------------------
     !=
     ! Safety check
@@ -308,7 +308,7 @@ itime = 1
       if ((nsteps > ntime) .and. out_rain) then
         print *, nsteps, ntime
         print *, 'Number of simulation steps exceeds length of forcing --> STOP'
-        STOP
+        ERROR STOP
       end if
     !=
     ! By now the following should be defined:
@@ -373,7 +373,7 @@ itime = 1
   if ((network)) then ! [Non-functional]
     print *, 'Mobility scheme: empirical network'
     print *, 'Check point: mobility scheme -> Empirical network non-functional --> STOP'
-    STOP 
+    ERROR STOP 
   !
   ! 0.3.2 Gravity model
   elseif ((gravity)) then
@@ -385,7 +385,7 @@ itime = 1
   elseif ((radiation)) then ! [Non-functional]
     print *, 'Mobility scheme: radiation model'
     print *, 'Check point: mobility scheme -> Radiation model non-functional --> STOP'
-    STOP
+    ERROR STOP
     !
     ! call mob_radiation_init(??) 
     !
@@ -531,7 +531,7 @@ if (spin_up==1) then
       !
     case default
       print *, "Incorrect case, choose disID between: 0 (cholera) and 1 (malaria)"
-    STOP
+    ERROR STOP
     end SELECT
     !
     end do spin_up_loop

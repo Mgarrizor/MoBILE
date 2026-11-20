@@ -35,7 +35,7 @@ subroutine build_spinup_climatology()
     nyears_avail = nsteps / ndays_year
     if (nyears_avail < 1) then
         print *, 'Cannot build spin-up climatology: less than 1 full year of driver data --> Exit'
-        STOP
+        ERROR STOP
     end if
     nyears_use = min(nyears_avail, max_clim_years)
 
@@ -111,7 +111,7 @@ subroutine DI(x_new,x_old,tol_SU,conv)
         print *, sum(x_new(:)), sum(x_old(:))
     else 
         print*, 'Cannot compute mean during Spin-up --> Exit'
-        STOP
+        ERROR STOP
     end if
     !
     if (eps_SU <= tol_SU) then

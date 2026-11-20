@@ -144,7 +144,7 @@ MODULE mo_grid
 
       case default
         print *, "Incorrect case, choose disID between: 0 (cholera) and 1 (malaria)"
-        STOP
+        ERROR STOP
       end SELECT
       
   end subroutine grid_dis
@@ -308,7 +308,7 @@ MODULE mo_grid
         if ((ncity==1)) then ! If we have only one city we place it in the centre
           if (MOD(nxy,2) .eq. 0) then ! If N is even 
             print *, 'Choose N odd --> Stop'
-            stop
+            ERROR STOP
           else                      ! Else N is odd and city centre is one point
             xycent = ceiling(nxy/2.)
   
