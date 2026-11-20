@@ -687,6 +687,76 @@ def choices(sections, account=None, partition=None):
     return {"account": accounts, "partition": partitions, "qos": qos}
 
 
+ENDS_SOON = 7  # Days: a project ending within them, or ended, is said under the Account, with the others offered
+
+
+def _allowed(sections):
+    """{account (as Slurm writes it): {QOS}} of the projects this user may use (sacctmgr show assoc)."""
+    allowed = {}
+    for line in sections.get("assoc", []):
+        parts = line.split("|")
+        if len(parts) >= 3 and parts[0]:
+            allowed.setdefault(parts[0], set()).update(qos for qos in parts[2].split(",") if qos)
+    return allowed
+
+
+def account_advice(sections, account, today=None):
+    """(what to say of the Account chosen, [(account as Slurm writes it, label)] of the others to offer) after a Check,
+    or None when there is nothing to say: the project chosen ends within ENDS_SOON days, has ended, or has not started
+    (from saldo's dates). Offered: the other projects of the user not ended, with what is left (as saldo counts it)."""
+    today = today or datetime.date.today()
+    budgets = _budgets(sections)
+    budget = budgets.get((account or "").strip().lower())
+    if budget is None:
+        return None
+    day = lambda stamp: datetime.datetime.strptime(stamp, "%Y%m%d").date()
+    left, begins = (day(budget["end"]) - today).days, (day(budget["start"]) - today).days
+    name = budget["name"]
+    if left < 0:
+        said = f"{name} ended on {_date(budget['end'])}: a job billed to it cannot run."
+    elif left <= ENDS_SOON:
+        said = (f"{name} ends on {_date(budget['end'])} ({'today' if left == 0 else f'in {left} day' + ('s' if left != 1 else '')}): "
+                "a job after that cannot run on it.")
+    elif begins > 0:
+        said = f"{name} starts on {_date(budget['start'])} (in {begins} day{'s' if begins != 1 else ''}): a job before then may not run."
+    else:
+        return None
+    offers = []
+    for other in sorted(_allowed(sections)):
+        found = budgets.get(other.lower())
+        if other.lower() == account.strip().lower() or found is None or day(found["end"]) < today:
+            continue
+        starts = day(found["start"]) > today
+        offers.append((other, f"Use {other} ({found['total'] - found['used']:,.0f} core-hours left, "
+                              f"{'from ' + _date(found['start']) + ' ' if starts else ''}to {_date(found['end'])})"))
+    return said, offers
+
+
+def folder_advice(sections, folder, account, today=None):
+    """What to say of the folder there after a Check, or None: when a part of its path is the name of another project
+    of the user than the Account chosen (its work area, e.g. /leonardo_work/<project>/...), whether that project has ended
+    or ends soon. Calibrations already sent keep their own folder (their cluster.json), whatever this setting says."""
+    today = today or datetime.date.today()
+    names = {key: budget for key, budget in _budgets(sections).items()}
+    for name in _allowed(sections):
+        names.setdefault(name.lower(), None)
+    chosen = (account or "").strip().lower()
+    parts = [part.lower() for part in (folder or "").split("/") if part]
+    owner = next((part for part in parts if part in names), None)
+    if owner is None or owner == chosen or not chosen:
+        return None
+    budget = names[owner]
+    shown = budget["name"] if budget else owner
+    when = ""
+    if budget:
+        left = (datetime.datetime.strptime(budget["end"], "%Y%m%d").date() - today).days
+        when = f" (it ended on {_date(budget['end'])})" if left < 0 else f" (it ends on {_date(budget['end'])})"
+    other = names.get(chosen)
+    return (f"The folder is in the work area of {shown}{when}, not of the Account {other['name'] if other else account}: once "
+            f"that project's work area exists, move the folder there. Calibrations already sent keep the folder they were "
+            f"sent to.")
+
+
 def info_rows(sections, settings, record=None, today=None, folder=None):
     """[(what, value, from, warning)] of the cluster information (cluster_info), for the settings and, if given, the record of
     the calibration chosen (its jobs asked about) and its folder (its trials counted in the study copied back, which the
@@ -702,7 +772,10 @@ def info_rows(sections, settings, record=None, today=None, folder=None):
         if len(parts) >= 3 and parts[0]:
             allowed.setdefault(parts[0], set()).update(qos for qos in parts[2].split(",") if qos)
     if allowed:
-        rows.append(("Your projects and QOS", "; ".join(f"{account}: {', '.join(sorted(qos))}" for account, qos in sorted(allowed.items())),
+        spelt = {key: budget["name"] for key, budget in _budgets(sections).items()}
+        shown = lambda account: (f"{account} ({spelt[account.lower()]})" if account.lower() in spelt and spelt[account.lower()] != account
+                                 else account)
+        rows.append(("Your projects and QOS", "; ".join(f"{shown(account)}: {', '.join(sorted(qos))}" for account, qos in sorted(allowed.items())),
                      "sacctmgr show assoc", bool(settings.account) and settings.account.lower() not in {a.lower() for a in allowed}))
     budgets = _budgets(sections)
     usage = {}
@@ -725,7 +798,8 @@ def info_rows(sections, settings, record=None, today=None, folder=None):
         if budget:
             left = (datetime.datetime.strptime(budget["end"], "%Y%m%d").date() - today).days
             begins = (datetime.datetime.strptime(budget["start"], "%Y%m%d").date() - today).days
-            rows.append((f"Budget of {name}", f"{budget['used']:,.0f} of {budget['total']:,.0f} core-hours used ({budget['share']} %); "
+            rows.append((f"Budget of {name}" + (" (the Account chosen)" if key == settings.account.strip().lower() else ""),
+                         f"{budget['used']:,.0f} of {budget['total']:,.0f} core-hours used ({budget['share']} %); "
                          f"from {_date(budget['start'])} to {_date(budget['end'])}"
                          + (f", starts in {begins} day{'s' if begins != 1 else ''}" if begins > 0 else f", {left} days left" if left >= 0 else ", ended"),
                          f"saldo -b (as of CINECA's last update: it lags)", begins <= 0 and (left < 14 or budget["used"] > 0.9 * budget["total"])))

@@ -4067,17 +4067,44 @@ echo "64200001|cal_x|PENDING|0:00|20:00|(Priority)"
         rows = {what: (value, warning) for what, value, _, warning in listed}
         # The projects first, then for each its budget and its use, one row each
         self.assertEqual([what for what, *_ in listed[:5]], ["Your projects and QOS", "Budget of IscrC_MALAGIC", "Used now by IscrC_MALAGIC",
-                                                              "Budget of try26_garrido", "Used now by try26_garrido"])
+                                                              "Budget of try26_garrido (the Account chosen)", "Used now by try26_garrido"])
         self.assertEqual(rows["Budget of IscrC_MALAGIC"], ("0 of 66,000 core-hours used (0.0 %); from 23 Nov 2026 to 23 Aug 2027, starts in "
                                                           "11 days", False))
         self.assertEqual(rows["Used now by IscrC_MALAGIC"], ("none yet: starts on 23 Nov 2026", False))
-        self.assertEqual(rows["Budget of try26_garrido"], ("555 of 7,500 core-hours used (7.4 %); from 23 Sep 2026 to 25 Nov 2026, "
+        self.assertEqual(rows["Budget of try26_garrido (the Account chosen)"], ("555 of 7,500 core-hours used (7.4 %); from 23 Sep 2026 to 25 Nov 2026, "
                                                           "13 days left", True))  # Less than 2 weeks left
         self.assertEqual(rows["Used now by try26_garrido"], ("571 core-hours since 23 Sep 2026: 6,929 left", False))
         # sacct over the whole project timing out (24 s of the earlier 25 on LEONARDO, 12 Nov): said, never as 0 core-hours
         timed = {what: value for what, value, *_ in info_rows({**sections, "usage": ["try26_garrido|20260923|124|0"]}, given)}
         self.assertEqual(timed["Used now by try26_garrido"], "sacct did not answer within 120 s (it is slow over a whole project): Check again later")
-        self.assertEqual(rows["Your projects and QOS"][0], "iscrc_malagic: dcgp_qos_dbg, normal; try26_garrido: dcgp_qos_bprod, dcgp_qos_dbg, dcgp_qos_lprod, normal")
+        # Slurm's name with CINECA's beside it where they differ, so that the rows below read as the same project
+        self.assertEqual(rows["Your projects and QOS"][0], "iscrc_malagic (IscrC_MALAGIC): dcgp_qos_dbg, normal; try26_garrido: "
+                                                           "dcgp_qos_bprod, dcgp_qos_dbg, dcgp_qos_lprod, normal")
+        # Under the Account (handover item 37): the project chosen ending within a week, ended or not started, with the
+        # others to switch to (Slurm's name, what saldo says is left); nothing to say otherwise (controls)
+        from mobile.cluster import account_advice, folder_advice
+        day = lambda text: datetime.date.fromisoformat(text)
+        self.assertIsNone(account_advice(sections, "try26_garrido", day("2026-11-12")))  # 13 days left: the Budget row says it
+        self.assertEqual(account_advice(sections, "try26_garrido", day("2026-11-20")),
+                         ("try26_garrido ends on 25 Nov 2026 (in 5 days): a job after that cannot run on it.",
+                          [("iscrc_malagic", "Use iscrc_malagic (66,000 core-hours left, from 23 Nov 2026 to 23 Aug 2027)")]))
+        self.assertEqual(account_advice(sections, "try26_garrido", day("2026-11-26")),
+                         ("try26_garrido ended on 25 Nov 2026: a job billed to it cannot run.",
+                          [("iscrc_malagic", "Use iscrc_malagic (66,000 core-hours left, to 23 Aug 2027)")]))
+        self.assertEqual(account_advice(sections, "iscrc_malagic", day("2026-11-20")),
+                         ("IscrC_MALAGIC starts on 23 Nov 2026 (in 3 days): a job before then may not run.",
+                          [("try26_garrido", "Use try26_garrido (6,945 core-hours left, to 25 Nov 2026)")]))
+        self.assertIsNone(account_advice(sections, "iscrc_malagic", day("2026-12-01")))
+        self.assertIsNone(account_advice(sections, "someone_else", day("2026-11-20")))
+        # The folder in another project's work area than the Account's; controls: the same project (whatever its case), or
+        # no project's name in the path
+        self.assertEqual(folder_advice(sections, "/leonardo_work/try26_garrido/calibration", "iscrc_malagic", day("2026-11-20")),
+                         "The folder is in the work area of try26_garrido (it ends on 25 Nov 2026), not of the Account "
+                         "IscrC_MALAGIC: once that project's work area exists, move the folder there. Calibrations already "
+                         "sent keep the folder they were sent to.")
+        self.assertIsNone(folder_advice(sections, "/leonardo_work/try26_garrido/calibration", "try26_garrido", day("2026-11-20")))
+        self.assertIsNone(folder_advice(sections, "/leonardo_work/IscrC_MALAGIC/calibration", "iscrc_malagic", day("2026-11-20")))
+        self.assertIsNone(folder_advice(sections, "$WORK/calibration", "iscrc_malagic", day("2026-11-20")))
         value, warning = rows["QOS dcgp_qos_dbg"]
         self.assertTrue(warning)
         self.assertIn("a job runs at most 30 min (its own), you may use at most 224 CPUs, 965 GB of memory, 2 nodes at a time, run at most 2 "
