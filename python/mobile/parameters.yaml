@@ -279,6 +279,28 @@ parameters:
       fewer eggs. Detinova (1962) gives 37.1 at high humidity.
     source: Detinova (1962), as in VECTRI (gono in utils/vectri/mo_methods.f90)
     species: {2: 36.7, 10: 100.545, 11: 100.0}
+  rtgono:
+    group: Vector
+    section: Development
+    value: 7.7
+    min: 7.0
+    max: 15.0
+    curated: false
+    info: Threshold air temperature (°C) of the gonotrophic cycle. Each day adds (T - rtgono) / dgono of the cycle, T being
+      the temperature, so a higher threshold gives a slower cycle and fewer bites in cool weather.
+    source: utils/vectri/mo_constants.f90 (gono in utils/vectri/mo_methods.f90)
+    species: {2: 9.9, 10: 7.12, 11: 14.5}
+  rtsporo:
+    group: Vector
+    section: Development
+    value: 16.0
+    min: 14.0
+    max: 20.0
+    curated: false
+    info: Threshold temperature (°C) of parasite development in the mosquito. Each day adds (T - rtsporo) / dsporo of the
+      sporogonic cycle, so a higher threshold gives fewer infective mosquitoes in cool weather.
+    source: utils/vectri/mo_constants.f90 (sporo in utils/vectri/mo_methods.f90)
+    species: {10: 18.0, 11: 18.0}
   rvecsurv:
     group: Vector
     section: Adult survival
@@ -297,6 +319,48 @@ parameters:
     curated: false
     info: Lowest daily survival of adult mosquitoes.
     source: utils/vectri/mo_constants.f90
+  rlarv_tmin:
+    group: Vector
+    section: Larvae and eggs
+    value: 12.16
+    min: 8.0
+    max: 18.0
+    curated: false
+    info: Lowest water temperature (°C) at which larvae grow. Larval growth rises linearly with the water temperature above
+      it, so a higher value gives slower growth and fewer adults in cool water.
+    source: utils/vectri/mo_constants.f90 (rlarvmature, rebuilt in init_vectri)
+    species: {2: 15.5, 10: 9.938, 11: 10.0}
+  rlarvsurv:
+    group: Vector
+    section: Larvae and eggs
+    value: 0.987
+    min: 0.8
+    max: 1.0
+    curated: false
+    info: Daily survival of larvae, before the rain and crowding mortality. 0.987 fits the Craig and Bayoh data combined.
+    source: utils/vectri/mo_constants.f90
+    species: {2: 0.85, 10: 1.0, 11: 1.0}
+  rbiocapacity:
+    group: Vector
+    section: Larvae and eggs
+    value: 100.0
+    min: 50.0
+    max: 300.0
+    curated: false
+    info: Larval carrying capacity of 1 m² of water (larval biomass, mg/m²). Above it larvae die of crowding, so it caps the
+      adults a given water surface can produce.
+    source: utils/vectri/mo_constants.f90
+    species: {10: 218.091, 11: 218.0}
+  neggmn:
+    group: Vector
+    section: Larvae and eggs
+    value: 60.0
+    min: 30.0
+    max: 120.0
+    curated: false
+    info: Eggs laid by a female per gonotrophic cycle.
+    source: utils/vectri/mo_constants.f90
+    species: {10: 82.9793, 11: 50.0}
   wpond_max:
     group: Hydro
     section: Temporary ponds
@@ -402,6 +466,25 @@ parameters:
     info: Fraction of the urban breeding sites (gutters, tyres and the like) that the mosquito uses.
     source: utils/vectri/mo_constants.f90
     species: {1: 0.1, 10: 0.02149, 11: 0.02149}
+  wurbn_tau:
+    group: Hydro
+    section: Urban water
+    value: 20.0
+    min: 5.0
+    max: 100.0
+    curated: false
+    info: 'Population density (people/km²) scale of urban breeding sites: their fraction of a cell is wurbn_sf
+      log(density / wurbn_tau + 1).'
+    source: utils/vectri/mo_constants.f90
+  wurbn_sf:
+    group: Hydro
+    section: Urban water
+    value: 0.005
+    min: 0.001
+    max: 0.02
+    curated: false
+    info: Scale factor of the urban breeding sites, wurbn_sf log(density / wurbn_tau + 1) of a cell.
+    source: utils/vectri/mo_constants.f90
   rlarv_flushtau:
     group: Hydro
     section: Rain-driven larval mortality

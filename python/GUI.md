@@ -65,8 +65,9 @@ Everything a run needs that is not a parameter or an output.
   - **The species' own values:** VECTRI sets some parameters per species (`init_constants` in
     `utils/vectri/mo_constants.f90`), but a run writes every slider to `&CONST`, which the model reads afterwards. So
     applying a new species puts its values on the sliders it changes (`species` in `parameters.yaml`: `wpond_ratio`,
-    `wperm_ratio`, `wurbn_ratio`, `dgono`, `dsporo`, `rlarv_flushmin`), with a note; a value outside a slider's range
-    gets the range value ±50 %, a placeholder. Other sliders you moved keep their value. Below the rows, before
+    `wperm_ratio`, `wurbn_ratio`, `dgono`, `dsporo`, `rtgono`, `rtsporo`, `rlarv_tmin`, `rlarvsurv`, `rbiocapacity`,
+    `neggmn`, `rlarv_flushmin`), with a note; a value outside a slider's range gets the range value ±50 %, a
+    placeholder. Other sliders you moved keep their value. Below the rows, before
     applying, a note says what a new species will change. **Use as template** brings the species and the mode back.
 - **Run parameters**: project name, the period to simulate (a start and
   an end date, by default the first and last day of the rainfall file, to which **Reset** returns; the total time is
