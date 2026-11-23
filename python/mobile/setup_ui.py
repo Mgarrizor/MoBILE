@@ -10,6 +10,7 @@ from .driving import LAT_NAMES, LON_NAMES, POP_NAMES, RAIN_NAMES, TEMP_NAMES, TI
 from .grid import pop_coordinates
 from .layout import player_controls, with_tip
 from .plots import COLOUR_MAPS
+from .species import DISEASES, HUMANS, VECTORS, disabled, label, vectors_for
 from .setup import OPTIONAL_FILES, REGION_MODES, REQUIRED_FILES, region_mode
 from .worldpop import COUNTRIES, PRODUCTS, product_countries, year_label
 
@@ -18,30 +19,69 @@ SUFFIX_NAMES = {"netcdf": ("netCDF (.nc)",), "text": ("text (.txt, .csv)",), "da
 
 
 FILE_LABELS = {key: label for key, label, _ in (*REQUIRED_FILES, *OPTIONAL_FILES)}
-MODEL_CHOICES = {"1": "VECTRI-ABM (malaria)", "0": "Cholera model (to come)"}
-MODELS_TO_COME = {0}  # disID listed in the menu, greyed out: not tested yet
+MODELS_TO_COME = disabled(DISEASES)  # disID shown in the menu, greyed out: not available yet
 AVAILABLE_MODEL = 1
-MODEL_TO_COME_NOTE = "Cholera model is not available yet; VECTRI-ABM is selected."
+ECOLOGY_ONLY = "input.setup_ecology"  # Typed, for what the Setup tab hides at once; the other tabs follow the applied setup
+
+
+def model_to_come_note(disease):
+    return f"The {DISEASES[disease][0].lower()} model is not available yet; malaria is selected."
 
 
 def available_model(config):
-    """(config, note): a setup with a model still to come runs VECTRI-ABM instead, with a note saying so.
+    """(config, note): a setup with a model still to come runs malaria instead, with a note saying so.
     Only in the GUI: `mobile run` still runs any model."""
-    if config.run["disID"] not in MODELS_TO_COME:
+    disease = config.run["disID"]
+    if disease not in MODELS_TO_COME:
         return config, None
-    return replace(config, run={**config.run, "disID": AVAILABLE_MODEL}), MODEL_TO_COME_NOTE
+    return replace(config, run={**config.run, "disID": AVAILABLE_MODEL}), model_to_come_note(disease)
 
 
-def _model_select(selected):
-    """The model menu, with the models still to come shown but not selectable."""
-    menu = ui.input_select("setup_disID", "Model", MODEL_CHOICES, selected=selected)
-    pending = [menu]
+def menu_row(id, title, choices, selected, off=()):
+    """A row of the model menu: buttons, one chosen; those in `off` shown but greyed out."""
+    row = ui.input_radio_buttons(id, title, choices, selected=selected, inline=True)
+    pending = [row]
     while pending:
         tag = pending.pop()
-        if getattr(tag, "name", None) == "option" and int(tag.attrs["value"]) in MODELS_TO_COME:
+        if getattr(tag, "name", None) == "input" and tag.attrs.get("value") in off:
             tag.attrs["disabled"] = ""
         pending.extend(getattr(tag, "children", []))
-    return menu
+    return row
+
+
+def vector_choices(disease, ecology):
+    """{vecID: label} of the vector row: the species of the disease, or all of them in the vector-ecology-only mode."""
+    return {str(vec): label(VECTORS, vec) for vec in vectors_for(disease, ecology)}
+
+
+def model_menu(config):
+    """The model, from the top: how humans are represented, then the disease, then its vector; or, with the switch,
+    the vectors alone (vector ecology only), any species."""
+    run = config.run
+    ecology = run["ecology"] == 1
+    disease = run["disID"] if run["disID"] not in MODELS_TO_COME else AVAILABLE_MODEL
+    return ui.card(
+        ui.card_header("Model"),
+        ui.input_switch("setup_ecology", with_tip(
+            "Vector ecology only",
+            "VECTRI's ponds, larvae and adult vectors in each cell, driven by rainfall and temperature, with no people "
+            "modelled: no agents, demography, mobility or infection, so no infective vectors either. Any vector species "
+            "can be chosen, Aedes included. The outputs are rainfall, temperature, the water fields and the vectors."),
+            value=ecology),
+        ui.div(
+            ui.panel_conditional(
+                f"!{ECOLOGY_ONLY}",
+                menu_row("setup_human", "1. Human representation", {key: label(HUMANS, key) for key in HUMANS}, "agents",
+                         disabled(HUMANS)),
+                menu_row("setup_disID", "2. Disease", {str(key): label(DISEASES, key) for key in DISEASES}, str(disease),
+                         {str(key) for key in MODELS_TO_COME}),
+            ),
+            menu_row("setup_vecID", "3. Vector", vector_choices(disease, ecology), str(run["vecID"])),
+            class_="model-menu",
+        ),
+        ui.output_ui("setup_vector_note"),
+        class_="mb-3",
+    )
 
 
 def _shapes_inputs(config):
@@ -130,7 +170,6 @@ def setup_tab(config):
     run_box = ui.card(
         ui.card_header("Run parameters"),
         ui.input_text("setup_project", "Project", value=config.project, width="100%"),
-        _model_select(str(run["disID"])),
         ui.div(
             ui.tags.label("Period to simulate (default: all the driving data)", class_="form-label mb-0"),
             ui.input_action_button("setup_period_reset", "Reset", class_="btn-sm btn-outline-primary ms-2",
@@ -152,10 +191,9 @@ def setup_tab(config):
         ui.card_header("Driving files"),
         ui.output_ui("example_note"),
         *[_path_input(f"setup_{key}", label, setup_value(config, key), kind) for key, label, kind in REQUIRED_FILES],
-        _age_inputs(config),
+        ui.panel_conditional(f"!{ECOLOGY_ONLY}", _age_inputs(config)),
         _shapes_inputs(config),
-        _growth_inputs(config),
-        ui.accordion(
+        ui.panel_conditional(f"!{ECOLOGY_ONLY}", _growth_inputs(config), ui.accordion(
             ui.accordion_panel(
                 ui.TagList("Optional files ", ui.tags.span("(Beta release - do not use)", class_="text-danger ms-1")),
                 *[_path_input(f"setup_{key}", label, setup_value(config, key), kind) for key, label, kind in OPTIONAL_FILES],
@@ -163,13 +201,14 @@ def setup_tab(config):
                 value="optional_files",
             ),
             open=False,
-        ),
+        )),
     )
     return ui.div(
         ui.p("Choose the model, the period to simulate, the driving data and, if not the whole grid, the region to simulate, then press ",
              ui.tags.strong("Apply setup"), ". Next, set the parameters in the Parameters & SA tab and press Run in the sidebar.",
              class_="text-muted"),
         driving_files_help(),
+        model_menu(config),
         ui.layout_columns(run_box, files_box, col_widths=(5, 7)),
         ui.div(
             ui.input_action_button("apply_setup", "Apply setup", class_="btn-primary btn-lg"),
@@ -178,7 +217,7 @@ def setup_tab(config):
         ),
         _region_card(config),
         _preview_box(),
-        _age_card(),
+        ui.panel_conditional(f"!{ECOLOGY_ONLY}", _age_card()),
         class_="mt-3",
     )
 

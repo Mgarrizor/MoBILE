@@ -1348,6 +1348,9 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         except ValueError as error:
             found.append(str(error))
         found += observation_problems(observation(), objectives())
+        if observation() and setup().ecology:
+            found.append("The observational model turns the model's cases into reported ones: vector ecology only models no "
+                         "people, so no cases. Turn it off, and compare the vector or water outputs.")
         parameters = chosen_parameters()
         for parameter in parameters:
             low, high = parameter.low, parameter.high

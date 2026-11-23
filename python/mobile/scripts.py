@@ -34,6 +34,21 @@ $(document).on('shiny:sessioninitialized', applyTheme);
 """
 PAGE_STYLE = """
 .logo { background: white; border-radius: 4px; padding: 2px; }
+/* The model menu of the Setup tab: each choice of a row is a button; those in development greyed out */
+.model-menu .shiny-input-radiogroup { margin-bottom: 0.4rem; }
+.model-menu .radio-inline { position: relative; padding-left: 0 !important; margin: 0 0.4rem 0.3rem 0 !important; }
+.model-menu .radio-inline input { position: absolute; left: 0; top: 0; width: 1px; height: 1px; margin: 0 !important;
+                                  opacity: 0 !important; pointer-events: none; }
+.model-menu .radio-inline span { display: inline-block; padding: 0.3rem 0.85rem; border: 1px solid var(--bs-primary);
+                                 border-radius: 0.375rem; color: var(--bs-primary); cursor: pointer; }
+.model-menu .radio-inline input:checked + span { background: var(--bs-primary); color: #fff; }
+.model-menu .radio-inline input:focus-visible + span { outline: 2px solid var(--bs-primary); outline-offset: 2px; }
+.model-menu .radio-inline input:disabled + span { border-color: var(--bs-secondary-color); color: var(--bs-secondary-color);
+                                                  opacity: 0.65; cursor: not-allowed; }
+/* What a vector-ecology-only setup does not use (no people modelled), while one is applied (ECOLOGY_HANDLER) */
+body.ecology-only .human-only { display: none !important; }
+body.ecology-only #param_tab .nav-link[data-value="Human"],
+body.ecology-only #param_tab .nav-link[data-value="Demography"] { display: none; }  /* Not in parameters.ECOLOGY_GROUPS */
 .sidebar-heading { font-size: 1.1rem; font-weight: 600;
                    color: var(--bs-primary); margin: 0.25rem 0 0; }
 .bslib-sidebar-layout > .sidebar > .sidebar-content { gap: 0.7rem; padding: 1.1rem 1.1rem 1rem; }
@@ -473,6 +488,10 @@ $(document).on('shiny:updateinput', function(event) {
 
 
 # The dots of the preview: a row selects its dot, its cross removes it
+ECOLOGY_HANDLER = """
+Shiny.addCustomMessageHandler('ecology_only', function(on) { document.body.classList.toggle('ecology-only', on); });
+"""
+
 DOTS_HANDLER = """
 $(document).on('click', '.dot-remove', function(event) {
   event.stopPropagation();
@@ -564,6 +583,14 @@ function markParameters() {
   });
 }
 $(document).on('shiny:inputchanged', function(event) { if (event.name.startsWith('param_')) setTimeout(markParameters, 0); });
+// Where each slider starts, {id: {start, step}}: they change with the vector species
+Shiny.addCustomMessageHandler('slider_starts', function(starts) {
+  for (const [id, mark] of Object.entries(starts)) {
+    const box = document.getElementById(id) && document.getElementById(id).closest('.param-slider');
+    if (box) { box.dataset.start = mark.start; box.dataset.step = mark.step; }
+  }
+  setTimeout(markParameters, 0);
+});
 $(document).on('shiny:value', function(event) { if (event.name === 'parameter_sliders') setTimeout(markParameters, 0); });
 """
 

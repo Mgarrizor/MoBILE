@@ -28,8 +28,10 @@ from mobile.config import (
     read_params,
 )
 from mobile.parameters import (
-    PARAMETER_GROUPS, all_parameters, run_parameters, shown_parameters, slider_start, to_model, to_shown,
+    PARAMETER_GROUPS, all_parameters, run_parameters, shown_parameters, slider_parameters, slider_start, species_changes,
+    species_spec, to_model, to_shown,
 )
+from mobile.species import VECTORS
 from mobile.rundir import create_run_dir, fill_template
 from mobile.app import free_port
 from mobile.layout import OUTPUT_FLAGS, logo_files, publications
@@ -38,7 +40,7 @@ from mobile.plots import (
     MAX_DOTS, add_dot, cell_envelope, climate_figure, colour_values, default_dot, grid_step, index_map_figure,
     indices_figure, map_figure, monthly_figure, move_dot, next_cells, remove_dot, second_order_figure, units_label,
 )
-from mobile.setup_ui import AVAILABLE_MODEL, MODEL_TO_COME_NOTE, _model_select, available_model, setup_problems
+from mobile.setup_ui import AVAILABLE_MODEL, available_model, menu_row, model_menu, model_to_come_note, setup_problems, vector_choices
 from mobile.variables import age_choices, age_groups, preferred_variable, resolve_variable, variable_choices
 from mobile.basemap import cell_size, load_basemap
 from mobile.driving import climatology, field_limits, mean_age, open_field
@@ -66,6 +68,26 @@ from mobile.sensitivity import (
 )
 
 CONFIG = example_config()
+
+
+def species_defaults(mobile):
+    """{vecID: {name: value}} set in each CASE of VECTRI's SELECT CASE (ivec) in init_constants, and {name: value} set
+    before it (the generic values, which a species without its own keeps)."""
+    vectri = Path(mobile, "utils", "vectri", "mo_constants.f90").read_text()
+    vectri = vectri[vectri.lower().index("subroutine init_constants"):]
+    start = re.search(r"SELECT\s+CASE\s*\(\s*ivec\s*\)", vectri, re.I)
+    body = vectri[start.end():re.search(r"END\s+SELECT", vectri, re.I).start()]
+
+    def numbers(text):
+        found = {}
+        for line in text.splitlines():
+            match = re.match(r"^\s*([A-Za-z_]\w*)\s*=\s*([-+0-9.eEdD]+)\s*(?:!.*)?$", line)
+            if match:
+                found[match.group(1)] = float(match.group(2).lower().replace("d", "e"))
+        return found
+
+    cases = re.split(r"^\s*CASE\s*\(\s*(\d+)\s*\)", body, flags=re.I | re.M)
+    return {int(vec): numbers(text) for vec, text in zip(cases[1::2], cases[2::2])}, numbers(vectri[:start.start()])
 
 
 def fortran_defaults(mobile, model="malaria"):
@@ -177,7 +199,7 @@ class TestConfig(unittest.TestCase):
             spec = parameters[name]
             self.assertTrue(spec["min"] <= slider_start(name) <= spec["max"], f"{name}: starts outside its range")
             self.assertAlmostEqual(to_shown(name, to_model(name, slider_start(name))), slider_start(name), msg=name)
-        self.assertEqual(len(shown_parameters()), 48)
+        self.assertEqual(len(shown_parameters()), 56)
 
     def test_parameter_file_matches_the_source(self):
         malaria, cholera = fortran_defaults(MOBILE), fortran_defaults(MOBILE, "cholera")
@@ -515,7 +537,7 @@ class TestClimatology(unittest.TestCase):
 
 
 class TestModelChoice(unittest.TestCase):
-    """The cholera model is listed as to come: not selectable, and a setup with it runs VECTRI-ABM in the GUI."""
+    """The models still to come (cholera, dengue) are shown greyed out, and a setup with one runs malaria in the GUI."""
 
     def setUp(self):
         work_in_a_scratch_folder(self)
@@ -525,7 +547,8 @@ class TestModelChoice(unittest.TestCase):
         cholera = replace(example, run={**example.run, "disID": 0})
         config, note = available_model(cholera)
         self.assertEqual(config.run["disID"], AVAILABLE_MODEL)
-        self.assertEqual(note, MODEL_TO_COME_NOTE)
+        self.assertEqual(note, model_to_come_note(0))
+        self.assertIn("cholera model is not available yet", note)
         self.assertEqual({key: value for key, value in config.run.items() if key != "disID"},
                          {key: value for key, value in cholera.run.items() if key != "disID"})
 
@@ -534,10 +557,122 @@ class TestModelChoice(unittest.TestCase):
         self.assertEqual(example.run["disID"], 1)
         self.assertEqual(available_model(example), (example, None))
 
-    def test_menu_greys_out_cholera(self):
-        menu = str(_model_select("1"))
-        self.assertRegex(menu, r'<option value="0" disabled[^>]*>Cholera model \(to come\)</option>')
-        self.assertNotRegex(menu, r'<option value="1"[^>]*disabled')
+    def test_menu_greys_out_what_is_to_come(self):
+        menu = str(model_menu(Config.load(CONFIG)))
+        for value, text in (("bulk", r"Bulk \(in development\)"), ("2", r"Dengue \(to come\)"), ("0", r"Cholera \(to come\)")):
+            self.assertRegex(menu, rf'<input type="radio" name="setup_\w+" value="{value}" disabled[^>]*/> <span>{text}</span>')
+        for value in ("agents", "1", "0\" checked"):
+            self.assertNotRegex(menu, rf'value="{value}"[^>]*disabled')
+        # Control: the row disables only what it is given
+        self.assertNotIn("disabled", str(menu_row("x", "X", {"a": "A"}, "a")))
+        self.assertIn("disabled", str(menu_row("x", "X", {"a": "A"}, "a", {"a"})))
+
+    def test_vectors_by_disease_and_mode(self):
+        self.assertEqual(vector_choices(1, False), {"0": "An. gambiae", "1": "An. funestus (not evaluated)", "2": "An. sacharovi"})
+        self.assertEqual(list(vector_choices(1, True)), ["0", "1", "2", "10", "11"])  # Any species in the ecology-only mode
+        self.assertEqual(list(vector_choices(2, False)), ["10", "11"])
+
+
+class TestVectorSpecies(unittest.TestCase):
+    """The vector species (mobile.sh -V) and the vector-ecology-only mode (-e): their checks, their values on the
+    sliders, and the run script."""
+
+    def setUp(self):
+        work_in_a_scratch_folder(self)
+        self.config = Config.load(CONFIG)
+
+    def species(self, **run):
+        return replace(self.config, run={**self.config.run, **run})
+
+    def test_species_table_matches_the_source(self):
+        cases, generic = species_defaults(MOBILE)
+        self.assertEqual(set(cases), set(VECTORS))
+        for name, spec in shown_parameters().items():
+            for vec in VECTORS:
+                expected = cases[vec].get(name, generic.get(name, spec["value"]))
+                self.assertTrue(math.isclose(species_spec(name, vec)["value"], expected, rel_tol=1e-9),
+                                f"{name}, vecID {vec}: parameters.yaml {species_spec(name, vec)['value']}, source {expected}")
+        self.assertEqual(species_spec("wperm_ratio", 1)["value"], 0.7)
+
+    def test_species_parser_detects_a_change(self):
+        # Control: a species' value changed in a copy of the source is found, and only it
+        with tempfile.TemporaryDirectory() as copy:
+            path = Path(copy, "utils", "vectri", "mo_constants.f90")
+            path.parent.mkdir(parents=True)
+            text, count = re.subn(r"(CASE\(10\).*?wpond_ratio=)0\.00944", r"\g<1>0.5", Path(MOBILE, "utils", "vectri", "mo_constants.f90").read_text(),
+                                  count=1, flags=re.S)
+            self.assertEqual(count, 1)
+            path.write_text(text)
+            (changed, _), (source, _) = species_defaults(copy), species_defaults(MOBILE)
+            self.assertEqual(changed[10]["wpond_ratio"], 0.5)
+            self.assertEqual(source[10]["wpond_ratio"], 0.00944)
+            self.assertEqual(changed[11], source[11])
+
+    def test_ranges_hold_the_species_value(self):
+        self.assertEqual(species_spec("wpond_ratio", 1)["min"], shown_parameters()["wpond_ratio"]["min"])  # 0.5: inside
+        wide = species_spec("wperm_ratio", 1)  # 0.7, out of 0.003-0.009: +/- 50 %, at most 1 for a fraction
+        self.assertEqual((wide["min"], wide["max"], wide["curated"]), (0.35, 1.0, False))
+        flush = species_spec("rlarv_flushmin", 10)  # 78.5: not a fraction
+        self.assertEqual((flush["min"], flush["max"]), (39.25, 117.75))
+        self.assertEqual(set(slider_parameters(10, True)), {n for n, s in shown_parameters().items() if s["group"] in ("Vector", "Hydro", "Interventions")})
+        self.assertEqual(species_changes(0, 0), {})
+        self.assertEqual(set(species_changes(10)), {"wpond_ratio", "wperm_ratio", "wurbn_ratio", "dgono", "dsporo", "rlarv_flushmin",
+                                                    "rtgono", "rtsporo", "rlarv_tmin", "rlarvsurv", "rbiocapacity", "neggmn"})
+        self.assertEqual(set(species_changes(2)), {"wpond_ratio", "wperm_ratio", "dgono", "rtgono", "rlarv_tmin", "rlarvsurv"})
+        self.assertEqual(set(species_changes(1)), {"wpond_ratio", "wperm_ratio", "wurbn_ratio"})
+
+    def test_run_writes_the_species_values(self):
+        self.assertEqual(float(self.species(vecID=1).final_params()["wperm_ratio"]), 0.7)
+        self.assertEqual(float(self.config.final_params()["wperm_ratio"]), 0.006)
+        # A slider moved still wins
+        self.assertEqual(float(self.species(vecID=1).with_params(wperm_ratio=0.5).final_params()["wperm_ratio"]), 0.5)
+
+    def test_setup_without_them_is_gambiae_coupled(self):
+        self.assertEqual((self.config.run["vecID"], self.config.run["ecology"]), (0, 0))
+        self.assertFalse(self.config.ecology)
+
+    def test_checks(self):
+        self.species(vecID=2).validate()
+        self.species(vecID=10, ecology=1).validate()
+        for run, message in (({"vecID": 3}, "vecID 3 is no vector species"),
+                             ({"vecID": 10}, "Ae. albopictus carries dengue, whose model is not written yet"),
+                             ({"ecology": 2}, "ecology is 0 .coupled. or 1"),
+                             ({"ecology": 1, "disID": 0}, "runs with disID 1")):
+            with self.subTest(run=run), self.assertRaisesRegex(ConfigError, message):
+                self.species(**run).validate()
+        with self.assertRaisesRegex(ConfigError, "models no people"):
+            replace(self.species(ecology=1), inputs={**self.config.inputs, "growth": 1.02}).validate()
+
+    def test_ecology_writes_no_human_output(self):
+        flags = replace(self.species(ecology=1), output=("out_I", "out_vect", "out_vecinfc", "out_wpond")).output_flags()
+        self.assertEqual({flag for flag, on in flags.items() if on}, {"out_vect", "out_wpond"})
+        # Control: coupled, they are written
+        flags = replace(self.config, output=("out_I", "out_vect", "out_vecinfc")).output_flags()
+        self.assertEqual({flag for flag, on in flags.items() if on}, {"out_I", "out_vect", "out_vecinfc"})
+
+    def test_run_script_lines(self):
+        from mobile.rundir import species_values
+        with_lines = "            vectorID=0       # 0: An. gambiae\n            ecology=0\n"
+        self.assertEqual(species_values(with_lines, {"vecID": 10, "ecology": 1}), {"vectorID": 10, "ecology": 1})
+        self.assertEqual(species_values("seed=1\n", {"vecID": 0, "ecology": 0}), {})  # An older MoBILE runs as it did
+        with self.assertRaisesRegex(ConfigError, "the vector species needs a MoBILE"):
+            species_values("seed=1\n", {"vecID": 2, "ecology": 0})
+        with self.assertRaisesRegex(ConfigError, "vector ecology only needs a MoBILE"):
+            species_values("seed=1\n", {"vecID": 0, "ecology": 1})
+
+    def test_run_dir(self):
+        with tempfile.TemporaryDirectory(dir=os.path.expanduser("~")) as tmp:
+            config = replace(self.species(vecID=11, ecology=1), runs_dir=Path(tmp))
+            run_dir = create_run_dir(config, "x")
+            script = (run_dir / "run_MOBILE.sh").read_text()
+            self.assertRegex(script, r"(?m)^\s*vectorID=11$")
+            self.assertRegex(script, r"(?m)^\s*ecology=1$")
+            self.assertRegex(script, r"(?m)^\s*disID=1$")
+            self.assertFalse((run_dir / "age_structure").exists())  # No people, no ages
+            self.assertIn("dgono=100.0,", (run_dir / "params.txt").read_text())
+            coupled = create_run_dir(replace(self.config, runs_dir=Path(tmp)), "y")
+            self.assertRegex((coupled / "run_MOBILE.sh").read_text(), r"(?m)^\s*vectorID=0$")
+            self.assertTrue((coupled / "age_structure" / "cumm_age.txt").is_file())
 
 
 class TestSetup(unittest.TestCase):
