@@ -12,11 +12,15 @@ from .parameters import run_parameters, shown_parameters
 from .period import period_days, period_problems, spin_up_problem
 from .region import region_problems
 from .shapes import choice_problems as shape_problems
+from .species import RUN_DEFAULTS, species_problems
 from .worldpop import choice_problems, resolve_choice
 
 # The keys of a configuration file. Parameters, outputs and sliders are set in the GUI.
 CONFIG_KEYS = {"mobile", "runs_dir", "project", "run", "inputs", "region", "period", "age_structure", "shapes"}
-RUN_KEYS = {"disID", "mob", "nstep", "spin_up", "nagent", "seed", "threads"}
+RUN_KEYS = {"disID", "mob", "nstep", "spin_up", "nagent", "seed", "threads"}  # And vecID, ecology: optional (RUN_DEFAULTS)
+# The &OUTPUT flags of a vector-ecology-only run (mobile.sh -e 1): no people, and no infective vectors (with no hosts
+# they would only be VECTRI's residual seed); rainfall and temperature are always written
+ECOLOGY_OUTPUTS = ("out_vect", "out_larv", "out_wpond", "out_wperm", "out_wurbn")
 REQUIRED_INPUTS = {"rain_file", "temp_file", "pop_file"}
 # A parameter file is no longer an input: the parameters, their defaults and ranges are in parameters.yaml
 NO_CONST = ("inputs: const is no longer used: the parameters are set in the GUI, or with `mobile run --set`, and start at "
@@ -112,6 +116,15 @@ class Config:
     age_structure: dict | None = None  # {product, country, year} of WorldPop; year None for that of the period (worldpop.py)
     shapes: dict | None = None  # {file, name, merge} of a shapefile of areas drawn on the maps (shapes.py); not for the model
 
+    def __post_init__(self):
+        # The vector species and mode, An. gambiae coupled when not given (a setup from before them)
+        object.__setattr__(self, "run", {**RUN_DEFAULTS, **self.run})
+
+    @property
+    def ecology(self):
+        """True for a vector-ecology-only run (mobile.sh -e 1): VECTRI's vectors alone, no people modelled."""
+        return self.run["ecology"] == 1
+
     @classmethod
     def load(cls, path=None, mobile=None):
         path = Path(path).resolve() if path else example_config()
@@ -177,21 +190,21 @@ class Config:
 
     def final_params(self):
         """Parameters of the run, as written to its &CONST: every parameter of the GUI at its default, overridden by `params`."""
-        return run_parameters(self.params)
+        return run_parameters(self.params, self.run["vecID"])
 
     def output_flags(self):
         """{flag: value} for every &OUTPUT flag, or None for the default output."""
         if self.output is None:
             return None
         names = namelist_names(self.mobile, "OUTPUT")
-        return {name: name in self.output for name in sorted(names)}
+        return {name: name in self.output and (not self.ecology or name in ECOLOGY_OUTPUTS) for name in sorted(names)}
 
     def validate(self):
         errors = []
         missing = RUN_KEYS - set(self.run)
         if missing:
             errors.append(f"run: missing {sorted(missing)}")
-        unknown = set(self.run) - RUN_KEYS
+        unknown = set(self.run) - RUN_KEYS - set(RUN_DEFAULTS)
         if unknown:
             errors.append(f"run: unknown {sorted(unknown)}")
         for key, value in self.run.items():
@@ -238,6 +251,10 @@ class Config:
         ):
             errors.append("inputs: counterfactual needs mortality_file, birthrate_file or mortality_time_file")
         errors += growth_problems(self.inputs)
+        errors += species_problems(self.run)
+        if self.ecology and (self.inputs.get("growth") or self.inputs.get("counterfactual") == 1 or any(
+                self.inputs.get(key, "NONE") not in ("NONE", "", None) for key in OPTIONAL_INPUTS)):
+            errors.append("inputs: vector ecology only models no people: no growth, counterfactual or optional files")
 
         # The scripts expand these unquoted, and mobile.sh refuses to run inside the repository
         for path in [self.mobile, self.runs_dir, *self.inputs.values()]:

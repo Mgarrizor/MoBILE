@@ -9,6 +9,10 @@
 # display: per_year shows a rate per day as per year; log10 shows log10 of the value. starts_at: the slider of a
 #   parameter whose default is a flag (birth_rate = -1: equal to mu) starts at the value of that parameter.
 # type: integer for a Fortran integer. info and source are shown on hovering over the slider.
+# species: {vecID: value} of the species whose value differs from value (that of An. gambiae, vecID 0), as set in the
+#   SELECT CASE of init_constants (utils/vectri/mo_constants.f90); the tests compare it with the source. A run writes
+#   every slider to &CONST, which is read after init_constants: without this, every species would run with An.
+#   gambiae's values. A value outside min-max gets the range value +/- 50% (fractions at most 1), as a placeholder.
 parameters:
   e_0:
     group: Human
@@ -262,6 +266,7 @@ parameters:
       Each day adds (T - 16 °C) / dsporo of the cycle, T being the temperature. Larger values give a longer cycle, so fewer
       mosquitoes live to be infective. Detinova (1962) gives 111.
     source: Detinova (1962), as in VECTRI (sporo in utils/vectri/mo_methods.f90)
+    species: {10: 111.0, 11: 111.0}
   dgono:
     group: Vector
     section: Development
@@ -273,6 +278,7 @@ parameters:
       dgono of the cycle, T_gono being about 7.7 °C. Mosquitoes bite once per cycle, so larger values give fewer bites and
       fewer eggs. Detinova (1962) gives 37.1 at high humidity.
     source: Detinova (1962), as in VECTRI (gono in utils/vectri/mo_methods.f90)
+    species: {2: 36.7, 10: 100.545, 11: 100.0}
   rvecsurv:
     group: Vector
     section: Adult survival
@@ -319,6 +325,7 @@ parameters:
     curated: true
     info: Fraction of the temporary ponds that the mosquito uses to breed (a fraction; the source uses 0.48, calibrated for Senegal, and 0.5 or 1.0 in other set-ups).
     source: utils/vectri/mo_constants.f90
+    species: {1: 0.5, 2: 1.0, 10: 0.00944, 11: 0.00944}
   wpond_shapep2:
     group: Hydro
     section: Temporary ponds
@@ -373,6 +380,7 @@ parameters:
     curated: false
     info: Fraction of permanent water (pools and ponding near streams, rivers and lakes) that the mosquito uses to breed.
     source: utils/vectri/mo_constants.f90
+    species: {1: 0.7, 2: 0.02, 10: 0.1, 11: 0.1}
   wperm_default:
     group: Hydro
     section: Permanent water
@@ -393,6 +401,7 @@ parameters:
     curated: false
     info: Fraction of the urban breeding sites (gutters, tyres and the like) that the mosquito uses.
     source: utils/vectri/mo_constants.f90
+    species: {1: 0.1, 10: 0.02149, 11: 0.02149}
   rlarv_flushtau:
     group: Hydro
     section: Rain-driven larval mortality
@@ -411,6 +420,7 @@ parameters:
     curated: false
     info: Lowest larval survival under heavy rain.
     source: utils/vectri/mo_constants.f90
+    species: {10: 78.5}
   mu:
     group: Demography
     section: Mortality and births
