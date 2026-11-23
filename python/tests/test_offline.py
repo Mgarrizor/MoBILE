@@ -199,7 +199,7 @@ class TestConfig(unittest.TestCase):
             spec = parameters[name]
             self.assertTrue(spec["min"] <= slider_start(name) <= spec["max"], f"{name}: starts outside its range")
             self.assertAlmostEqual(to_shown(name, to_model(name, slider_start(name))), slider_start(name), msg=name)
-        self.assertEqual(len(shown_parameters()), 48)
+        self.assertEqual(len(shown_parameters()), 56)
 
     def test_parameter_file_matches_the_source(self):
         malaria, cholera = fortran_defaults(MOBILE), fortran_defaults(MOBILE, "cholera")
@@ -616,7 +616,9 @@ class TestVectorSpecies(unittest.TestCase):
         self.assertEqual((flush["min"], flush["max"]), (39.25, 117.75))
         self.assertEqual(set(slider_parameters(10, True)), {n for n, s in shown_parameters().items() if s["group"] in ("Vector", "Hydro", "Interventions")})
         self.assertEqual(species_changes(0, 0), {})
-        self.assertEqual(set(species_changes(10)), {"wpond_ratio", "wperm_ratio", "wurbn_ratio", "dgono", "dsporo", "rlarv_flushmin"})
+        self.assertEqual(set(species_changes(10)), {"wpond_ratio", "wperm_ratio", "wurbn_ratio", "dgono", "dsporo", "rlarv_flushmin",
+                                                    "rtgono", "rtsporo", "rlarv_tmin", "rlarvsurv", "rbiocapacity", "neggmn"})
+        self.assertEqual(set(species_changes(2)), {"wpond_ratio", "wperm_ratio", "dgono", "rtgono", "rlarv_tmin", "rlarvsurv"})
         self.assertEqual(set(species_changes(1)), {"wpond_ratio", "wperm_ratio", "wurbn_ratio"})
 
     def test_run_writes_the_species_values(self):
