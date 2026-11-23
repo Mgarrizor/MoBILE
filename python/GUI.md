@@ -50,7 +50,25 @@ are the same in both.
 
 Everything a run needs that is not a parameter or an output.
 
-- **Run parameters**: project name, model (VECTRI-ABM malaria or cholera), the period to simulate (a start and
+- **Model**, at the top, three rows of buttons, each leading to the next: **1. Human representation** (Agents; Bulk
+  is *in development*), **2. Disease** (Malaria; Dengue and Cholera *to come*) and **3. Vector**, the species of the
+  disease: *An. gambiae* (the default), *An. funestus* (*not evaluated*: its values in VECTRI are not checked against
+  data) and *An. sacharovi*. Choices in development or to come are shown greyed out. The run passes the species to
+  the model (`mobile.sh -V`, `vectorID` in `run_MOBILE.sh`).
+  - **Vector ecology only** (a switch above the rows): VECTRI's ponds, larvae and adult vectors in each cell, from
+    rainfall and temperature, with no people modelled (`mobile.sh -e 1`, with `-v 1 -d 1`). The human and disease
+    rows hide, and the Vector row offers every species, **Aedes included** (*Ae. albopictus*, *Ae. aegypti*: the
+    dengue model is not written, so Aedes runs only here). While such a setup is applied, HA (sidebar), the age
+    structure, growth and optional files (Setup), the Human and Demography sliders (tab 2), and the human outputs and
+    infective vectors (Outputs) are hidden and not used: the outputs are rainfall, temperature, the water fields and
+    the vectors. A calibration can compare those; the observational model, which needs people, is refused.
+  - **The species' own values:** VECTRI sets some parameters per species (`init_constants` in
+    `utils/vectri/mo_constants.f90`), but a run writes every slider to `&CONST`, which the model reads afterwards. So
+    applying a new species puts its values on the sliders it changes (`species` in `parameters.yaml`: `wpond_ratio`,
+    `wperm_ratio`, `wurbn_ratio`, `dgono`, `dsporo`, `rlarv_flushmin`), with a note; a value outside a slider's range
+    gets the range value ±50 %, a placeholder. Other sliders you moved keep their value. Below the rows, before
+    applying, a note says what a new species will change. **Use as template** brings the species and the mode back.
+- **Run parameters**: project name, the period to simulate (a start and
   an end date, by default the first and last day of the rainfall file, to which **Reset** returns; the total time is
   printed below them),
   spin-up to equilibrium and threads. A period shorter than the driving data is run on copies of the
@@ -149,7 +167,8 @@ The settings are remembered for the next session in `~/.config/mobile/last_setup
   comes from. All of this is in `mobile/parameters.yaml`: the default, the range (only 12 ranges are curated so far;
   the others are the default ±50%), the tab, the section and the description of each parameter. The tests compare its
   defaults with the Fortran source, so a default changed in the model, or a parameter added to `&CONST`, must be
-  added there too. The parameters of the cholera model and of mobility are not shown and keep their default.
+  added there too, and the per-species values (`species`) with the SELECT CASE of VECTRI's `init_constants`. The
+  parameters of the cholera model and of mobility are not shown and keep their default.
   Under the mortality `mu` (Demography), **Use the fitted mortality** sets it to the γ fitted to the age structure of
   the setup: with births equal to deaths, the default, a population with mortality γ has an age structure of that slope.
 - **Outputs**: which fields the next run writes, only those ticked: none at first (rainfall and temperature are always

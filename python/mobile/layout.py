@@ -8,10 +8,11 @@ from pathlib import Path
 import yaml
 from shiny import ui
 
+from .config import ECOLOGY_OUTPUTS
 from .parameters import PARAMETER_GROUPS
+from .species import model_said
 
 
-MODEL_NAMES = {0: "Cholera", 1: "VECTRI-ABM"}  # By disID
 # Tabs for each type of analysis, under the Analysis menu, to be filled
 ANALYSIS_TABS = (
     ("Time series", "Time series analysis, such as spectrograms: to come."),
@@ -211,10 +212,9 @@ def _logo(path, folder, height):
 
 def page_header(config):
     """The name of the model and the project, which follow the applied setup."""
-    disease = config.run["disID"]
     return ui.div(
         ui.span("MoBILE", style="font-size: 1.4rem; font-weight: 600;"),
-        ui.span(f"Model: {MODEL_NAMES.get(disease, f'disID {disease}')} · Project: {config.project or 'not set'}",
+        ui.span(f"Model: {model_said(config.run)} · Project: {config.project or 'not set'}",
                 style="font-size: 0.95rem; font-weight: 400; opacity: 0.8;"),
         style="display: flex; align-items: baseline; flex-wrap: wrap; column-gap: 1rem; line-height: 1.2;",
     )
@@ -343,15 +343,21 @@ def output_switch_id(flag):
     return f"output_{flag}"
 
 
+HUMAN_ONLY = "human-only"  # The class of what a vector-ecology-only setup hides (scripts.ECOLOGY_HANDLER)
+
+
 def output_groups(selected):
-    """A heading per group of the output file, with a switch per flag."""
+    """A heading per group of the output file, with a switch per flag. Those a vector-ecology-only run does not write
+    are hidden while such a setup is applied."""
+    def switch(flag, label):
+        made = ui.input_switch(output_switch_id(flag), label, value=flag in selected)
+        return made if flag in ECOLOGY_OUTPUTS else ui.div(made, class_=HUMAN_ONLY)
+
     return [
         ui.div(
             ui.h6(group, class_="mt-2"),
-            ui.layout_column_wrap(
-                *[ui.input_switch(output_switch_id(flag), label, value=flag in selected) for flag, label, _ in flags],
-                width="200px", gap="0 1rem",
-            ),
+            ui.layout_column_wrap(*[switch(flag, label) for flag, label, _ in flags], width="200px", gap="0 1rem"),
+            class_=None if any(flag in ECOLOGY_OUTPUTS for flag, _, _ in flags) else HUMAN_ONLY,
         )
         for group, flags in OUTPUT_FLAGS.items()
     ]
