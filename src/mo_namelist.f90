@@ -216,6 +216,9 @@ MODULE mo_namelist
                              d_c, d_a, k_e,                                          & ! 
                              fA_chr, tau_chr,                                        & ! Chronic asymptomatic reservoir
                              rvecsurv, rvecsurv_min,                                 & ! Adult vector survival
+                             wurbn_tau, wurbn_sf,                                    & ! Urban water: log(people per km2 / wurbn_tau + 1) x wurbn_sf
+                             rbiocapacity, rlarvsurv, rlarv_tmin, neggmn,            & ! Larvae and eggs (per species in init_constants)
+                             rtgono, rtsporo,                                        & ! Gonotrophic and sporogonic thresholds (per species)
                              alph_min,k_alph                                               !
 
             ! Does the file exist?
