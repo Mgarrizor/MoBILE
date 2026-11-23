@@ -10,6 +10,7 @@ from .config import MAX_PATH_LENGTH, ConfigError
 from .grid import pop_coordinates
 from .period import day_range, period_days
 from .region import cut_inputs
+from .species import RUN_DEFAULTS
 from .worldpop import age_file_text, prepare
 
 OUTPUT_NAME = "output"
@@ -54,6 +55,23 @@ def growth_value(template, growth):
     return {}
 
 
+SPECIES_LINES = {"vectorID": "vecID", "ecology": "ecology"}  # Lines of run_MOBILE.sh (mobile.sh -V, -e): run keys
+
+
+def species_values(template, run):
+    """{"vectorID": …, "ecology": …} for the lines of run_MOBILE.sh that pass -V and -e; without a line (a MoBILE from
+    before the species and the ecology mode) it is left out, unless its value is not the default, which that MoBILE
+    cannot run: ConfigError."""
+    values = {}
+    for line, key in SPECIES_LINES.items():
+        if re.search(rf"^[ \t]*{line}=", template, re.M):
+            values[line] = run[key]
+        elif run[key] != RUN_DEFAULTS[key]:
+            raise ConfigError(f"{'the vector species' if key == 'vecID' else 'vector ecology only'} needs a MoBILE whose "
+                              f"utils/run_MOBILE.sh passes it to the model (a line {line}=…): update MoBILE")
+    return values
+
+
 def new_run_id():
     return f"{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}-{secrets.token_hex(2)}"
 
@@ -74,11 +92,12 @@ def create_run_dir(config, name=None, prebuilt=None):
     """Create runs_dir/<name>/ and everything the scripts read from it. With prebuilt, the path of a model already
     built, the scripts run it (mobile.sh -E) instead of building one."""
     run_dir = Path(config.runs_dir) / (name or new_run_id())
-    (run_dir / "age_structure").mkdir(parents=True)
-
-    # Downloaded and analysed the first time a product, country and year is used (worldpop.py), then kept
-    age = prepare(**config.age_choice())
-    (run_dir / "age_structure" / "cumm_age.txt").write_text(age_file_text(age))
+    run_dir.mkdir(parents=True)
+    if not config.ecology:  # No people, no ages: the model reads no age structure then
+        (run_dir / "age_structure").mkdir()
+        # Downloaded and analysed the first time a product, country and year is used (worldpop.py), then kept
+        age = prepare(**config.age_choice())
+        (run_dir / "age_structure" / "cumm_age.txt").write_text(age_file_text(age))
     params = "".join(f"{key}={value},\n" for key, value in config.final_params().items())
     (run_dir / "params.txt").write_text(params)
 
@@ -121,6 +140,7 @@ def create_run_dir(config, name=None, prebuilt=None):
         values["prebuilt"] = f"'{prebuilt}'"
     template = (Path(config.mobile) / "utils" / "run_MOBILE.sh").read_text()
     values.update(growth_value(template, inputs.get("growth", 0)))
+    values.update(species_values(template, config.run))
     script = fill_template(template, values, config.run["threads"], config.mobile)
     (run_dir / "run_MOBILE.sh").write_text(script)
     return run_dir

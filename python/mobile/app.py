@@ -11,7 +11,7 @@ import plotly.offline
 from shiny import App, reactive, render, run_app, ui
 
 from .basemap import load_basemap, load_terrain
-from .config import ConfigError
+from .config import ECOLOGY_OUTPUTS, ConfigError
 from .driving import climatology, field_limits, open_field
 from .cells import CellSizeError
 from .grid import extent_key, load_grid, mask_like, read_grid
@@ -20,7 +20,8 @@ from .layout import (
     output_label, output_switch_id, page_header, page_title, player_controls, slider_grid, slider_tabs, tab_title, with_tip,
 )
 from .outcome import RunState, load_outcome, run_label, run_model, run_name_problem
-from .parameters import shown_parameters, slider_start, to_model, to_shown
+from .parameters import shown_parameters, slider_parameters, slider_start, species_changes, species_spec, to_model, to_shown
+from .species import ECOLOGY_DISEASE, VECTORS, vectors_for
 from .plots import (
     BOX, COLOUR_MAPS, LAND, age_cumulative_figure, age_fit_figure, age_heterogeneity_figure, age_sex_figure, cell_figure, envelope_figure, grid_figure, map_figure, message_figure,
     MAX_DOTS, DOT_COLOURS, add_dot, default_dot, dot_label, move_dot, next_cells, remove_dot, send_figure, sig, snap_to_cell,
@@ -34,7 +35,7 @@ from .calibration_run_ui import calibration_run_server, observation_outputs
 from .calibration_ui import calibration_server, calibration_tab
 from .sensitivity_ui import sensitivity_card, sensitivity_server
 from .scripts import (
-    BROWSER_HANDLER, CLOSED_HANDLER, DOTS_HANDLER, PARAMETER_MARKS, PARAMETER_STYLE, PLAYER, PLOT_HANDLER, SIDEBAR_FIT, SLIDER_FORMAT, TAB_DOTS, THEME,
+    BROWSER_HANDLER, CLOSED_HANDLER, DOTS_HANDLER, ECOLOGY_HANDLER, PARAMETER_MARKS, PARAMETER_STYLE, PLAYER, PLOT_HANDLER, SIDEBAR_FIT, SLIDER_FORMAT, TAB_DOTS, THEME,
     PAGE_STYLE,
 )
 from .shapes import ShapeError, areas, name_field, outlines, read_shapes
@@ -44,7 +45,7 @@ from .setup import (
 )
 from .growth import GrowthError, ceiling_needed, fit_growth, growth_over, percent, read_population
 from .setup_ui import (
-    DAILY_FILES, EXAMPLE_FOLDER, PREVIEW_FILES, PREVIEW_STYLE, REGION_BOXES, REGION_LAYERS, REGION_MONTHS, SUFFIX_NAMES, available_model, example_note_box, region_values,
+    AVAILABLE_MODEL, MODELS_TO_COME, vector_choices, DAILY_FILES, EXAMPLE_FOLDER, PREVIEW_FILES, PREVIEW_STYLE, REGION_BOXES, REGION_LAYERS, REGION_MONTHS, SUFFIX_NAMES, available_model, example_note_box, region_values,
     AUTO, age_values, country_choices, growth_percent, period_values, setup_problems, setup_tab, setup_value, year_choices,
 )
 from .worldpop import COUNTRIES, PRODUCTS, WorldPopError, cached_summary, describe, fitted_mortality, prepare, resolve_choice, year_label
@@ -81,12 +82,15 @@ def create_app(config):
     app_ui = ui.page_sidebar(
         ui.sidebar(
             ui.div("Run simulation", class_="sidebar-heading"),
-            ui.input_numeric(
-                "ha", with_tip("Humans per agent (HA)", "People represented by one agent, which sets the number of agents. "
-                               "Close to 1 is best for reliable results: more agents is slower but closer to the real population."),
-                value=None, min=0, step="any",
+            ui.div(
+                ui.input_numeric(
+                    "ha", with_tip("Humans per agent (HA)", "People represented by one agent, which sets the number of agents. "
+                                   "Close to 1 is best for reliable results: more agents is slower but closer to the real population."),
+                    value=None, min=0, step="any",
+                ),
+                ui.div(ui.output_ui("humans_per_agent"), class_="small text-muted mb-2"),
+                class_="human-only",  # No agents in a vector-ecology-only run
             ),
-            ui.div(ui.output_ui("humans_per_agent"), class_="small text-muted mb-2"),
             ui.input_numeric(
                 "seed", with_tip("Seed", "Starting point of the random numbers. The same seed and threads give the same results."),
                 value=config.run["seed"], min=1, step=1,
@@ -124,6 +128,7 @@ def create_app(config):
             ui.tags.script(ui.HTML(SIDEBAR_FIT)),
             ui.tags.script(ui.HTML(DOTS_HANDLER)),
             ui.tags.script(ui.HTML(TAB_DOTS)),
+            ui.tags.script(ui.HTML(ECOLOGY_HANDLER)),
         ),
         ui.output_ui("status"),
         ui.navset_tab(
@@ -223,36 +228,61 @@ def create_app(config):
         def grid():
             return load_grid(setup())
 
-        @reactive.calc
-        def slider_setup():
-            """A slider starts at the default compiled into the model, in the units shown. Its range includes that
-            value: a slider cannot start outside it."""
-            defaults = {name: slider_start(name) for name in shown_parameters()}
-            sliders = {
-                name: {**spec, "min": min(spec["min"], defaults[name]), "max": max(spec["max"], defaults[name])}
-                for name, spec in shown_parameters().items()
-            }
+        # (vecID, ecology) of the setup applied: the sliders follow it. Set only when it changes, so that applying any
+        # other setup leaves the sliders, and the parameter lists of the analyses, as they are
+        species_key = reactive.value((config.run["vecID"], config.ecology))
+
+        def slider_specs(vec, ecology):
+            """A slider starts at the default compiled into the model for the vector species, in the units shown. Its range
+            includes that value: a slider cannot start outside it."""
+            specs = slider_parameters(vec, ecology)
+            defaults = {name: slider_start(name, vec) for name in specs}
+            sliders = {name: {**spec, "min": min(spec["min"], defaults[name]), "max": max(spec["max"], defaults[name])}
+                       for name, spec in specs.items()}
             return {"sliders": sliders, "defaults": defaults}
 
+        @reactive.calc
+        def slider_setup():
+            """The sliders a run, an analysis or a calibration uses: those of the species, and in the vector-ecology-only
+            mode only the tabs of the vectors, water and interventions."""
+            return slider_specs(*species_key())
+
         # Made also while their tab is hidden: a run takes the values of the sliders, and those of a loaded
-        # run are set on them, before the tab is ever opened
+        # run are set on them, before the tab is ever opened. Made once, with every tab: a new species moves its
+        # sliders (follow_species), and the ecology-only mode hides the tabs it does not use
         @output(suspend_when_hidden=False)
         @render.ui
         def parameter_sliders():
-            sliders = slider_setup()
+            with reactive.isolate():
+                sliders = slider_specs(species_key()[0], False)
             return slider_tabs(sliders["sliders"], sliders["defaults"])
 
         @reactive.effect
         async def send_slider_decimals():
             sliders = slider_setup()["sliders"]
             await session.send_custom_message("slider_decimals", {f"param_{n}": slider_grid(s)[3] for n, s in sliders.items()})
+            starts = {f"param_{name}": {"start": round(value, slider_grid(sliders[name])[3]), "step": slider_grid(sliders[name])[2]}
+                      for name, value in slider_setup()["defaults"].items()}
+            await session.send_custom_message("slider_starts", starts)
+
+        @reactive.effect
+        async def send_ecology_only():
+            on = species_key()[1]
+            await session.send_custom_message("ecology_only", on)
+            with reactive.isolate():
+                tab = input.param_tab() if "param_tab" in input else None
+            if on and tab in ("Human", "Demography"):  # Hidden then: show the first tab it uses
+                ui.update_navs("param_tab", selected="Vector")
 
         @render.ui
         def header():
             return page_header(setup())
 
         def selected_output():
-            return selected_flags({flag for group in OUTPUT_FLAGS.values() for flag, _, _ in group if input[output_switch_id(flag)]()})
+            """The outputs ticked; in the vector-ecology-only mode only those it writes (the others are hidden)."""
+            ecology = species_key()[1]
+            return selected_flags({flag for group in OUTPUT_FLAGS.values() for flag, _, _ in group
+                                   if input[output_switch_id(flag)]() and (not ecology or flag in ECOLOGY_OUTPUTS)})
 
         def overrides():
             """Sliders moved from their start, in the units of the model; the others keep the compiled default."""
@@ -381,6 +411,14 @@ def create_app(config):
                 show_setup_fields(config)
                 if comparable(config) != comparable(setup()):
                     notes.append("its setup is in the boxes of tab 1: press Apply setup there")
+                pending_species.set(None)
+                vec = config.run["vecID"]
+                if vec != species_key()[0]:
+                    # Its own species' values, put on the sliders once its setup is applied (follow_species)
+                    pending_species.set({"vec": vec, "values": {name: float(value) for name, value in record.get("params", {}).items()
+                                                                if name in species_changes(vec, species_key()[0])
+                                                                and name not in {p["name"] for p in record.get("parameters", [])}}})
+                    notes.append(f"its species, {VECTORS[vec][0]}, and its values on the sliders follow when its setup is applied")
             calibrated = {parameter["name"] for parameter in record.get("parameters", [])}
             pending_sliders.set({name: float(value) for name, value in record.get("params", {}).items() if name not in calibrated})
             notes.append("its fixed parameters are on the sliders and the outputs its objectives need ticked, the others off: "
@@ -408,7 +446,7 @@ def create_app(config):
         analysis = sensitivity_server(
             input, output, session, setup, slider_setup, applied_overrides, applied_output, not_applied,
             lambda: run_task.status() == "running" or calibrating.running(),  # calibrating is defined further down
-            lambda: agents(), lambda: input.ha(),  # agents is defined further down
+            lambda: agents(), lambda: 1.0 if setup().ecology else input.ha(),  # agents is defined further down
         )
 
         basemap_for = reactive.value(None)  # The grid the basemap and the terrain were asked for
@@ -489,12 +527,13 @@ def create_app(config):
         @reactive.effect
         @reactive.event(input.run)
         def start_run():
-            nagent, seed = agents(), input.seed()
+            ecology = setup().ecology  # No agents then: HA is hidden, and the run keeps the setup's number
+            nagent, seed = agents() or (setup().run["nagent"] if ecology else None), input.seed()
             n_seeds = input.n_seeds() if input.seed_band() else 1
             if not all(isinstance(value, int) and value >= 1 for value in (nagent, seed, n_seeds)):
                 ui.notification_show("HA must be positive, and the seed and number of seeds positive integers.", type="error")
                 return
-            if input.ha() < 1:
+            if not ecology and input.ha() < 1:
                 ui.notification_show(HA_BELOW_ONE, type="error")
                 return
             if not_applied():
@@ -666,6 +705,12 @@ def create_app(config):
             if new == old:
                 return
             grid_changed = (old.inputs["pop_file"], old.region) != (new.inputs["pop_file"], new.region)
+            with reactive.isolate():
+                before = species_key()
+            if new.run["vecID"] != before[0]:
+                follow_species(before[0], new.run["vecID"])
+            if (new.run["vecID"], new.ecology) != before:
+                species_key.set((new.run["vecID"], new.ecology))
             setup.set(new)
             save_setup(replace(new, run={**new.run, "nagent": agents() or new.run["nagent"], "seed": input.seed() or new.run["seed"]}))
             show_setup_fields(new)
@@ -674,12 +719,81 @@ def create_app(config):
                 selected_cells.set([])
                 range_overrides.set({})
 
+        @reactive.effect
+        @reactive.event(input.setup_ecology, input.setup_disID, ignore_init=True)
+        def offer_vectors():
+            """The vector row follows the disease, or offers every species in the vector-ecology-only mode; the species
+            chosen stays if still offered, else the disease's first."""
+            ecology, disease = bool(input.setup_ecology()), int(input.setup_disID())
+            offered = vectors_for(disease, ecology)
+            with reactive.isolate():
+                chosen = int(input.setup_vecID() or offered[0])
+            ui.update_radio_buttons("setup_vecID", choices=vector_choices(disease, ecology),
+                                    selected=str(chosen if chosen in offered else offered[0]), inline=True)
+
+        @render.ui
+        def setup_vector_note():
+            """Under the menu: a species not evaluated, how to reach Aedes, and what applying a new species changes."""
+            vec = int(input.setup_vecID() or 0)
+            notes = []
+            if vec in VECTORS and VECTORS[vec][1]:
+                notes.append(ui.p(f"⚠ {VECTORS[vec][0]} is {VECTORS[vec][1]}: its values in VECTRI have not been checked against "
+                                  "data.", class_="small mb-1", style="color: var(--bs-warning-text-emphasis);"))
+            if not input.setup_ecology():
+                notes.append(ui.p("Aedes (Ae. albopictus, Ae. aegypti): turn on Vector ecology only; the dengue model is not "
+                                  "written yet.", class_="small text-muted mb-1"))
+            before = setup().run["vecID"]
+            if vec in VECTORS and vec != before:
+                changes = species_changes(vec, before)
+                said = ", ".join(f"{name} {new:g}" for name, (_, new) in changes.items())
+                notes.append(ui.p(f"Apply setup puts {VECTORS[vec][0]}'s values on {len(changes)} sliders (tab 2): {said}."
+                                  if changes else f"{VECTORS[vec][0]} has the same slider values as {VECTORS[before][0]}.",
+                                  class_="small text-muted mb-1"))
+            return ui.TagList(*notes)
+
+        pending_species = reactive.value(None)  # {vec, values} of a template's species parameters, once its setup is applied
+
+        def follow_species(before, now):
+            """A new vector species: its values on the sliders whose default it changes, with their ranges, and a note.
+            A template's values are put on them instead when its species is the one applied (pending_species)."""
+            changes = species_changes(now, before)
+            with reactive.isolate():
+                held = pending_species()
+            pending_species.set(None)
+            kept = held["values"] if held and held["vec"] == now else {}
+            sliders = slider_specs(now, False)["sliders"]
+            for name in changes:
+                low, high, step, _ = slider_grid(sliders[name])
+                value = to_shown(name, kept[name]) if name in kept else slider_start(name, now)
+                ui.update_slider(f"param_{name}", value=value, min=low, max=high, step=step)
+            with reactive.isolate():
+                old = applied()
+            # Moved for the species before, so no longer: the sliders now start at the new species' values
+            applied.set({**old, "overrides": {name: value for name, value in old["overrides"].items() if name not in changes}})
+            if changes:
+                ui.notification_show(species_note(now, changes, kept), type="message", duration=12)
+
+        def species_note(vec, changes, kept=()):
+            said = ", ".join(f"{name} {new:g} (was {old:g})" for name, (old, new) in changes.items() if name not in kept)
+            parts = [f"{VECTORS[vec][0]}: its values are on the sliders"] + ([said] if said else [])
+            if kept:
+                parts.append(f"the template's values on {', '.join(kept)}")
+            widened = [name for name in changes if (species_spec(name, vec)["min"], species_spec(name, vec)["max"]) !=
+                       (shown_parameters()[name]["min"], shown_parameters()[name]["max"])]
+            if widened:
+                parts.append(f"range ±50 % of its value, a placeholder, for {', '.join(widened)}")
+            return "; ".join(parts) + "."
+
         def show_setup_fields(config):
             ui.update_text("setup_project", value=config.project)
             ui.update_text("setup_runs_dir", value=str(config.runs_dir))
             for key, _, _ in (*REQUIRED_FILES, *OPTIONAL_FILES):
                 ui.update_text(f"setup_{key}", value=setup_value(config, key))
-            ui.update_select("setup_disID", selected=str(config.run["disID"]))
+            disease = config.run["disID"] if config.run["disID"] not in MODELS_TO_COME else AVAILABLE_MODEL
+            ui.update_switch("setup_ecology", value=config.ecology)
+            ui.update_radio_buttons("setup_disID", selected=str(disease))
+            ui.update_radio_buttons("setup_vecID", choices=vector_choices(disease, config.ecology), selected=str(config.run["vecID"]),
+                                    inline=True)
             product, country, year = age_values(config)
             ui.update_select("setup_age_product", selected=product)
             ui.update_select("setup_age_country", choices=country_choices(product), selected=country)
@@ -713,8 +827,11 @@ def create_app(config):
             period = None
             if typed is not None and (typed[0], typed[1]) != tuple(parse_day(day) for day in driving_span()):
                 period = {"start": typed[0].isoformat(), "end": typed[1].isoformat()}
+            ecology = bool(input.setup_ecology())
             run = {
-                "disID": int(input.setup_disID()),
+                "disID": ECOLOGY_DISEASE if ecology else int(input.setup_disID()),
+                "vecID": int(input.setup_vecID() or 0),
+                "ecology": int(ecology),
                 "mob": setup().run["mob"],
                 "nstep": 0 if period is None else period_days(period),
                 "spin_up": 1 if input.setup_spin_up() else 0,
@@ -725,6 +842,8 @@ def create_app(config):
             files = {key: input[f"setup_{key}"]() for key, _, _ in (*REQUIRED_FILES, *OPTIONAL_FILES)}
             files["counterfactual"] = 1 if input.setup_counterfactual() else 0
             files["growth"] = typed_growth()
+            if ecology:  # No people: the demography boxes are hidden, and not used
+                files.update({key: "" for key, _, _ in OPTIONAL_FILES}, counterfactual=0, growth=0)
             try:
                 new = from_fields(setup().mobile, input.setup_project(), input.setup_runs_dir(), run, files, typed_region(), period,
                                   typed_age(), typed_shapes())
@@ -1371,7 +1490,7 @@ def create_app(config):
         calibration = calibration_server(input, output, session, setup, setup_state)
         calibrating = calibration_run_server(
             input, output, session, setup, calibration.objectives, applied_overrides, applied_output, not_applied, load_template,
-            lambda: run_task.status() == "running" or analysis.running(), lambda: agents(), lambda: input.ha(), slider_setup,
+            lambda: run_task.status() == "running" or analysis.running(), lambda: agents(), lambda: 1.0 if setup().ecology else input.ha(), slider_setup,
             calibration.views, calibration.extra_windows, calibration.span,
         )
         progress_server(input, calibration.prepared, calibrating.what, calibrating.stored, calibration.activity,
@@ -1444,7 +1563,8 @@ def create_app(config):
             """The number of agents for the HA set: the people of the simulated region over HA."""
             ha = input.ha()
             if not ha or ha <= 0:
-                return None
+                # No agents in a vector-ecology-only run, and HA is hidden: the number passed is the setup's
+                return setup().run["nagent"] if setup().ecology else None
             return max(round(grid()["people"] / ha), 1)
 
         # HA starts from the number of agents of the setup. After that it is the entry, and the number of
