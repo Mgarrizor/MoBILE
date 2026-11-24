@@ -2674,6 +2674,35 @@ class TestLogOffsetInCases(unittest.TestCase):
             np.testing.assert_allclose(processed, np.array([expected(row) for row in drawn]), rtol=1e-10)
             self.assertTrue(np.all(np.isfinite(processed)))
 
+    def test_seeds_pooled(self):
+        """Several runs (seeds): each run's share of the draws around its own cases, pooled, so the band holds the runs'
+        spread; one run draws as before (test_reported_series_drawn)."""
+        from mobile.calibration_data import DataError
+        from mobile.calibration_model import process_observed
+        months = 24
+        population = np.full(months, 1e5)
+        data = self.monthly(np.full(months, 100.0), population)
+        divide = {"kind": "arithmetic", "operation": "divide", "operand": "column", "column": "N", "number": 1, "units": ""}
+        observation = {"rho": 1.0, "k": 1e6, "draws": 400, "seed": 3}  # Little reporting noise: the runs' levels show
+        low, high = np.full(months, 10.0), np.full(months, 1000.0)
+        noted = lambda values: replace(self.monthly(values), notes=("the model",))  # As model_members gives them
+        members = [noted(low / population), noted(high / population)]
+        model, _, _, processed = process_observed(members, [self.monthly(low), self.monthly(high)], [], data, [divide], observation)
+        per_person = processed * 1e5
+        # Half the draws near each run's level: the band spans both (drawn around the mean, 505, it would not)
+        self.assertEqual(((per_person > 0) & (per_person < 50)).sum(axis=0).tolist(), [200] * months)
+        self.assertEqual((per_person > 800).sum(axis=0).tolist(), [200] * months)
+        self.assertFalse(np.any((per_person > 50) & (per_person < 800)))
+        # Uneven shares: the first runs one more; a run that died out keeps its draws (no case reported)
+        runs = [np.full(months, value) for value in (0.0, 1000.0, 1e5)]
+        _, _, _, processed = process_observed([noted(r / population) for r in runs], [self.monthly(r) for r in runs], [],
+                                              data, [divide], {**observation, "draws": 7})
+        level = processed[:, 0] * 1e5
+        self.assertEqual([(level == 0).sum(), ((level > 500) & (level < 2000)).sum(), (level > 5e4).sum()], [3, 2, 2])
+        with self.assertRaisesRegex(DataError, "at least one draw per run: 2 draws for 3 runs"):
+            process_observed([noted(r / population) for r in runs], [self.monthly(r) for r in runs], [], data, [divide],
+                             {**observation, "draws": 2})
+
     def test_population_errors_say_what_is_wrong(self):
         """The observational model's population of each period, matched to the model's series: its errors name the case in
         general terms (periods that differ, periods not covered, N missing), and a series in the same periods passes."""
@@ -3927,8 +3956,9 @@ sleep ${FAKE_SLEEP:-0}
                                  ((900,), -1.0),             # Ended 99 days before the end: less than a year, not died out
                                  ((500,), 499 / 1000),       # Died out half way: the share of the run after
                                  ((-1,), 1.0),               # None at all: the farthest
-                                 ((500, 999), -1.0),         # One seed of two: not more than half
-                                 ((500, 400, 999), np.mean([499 / 1000, 599 / 1000]))):  # Two of three: the mean of those
+                                 ((500, 999), -1.0),         # One seed of two: scored, through its draws
+                                 ((500, 400, 999), -1.0),    # Two of three: not every seed
+                                 ((500, 400), np.mean([499 / 1000, 599 / 1000]))):  # Every seed: the mean of their shares
             folders, members = runs(*lasts)
             with mock.patch.object(calibration_engine, "model_members", members):
                 found = calibration_engine.persistence(objectives, folders)
@@ -5478,7 +5508,8 @@ class TestObjectiveLimitsInTheGui(unittest.TestCase):
         from mobile.calibration_run_ui import infeasible_counts, infeasible_notes, limits_said, results_state
         from mobile.calibration_results import died_out
         record = {"objectives": [self.objective("bias", self.LOG, math.log(3)), self.objective("correlation", (), 0.5, "Timing")]}
-        alive, dead = {"died_out": 0, "last": [900, 900, 900], "flat": []}, {"died_out": 2, "last": [10, 20, 900], "flat": []}
+        alive, dead = {"died_out": 0, "last": [900, 900, 900], "flat": []}, {"died_out": 3, "last": [10, 20, 30], "flat": []}
+        some = {"died_out": 2, "last": [10, 20, 900], "flat": []}  # Not every seed: feasible as for transmission
 
         def row(number, violation, persistence, limits=None, state="COMPLETE"):
             return {"number": number, "state": state, "violation": violation, "persistence": persistence, "limits": limits}
@@ -5488,6 +5519,7 @@ class TestObjectiveLimitsInTheGui(unittest.TestCase):
                 row(3, 0.6, dead, {"Decadal_level": 0.1, "Timing": 0.2}),  # Both
                 row(4, None, None, state="RUNNING")]
         self.assertEqual([died_out(r["violation"], r["persistence"], r["limits"]) for r in rows], [False, True, False, True, False])
+        self.assertFalse(died_out(0.3, some, {"Decadal_level": 0.3}))  # Beyond a limit, two of three seeds died out
         self.assertEqual(infeasible_counts(record, rows), (4, 2, {"Decadal_level": 2, "Timing": 1}))
         notes = infeasible_notes(record, rows)
         self.assertIn("In 2 of the 4 completed trials transmission died out", notes[0])
