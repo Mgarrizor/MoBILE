@@ -735,7 +735,8 @@ def persistence(objectives, run_dirs, flat=()):
     (or all, if the run is shorter), flat: names of the objectives whose model series did not vary, violation, reason}.
 
     Measured on the daily output of the variables of the objectives (the latest positive value of any of them), over the
-    whole run. Infeasible (violation > 0) if more than half the seeds died out, or an objective's series was flat. The
+    whole run. Infeasible (violation > 0) if every seed died out (a seed that dies out is scored, through its draws with
+    the observational model), or an objective's series was flat. The
     violation is graded, for the sampler to know how near the boundary between dying out and persisting a trial is: the
     share of the run after transmission ended (the mean over the seeds that died out), from just above 0 (died out at
     the very end) to 1 (none at all); 1 also for a flat series with transmission going on (nothing to grade it by). A
@@ -755,7 +756,7 @@ def persistence(objectives, run_dirs, flat=()):
     died = [day for day in last if days - 1 - day >= window]
     flat_names = [objectives[index]["name"] for index in sorted(set(flat))]
     result = {"days": days, "last": last, "died_out": len(died), "flat": flat_names}
-    if died and len(died) * 2 > len(last):
+    if died and len(died) == len(last):
         result["violation"] = float(np.mean([(days - 1 - day) / days for day in died]))
         never = sum(day < 0 for day in died)
         result["reason"] = ("transmission died out: " + (f"no case at all in {never} of {len(last)} seeds" if never == len(died)

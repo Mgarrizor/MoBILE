@@ -197,13 +197,14 @@ def _regime_trials(complete):
 
 def died_out(violation, persistence, limits):
     """Whether a trial is infeasible because transmission died out (or an objective's series did not vary), as the engine
-    judges it from how long transmission lasted (persistence: more than half the seeds died out, or a flat series), and
+    judges it from how long transmission lasted (persistence: every seed died out, or a flat series), and
     not only because an objective is beyond its limit (limits: {objective: excess}, > 0 beyond). violation: the largest
     of its constraints. A trial of a calibration from before persistence was kept: infeasible with no limit broken."""
     if violation is None or violation <= 0:
         return False
     if persistence:
-        return persistence.get("died_out", 0) * 2 > len(persistence.get("last") or []) or bool(persistence.get("flat"))
+        seeds = len(persistence.get("last") or [])
+        return (seeds > 0 and persistence.get("died_out", 0) == seeds) or bool(persistence.get("flat"))
     return not any(excess > 0 for excess in (limits or {}).values())
 
 
