@@ -163,26 +163,37 @@ def aggregate(observations, step, _others):
     start, end = pd.to_datetime(frame["start"]), pd.to_datetime(frame["end"])
     key, lower, upper = _group_key(start, step["period"], step.get("days"), start.min())
     end_key = _group_key(end, step["period"], step.get("days"), start.min())[0]
-    if np.any(np.asarray(key) != np.asarray(end_key)):
-        i = int(np.argmax(np.asarray(key) != np.asarray(end_key)))
+    crosses = np.asarray(key != end_key)  # Compared as periods (or numbers), not one object at a time
+    if crosses.any():
+        i = int(np.argmax(crosses))
         raise DataError(f"a value crosses from one {step['period'].rstrip('s')} to the next: {observations.label(i)}")
-    frame["__key"], frame["__lower"], frame["__upper"] = np.asarray(key), lower.to_numpy(), upper.to_numpy()
-    frame["__days"] = (end - start).dt.days + 1
+    # The values of each period together, the periods in order and each period's values in their order, as a groupby
+    # sorted by period gives them, and the same statistics on them: without a table made for each period (the time of a
+    # calibration's trial went mostly there)
+    codes, _ = pd.factorize(key, sort=True)
+    order = np.argsort(codes, kind="stable")
+    order = order[codes[order] >= 0]  # A value without a period (none expected) is left out, as by a groupby
+    starts = np.flatnonzero(np.r_[True, codes[order][1:] != codes[order][:-1]])
     name, rows, dropped = observations.name, [], 0
-    for _, group in frame.groupby("__key", sort=True):
-        valid = group[~group[name].isna()]
-        whole = (pd.Timestamp(group["__upper"].iloc[0]) - pd.Timestamp(group["__lower"].iloc[0])).days + 1
-        coverage = valid["__days"].sum() / whole
-        if step["complete"] and (coverage < 1 or len(valid) < len(group)):
+    values_all, days_all = frame[name].to_numpy()[order], ((end - start).dt.days + 1).to_numpy()[order]
+    missing_all = pd.isna(values_all)
+    lower_all, upper_all = lower.to_numpy()[order], upper.to_numpy()[order]
+    extra_all = {column: frame[column].to_numpy()[order] for column in observations.extra}
+    how = step["how"]
+    for a, b in zip(starts, np.r_[starts[1:], len(order)]):
+        valid = ~missing_all[a:b]
+        whole = (pd.Timestamp(upper_all[a]) - pd.Timestamp(lower_all[a])).days + 1
+        coverage = days_all[a:b][valid].sum() / whole
+        if step["complete"] and (coverage < 1 or not valid.all()):
             dropped += 1
             continue
-        values, weights = valid[name].to_numpy(), valid["__days"].to_numpy()
-        how = step["how"]
+        values, weights = values_all[a:b][valid], days_all[a:b][valid]
         value = (np.nan if not len(values) else values.sum() if how == "sum" else np.average(values, weights=weights) if how == "mean"
                  else np.median(values) if how == "median" else values.min() if how == "min" else values.max())
-        row = {"start": group["__lower"].iloc[0], "end": group["__upper"].iloc[0], "value": value, "coverage": coverage}
-        for column in observations.extra:
-            row[column] = np.average(group[column], weights=group["__days"]) if group[column].notna().all() else np.nan
+        row = {"start": lower_all[a], "end": upper_all[a], "value": value, "coverage": coverage}
+        for column, column_values in extra_all.items():
+            part = column_values[a:b]
+            row[column] = np.average(part, weights=days_all[a:b]) if not pd.isna(part).any() else np.nan
         rows.append(row)
     if not rows:
         raise DataError(f"no {step['period']} is covered entirely by the values; turn off 'complete periods only' to keep "
