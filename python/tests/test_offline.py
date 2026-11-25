@@ -4735,6 +4735,32 @@ echo "64200001|cal_x|PENDING|0:00|20:00|(Priority)"
         with self.assertRaisesRegex(DataError, "Agents per cell .* Humans per agent"):
             model_count_members(plain.run_dir, "Inew")
 
+    def test_outputs_read_once(self):
+        """A run's output is read once for all the objectives and parts of a trial: read again only when its files change
+        (a run made again in the same folder), and the values given are never shared."""
+        from mobile import calibration_model
+        from mobile.calibration_model import model_count_members, model_members
+        from mobile.runner import Runner
+
+        result = Runner(replace(self.config, output=("out_I_new", "out_N", "out_HA"))).run("read_once")
+        self.assertTrue(result.ok, result.log_tail())
+        with mock.patch.object(calibration_model, "_read_counts", wraps=calibration_model._read_counts) as counts, \
+                mock.patch.object(calibration_model, "_read_series", wraps=calibration_model._read_series) as series:
+            first = model_count_members(result.run_dir, "Inew")[0], model_members(result.run_dir, "Inew")[0]
+            again = model_count_members(result.run_dir, "Inew")[0], model_members(result.run_dir, "Inew")[0]
+            self.assertEqual((counts.call_count, series.call_count), (1, 1))  # Not read again
+            for one, other in zip(first, again):
+                np.testing.assert_array_equal(one.values, other.values)
+                self.assertFalse(np.shares_memory(one.values, other.values))  # A copy each time
+            first[0].values[:] = -1.0  # Changing what was given changes nothing kept
+            self.assertTrue(np.all(model_count_members(result.run_dir, "Inew")[0].values >= 0))
+            # The output written again (control): read again, with the new values
+            with netCDF4.Dataset(result.run_dir / "output" / "output.nc", "a") as data:
+                data["Human/Inew"][:] = data["Human/Inew"][:] * 2.0
+            doubled = model_count_members(result.run_dir, "Inew")[0]
+            self.assertEqual(counts.call_count, 2)
+        np.testing.assert_allclose(doubled.values, 2.0 * again[0].values, rtol=1e-6)
+
     def test_views_are_kept_and_never_fail_a_trial(self):
         from mobile.calibration_engine import (SERIES, VIEW, create_calibration, read_calibration, run_calibration, trial_comparison,
                                                trial_folder, trials_table)

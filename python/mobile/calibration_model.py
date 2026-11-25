@@ -2,7 +2,9 @@
 in the same form as the observations (calibration_data.Observations), so that the same processing steps apply to both."""
 
 import json
+import threading
 import warnings
+from collections import OrderedDict
 from dataclasses import replace
 from pathlib import Path
 
@@ -19,6 +21,8 @@ from .results import list_runs, load_run, read_run
 SPACES = {"people": "Mean over the simulated cells, weighted by their people", "mean": "Mean over the simulated cells",
           "sum": "Sum over the simulated cells"}
 SEED_MEAN = "mean"  # The seed choice of a seed band for all its seeds: their mean, or their median and range after the steps
+READ_KEPT = 128  # Outputs of runs kept as read (_read_once): a calibration's trial reads its seeds for each objective and part
+_READ, _READ_LOCK = OrderedDict(), threading.Lock()
 
 
 def run_choices(runs_dir):
@@ -81,17 +85,49 @@ def _people(run_dir, manifest, shape):
     return people
 
 
+def _read_once(files, key, read):
+    """(days, values) as read() gives them, read once for the files as they are now (a run made again in the same folder
+    is read again) and the key: a calibration's trial reads the outputs of its seeds for each of its objectives and parts
+    of the period. The values are a copy each time, never shared."""
+    try:
+        identity = tuple((str(Path(path).resolve()), stat.st_ino, stat.st_size, stat.st_mtime_ns)
+                         for path, stat in ((path, Path(path).stat()) for path in files))
+    except OSError:
+        return read()  # Raises as reading does
+    with _READ_LOCK:
+        kept = _READ.get((identity, key))
+        if kept is not None:
+            _READ.move_to_end((identity, key))
+    if kept is None:
+        kept = read()
+        with _READ_LOCK:
+            _READ[(identity, key)] = kept
+            while len(_READ) > READ_KEPT:
+                _READ.popitem(last=False)
+    days, values = kept
+    return days, values.copy()
+
+
+def _dates(time):
+    """The days of a netCDF time variable."""
+    days = netCDF4.num2date(time[:], time.units, getattr(time, "calendar", "standard"), only_use_cftime_datetimes=False,
+                            only_use_python_datetimes=True)
+    return pd.DatetimeIndex(np.ma.getdata(days)).normalize()
+
+
 def _series(run_dir, name, info, space):
     """(days, values) of an output of one run, reduced over its simulated cells."""
     run_dir = Path(run_dir)
+    return _read_once((run_dir / "output" / "output.nc", run_dir / "run.json"), ("series", name, info["group"], space),
+                      lambda: _read_series(run_dir, name, info, space))
+
+
+def _read_series(run_dir, name, info, space):
     manifest = json.loads((run_dir / "run.json").read_text())
     with netCDF4.Dataset(run_dir / "output" / "output.nc") as data:
         variable = data[f"{info['group']}/{name}" if info["group"] else name]
         values = np.ma.filled(variable[:].astype("f8"), np.nan)  # (time, lat, lon)
-        time = data["time"]
-        days = netCDF4.num2date(time[:], time.units, getattr(time, "calendar", "standard"), only_use_cftime_datetimes=False,
-                                only_use_python_datetimes=True)
-    days = pd.to_datetime([day.isoformat() for day in days]).normalize()
+        days = _dates(data["time"])
     simulated = np.isfinite(values).any(axis=0)
     if not simulated.any():
         raise DataError(f"{name} has no value in any cell")
@@ -127,19 +163,22 @@ def _counts(run_dir, name, variables):
     the simulated cells of the value times the people the cell stands for that day (its agents x its humans per agent,
     which a growing population changes)."""
     run_dir = Path(run_dir)
+    groups = tuple((variables.get(key) or {}).get("group") for key in (name, *PEOPLE_OUTPUTS))
+    return _read_once((run_dir / "output" / "output.nc",), ("counts", name, groups), lambda: _read_counts(run_dir, name, variables))
+
+
+def _read_counts(run_dir, name, variables):
     with netCDF4.Dataset(run_dir / "output" / "output.nc") as data:
         def field(key):
             info = variables[key]
             return np.ma.filled(data[f"{info['group']}/{key}" if info["group"] else key][:].astype("f8"), np.nan)
         values, agents, ratio = field(name), field("Nagent"), field("HA")
-        time = data["time"]
-        days = netCDF4.num2date(time[:], time.units, getattr(time, "calendar", "standard"), only_use_cftime_datetimes=False,
-                                only_use_python_datetimes=True)
+        days = _dates(data["time"])
     if not values.shape == agents.shape == ratio.shape:
         raise DataError(f"{name}, the agents and the humans per agent of the run are not on the same days and cells")
     people = np.nan_to_num(agents) * np.nan_to_num(ratio)
     counts = np.nansum(np.where(np.isfinite(values), values, 0.0) * people, axis=(1, 2))
-    return pd.to_datetime([day.isoformat() for day in days]).normalize(), counts
+    return days, counts
 
 
 def model_count_members(folder, name, seed=None, aggregation=None):
