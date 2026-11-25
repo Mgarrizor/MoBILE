@@ -10,6 +10,8 @@ MODULE mo_control
     ! These are overwritten by the input command when running MOBILE (when namelist_inout is called)
     logical :: input    =.true.  ! External population, driving files and model parameters
     logical :: agents   =.true.  ! Use agents, if false the program falls back to density
+    logical :: ecology  =.false. ! Vector ecology only (mobile.sh -e 1): VECTRI's ponds, larvae and adult vectors per cell
+                                 ! from rain and temperature; no agents, no mobility, no human infection
     logical :: coupling =.true. ! Use VECTRI
     logical :: gravity  =.true.  ! Use gravity model
     logical :: radial   =.false. ! If .true. build radial city, otherwise uniform 
@@ -86,7 +88,6 @@ MODULE mo_control
     character(len=200) :: pop_file   ! Name of population file
     character(len=200) :: rain_file  ! Name of rain/precipitation file
     character(len=200) :: t2m_file   ! Name of temperature file
-    character(len=200) :: area_file  ! Name of cell area file
     character(len=200) :: imm_file   ! Name of immunity forcing file
     character(len=200) :: mortality_file = '' ! Name of age-specific mortality-rate file; blank = scalar mu
     character(len=200) :: birthrate_file = '' ! Name of yearly birth-rate file; blank = scalar birth_rate
@@ -100,9 +101,15 @@ MODULE mo_control
                                               ! parameters). Requires at least one demographic rate file to be supplied.
                                               ! Resolved once in demog_init (mo_agents.f90) from demog_counterfactual
                                               ! plus which demographic files were actually given.
+    real :: demog_growth = 0. ! Growth mode: the target annual growth factor of the population (e.g. 1.0213 for +2.13%
+                              ! a year), from which the shape-invariant generator derives the birth and age-specific
+                              ! mortality rates that hold cumm_age.txt's shape while the population grows by it; no
+                              ! rate file needed. The spin-up stays at g = 1 (no growth). 0 = off. Set from &HUMAN;
+                              ! not with rate files or counterfactual mode.
     integer, parameter :: DEMOG_STANDARD = 0 ! scalar mu/birth_rate
     integer, parameter :: DEMOG_FACTUAL  = 1 ! supplied files drive the real run
     integer, parameter :: DEMOG_COUNTER  = 2 ! "shadow"-derived g(t) drives the real run
+    integer, parameter :: DEMOG_GROW     = 3 ! a given g (demog_growth) drives the real run
     integer :: demog_mode = DEMOG_STANDARD
     character(len=200) :: namelist_filename
     !----------------------------------------------------------
@@ -114,7 +121,6 @@ MODULE mo_control
     character(len=100) ::  pop_names(4) = [character(len=20) :: "pop", "population", "population density", "Band1"]
     character(len=100) ::  rain_names(5)= [character(len=20) :: "rain", "rainfall", "precipitation", "tp", "precip"]
     character(len=100) ::  temp_names(2)= [character(len=20) :: "temperature","t2m"]
-    character(len=100) ::  area_names(1)= [character(len=20) :: "cell_area"]
     character(len=100) ::  imm_names(2)= [character(len=20) :: "imm","imm_bulk"]
 
     ! Attribute names

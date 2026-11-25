@@ -12,6 +12,9 @@ MODULE mo_namelist
 
     use mo_constants !-- VECTRI
 
+#ifdef COUPLED
+    use mo_vectri, only: out_vect, out_vecinfc, out_larv, out_wpond, out_wurbn, out_wperm
+#endif
 
     implicit none
 
@@ -27,9 +30,11 @@ MODULE mo_namelist
             character(len=1000) :: line
             integer:: file_unit, iostats
             integer:: arg_num,ierr
+            integer :: vecID   ! Vector species: VECTRI's case (mo_constants: ivec); 0, An. gambiae, if the namelist has none
             
             ! Define namelist
-            namelist /INOUT/ run_name, disID, nsteps, seed, spin_up
+            namelist /INOUT/ run_name, disID, nsteps, seed, spin_up, vecID, ecology
+            vecID = 0
 
             arg_num = 1
             ! Read first command line argument (namelist name)
@@ -55,20 +60,22 @@ MODULE mo_namelist
                 backspace(file_unit)
                 read(file_unit,fmt='(A)') line
                 write(stderr,'(A)') 'Invalid line in namelist is: '//trim(line)
-                STOP
+                ERROR STOP
             end if
             
             close (file_unit)
+            ivec = vecID   ! Read before init_constants, which sets the species' values from it
 
         end subroutine namelist_inout
 
         subroutine namelist_human(pop_file,nagent,imm_file,mortality_file,birthrate_file,mortality_time_file, &
-                                  demog_counterfactual)
+                                  demog_counterfactual,demog_growth)
             implicit none
 
             character(len=200), intent(out):: pop_file, imm_file, mortality_file, birthrate_file, mortality_time_file
             integer, intent(out) :: nagent
             logical, intent(out) :: demog_counterfactual
+            real, intent(out) :: demog_growth
 
             ! Local use only
             character(len=1000) :: line
@@ -76,7 +83,7 @@ MODULE mo_namelist
 
             ! Define namelist
             namelist /HUMAN/ pop_file, nagent, imm_file, mortality_file, birthrate_file, mortality_time_file, &
-                             demog_counterfactual
+                             demog_counterfactual, demog_growth
 
             ! Does the file exist?
             inquire (file=namelist_filename, iostat=iostats)
@@ -91,6 +98,7 @@ MODULE mo_namelist
             ! set explicitly here (same reason growth_ratio_ceiling is defaulted
             ! before the &CONST read).
             demog_counterfactual = .false.
+            demog_growth = 0.
 
             ! Open and read namelist
             open (action='read', file=namelist_filename, iostat=iostats, newunit=file_unit)
@@ -104,7 +112,7 @@ MODULE mo_namelist
                 backspace(file_unit)
                 read(file_unit,fmt='(A)') line
                 write(stderr,'(A)') 'Invalid line in namelist is: '//trim(line)
-                STOP
+                ERROR STOP
             end if
 
             if (len(trim(imm_file)) /= 0) then
@@ -118,17 +126,17 @@ MODULE mo_namelist
 
 
 
-        subroutine namelist_clima(rain_file,t2m_file,area_file)
+        subroutine namelist_clima(rain_file,t2m_file)
             implicit none
 
-            character(len=200), intent(out):: rain_file, t2m_file, area_file
+            character(len=200), intent(out):: rain_file, t2m_file
             
             ! Local use only
             character(len=1000) :: line
             integer:: file_unit, iostats
             
             ! Define namelist
-            namelist /CLIMA/ rain_file, t2m_file, area_file
+            namelist /CLIMA/ rain_file, t2m_file
 
             ! Does the file exist?
             inquire (file=namelist_filename, iostat=iostats)
@@ -150,7 +158,7 @@ MODULE mo_namelist
                 backspace(file_unit)
                 read(file_unit,fmt='(A)') line
                 write(stderr,'(A)') 'Invalid line in namelist is: '//trim(line)
-                STOP
+                ERROR STOP
             end if
 
             if (len(trim(rain_file)) == 0) then
@@ -161,13 +169,6 @@ MODULE mo_namelist
             if (len(trim(t2m_file)) == 0) then
                 print *, 'No temperature input'
                 out_t2m = .false.
-            end if
-
-            if (len(trim(area_file)) == 0) then
-                print *, 'No area input'
-                if (agents) then 
-                    STOP 
-                end if
             end if
 
             
@@ -213,6 +214,11 @@ MODULE mo_namelist
                              e_0, e1, e2, A1, e_th, mat_rate, rho,                       & ! Immunity scheme
                              m_a, m_c, k_m, i_star_a, i_star_c, k_star,                  & ! Symptomatic scheme
                              d_c, d_a, k_e,                                          & ! 
+                             fA_chr, tau_chr,                                        & ! Chronic asymptomatic reservoir
+                             rvecsurv, rvecsurv_min,                                 & ! Adult vector survival
+                             wurbn_tau, wurbn_sf,                                    & ! Urban water: log(people per km2 / wurbn_tau + 1) x wurbn_sf
+                             rbiocapacity, rlarvsurv, rlarv_tmin, neggmn,            & ! Larvae and eggs (per species in init_constants)
+                             rtgono, rtsporo,                                        & ! Gonotrophic and sporogonic thresholds (per species)
                              alph_min,k_alph                                               !
 
             ! Does the file exist?
@@ -238,7 +244,7 @@ MODULE mo_namelist
                 backspace(file_unit)
                 read(file_unit,fmt='(A)') line
                 write(stderr,'(A)') 'Invalid line in namelist is: '//trim(line)
-                STOP
+                ERROR STOP
             end if
 
             close (file_unit)
@@ -288,6 +294,53 @@ MODULE mo_namelist
             end if
             nagent_max = ceiling(real(nagent) * growth_ratio_ceiling)
         end subroutine namelist_const
+
+
+        subroutine namelist_output
+        ! - Selects the output fields at run time. Flags not set in &OUTPUT keep the defaults in
+        !   mo_control and mo_vectri.
+        ! - Only flags that do nothing but select output are listed. out_rain and out_t2m also
+        !   gate reading the forcing, and diag_age the age-stratified accumulation.
+            implicit none
+
+            ! Local use only
+            character(len=1000) :: line
+            integer:: file_unit, iostats
+
+            ! Define namelist
+            namelist /OUTPUT/ out_pop, out_age, out_N, out_HA, out_S, out_E, out_I, out_Ia, &
+                              out_I_new, out_Ia_new, out_A, out_Aa, out_R, out_EIR, out_P1, &
+                              out_hbr, out_imm, out_imm_a, out_N_a
+#ifdef COUPLED
+            namelist /OUTPUT/ out_vect, out_vecinfc, out_larv, out_wpond, out_wurbn, out_wperm
+#endif
+
+            ! Does the file exist?
+            inquire (file=namelist_filename, iostat=iostats)
+
+             if (iostats /= 0) then
+                 write (stderr, '("Error: namelist file does not exist")')
+                 return
+             end if
+
+            ! Open and read namelist
+            open (action='read', file=namelist_filename, iostat=iostats, newunit=file_unit)
+            read (nml=OUTPUT, iostat=iostats, unit=file_unit)
+
+            ! If file exists but reading failed
+            if (iostats /= 0) then
+                write (stderr, '("Error: invalid namelist format")')
+                ! Output line where failure occured
+                ! https://degenerateconic.com/namelist-error-checking.html
+                backspace(file_unit)
+                read(file_unit,fmt='(A)') line
+                write(stderr,'(A)') 'Invalid line in namelist is: '//trim(line)
+                ERROR STOP
+            end if
+
+            close (file_unit)
+
+        end subroutine namelist_output
 
 
 

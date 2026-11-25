@@ -251,7 +251,7 @@ MODULE mo_mobility
                 !
               else if (agents .and. (norm_dice_long < eps)) then!
                 print*, 'No mobility for long trip scheme!'
-                STOP
+                ERROR STOP
                                             ! If norm_dice is zero it means agents are at ixy_1
                                             ! but the "grav" and "pop" masks don't allow them to move.
                                             ! Since the long trips have no gravity mask this should always be .true. (unless m_long = 0)

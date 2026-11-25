@@ -6,15 +6,15 @@
 Welcome to MoBILE's documentation!
 =========================================
 
-The *Mobility-Based Integrated Landscape Epidemiology* (**MoBILE**) model is an **open source** FORTRAN program developed at the `Earth System Physics <https://www.ictp.it/esp>`_ section of ICTP, Trieste (Italy).
+The *Mobility-Based Integrated Landscape Epidemiology* (**MoBILE**) model is an **open source** FORTRAN program made to realistically model infectious diseases influenced by climate, such as malaria.
 
 **Authors** in alphabetic order
    
-   - Adrian M. Tompkins (ICTP)
-   - Cyril Caminade (ICTP)
-   - Miguel Garrido Zornoza (ICTP)
+   - Miguel Garrido Zornoza 
    
-For issues not included in this documentation, please reach out at *mobile@ictp.it*. 
+For issues not included in this documentation, please reach out at *mgarrizoraca@gmail.com*. 
+
+The source code, its numerical methods and its subroutines are documented separately, with `FORD <https://mgarrizor.github.io/MoBILE/>`_.
 
 .. note::
 
@@ -48,6 +48,7 @@ Indices and tables
 
    requirements
    usage
+   gui
    model
    advanced
    references

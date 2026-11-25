@@ -144,6 +144,12 @@ TYPE(datafld),SAVE,DIMENSION(3):: soil= [ &
            ! constants specific for npud_vers=2 (Asare et al. 2016a,b)
            wpond_S=25400/wpond_CN-254
 
+           ! Larval growth rates from rlarv_tmin: init_constants builds them before &CONST is read, so build them again
+           ! here, after it, as wpond_S above (rlarv_tmin may be given in &CONST)
+           rlarvmature(2,:)=(/rlarv_jepson,-rlarv_tmin*rlarv_jepson/)
+           rlarvmature(3,:)=(/rlarv_bayoh,-rlarv_tmin*rlarv_bayoh/)
+           rlarvmature(4,:)=(/rlarv_craig,-rlarv_tmin*rlarv_craig/)
+
 
            allocate(nbites(nlon*nlat))
            nbites(:) = 0.

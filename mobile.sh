@@ -31,13 +31,16 @@ usage() { echo "Usage:              \n
                 -a: Number of agents [Integer] \n
                 -u: Spin up [0: no SI ; 1: SU to threshold] \n
                 -v: VECTRI coupling [0: No, 1: Yes] \n
-                -?: Vector ID [0: gambiae, ...] \n
-                -x: Area of grid cells \n
+                -e: Vector ecology only [0: no (default), 1: VECTRI's vectors alone: no agents, mobility or human infection; needs -v 1 -d 1] (Optional) \n
+                -V: Vector species for VECTRI [0: An. gambiae (default), 1: An. funestus, 2: An. sacharovi, 10: Ae. albopictus, 11: Ae. aegypti] (Optional) \n
                 -i: Immunity forcing file \n
                 -M: Age-specific mortality-rate file (Optional; blank = scalar mu) \n
                 -B: Time-varying birth-rate file (Optional; blank = scalar birth_rate) \n
                 -T: Age-AND-year mortality-rate file (Optional; blank = use -M/scalar mu; overrides -M if both given) \n
                 -C: Counterfactual mode [1: hold the age structure fixed; anything else: factual] (Optional; needs -M/-B/-T) \n
+                -G: Growth mode: annual growth factor of the population, e.g. 1.0213 (Optional; blank/NONE/0 = off; not with -M/-B/-T/-C) \n
+                -O: Output selection file, out_*=.true./.false. lines for &OUTPUT (Optional; blank/NONE = default output) \n
+                -E: Already-built model (a mobile.out) to run instead of building one (Optional; blank/NONE = build) \n
 
                  "; }
 # Resources
@@ -50,8 +53,13 @@ mortality_file=""
 birthrate_file=""
 mortality_time_file=""
 demog_counterfactual=".false."
+demog_growth="0."
+output_file=""
+prebuilt=""
+vecID=0
+ecology=0
 
-while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:x:i:l:M:B:T:C:" flag; do
+while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:V:e:i:l:M:B:T:C:G:O:E:" flag; do
  case $flag in
    h) # Handle the -h flag
    # Display script help information
@@ -94,10 +102,13 @@ while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:x:i:l:M:B:T:C:" flag; do
    v) # Handle the -v flag
    vectri=$OPTARG
    ;;
-   x) # Handle the -x flag
-   area_file=$OPTARG
+   V) # Handle the -V flag (vector species, VECTRI's case in mo_constants.f90)
+   vecID=$OPTARG
    ;;
-   l) # Handle the -x flag
+   e) # Handle the -e flag (vector ecology only)
+   ecology=$OPTARG
+   ;;
+   l) # Handle the -l flag
    name_list=$OPTARG
    ;;
    #i) # Handle the -i flag -> argument is not required (no colon after the 'i' flag)
@@ -139,12 +150,48 @@ while getopts ":ho:p:r:t:d:n:m:s:a:c:u:v:x:i:l:M:B:T:C:" flag; do
      demog_counterfactual=".false."
    fi
    ;;
+   G) # Handle the -G flag (growth mode: annual growth factor; 'NONE' or blank = off)
+   if [ "$OPTARG" = "NONE" ] || [ -z "$OPTARG" ]; then
+     demog_growth="0."
+   else
+     demog_growth="$OPTARG"
+   fi
+   ;;
+   O) # Handle the -O flag (output selection file; 'NONE' = blank = default output)
+   if [ "$OPTARG" = "NONE" ]; then
+     output_file=""
+   else
+     output_file="$OPTARG"
+   fi
+   ;;
+   E) # Handle the -E flag (already-built model; 'NONE' = blank = build it)
+   if [ "$OPTARG" = "NONE" ]; then
+     prebuilt=""
+   else
+     prebuilt="$OPTARG"
+   fi
+   ;;
    \?) # Handle invalid options
    usage
    exit 1
    ;;
  esac
 done
+
+if ! [[ ${vecID} =~ ^[0-9]+$ ]]; then
+  echo "-V (vector species) must be a whole number, e.g. 0 for An. gambiae: got '${vecID}'" >&2; exit 1
+fi
+
+if [[ ${ecology} == 1 ]]; then
+  if [[ ${vectri} != 1 || ${disID} != 1 ]]; then
+    echo "-e 1 (vector ecology only) needs VECTRI (-v 1) and the vector-borne path (-d 1)" >&2; exit 1
+  fi
+  ecology_nml=".true."
+elif [[ ${ecology} == 0 ]]; then
+  ecology_nml=".false."
+else
+  echo "-e (vector ecology only) must be 0 or 1: got '${ecology}'" >&2; exit 1
+fi
 
 # 0) Prepare folder to save simulation and namelist options
 
@@ -160,6 +207,15 @@ if [[ $PWD == *${MOBILE}* ]]; then # If PWD contains ${MOBILE} stop
 fi
 
 mkdir -p $path
+
+# With -E the model is already built: nothing is linked into or touched in the shared src/ and nothing is
+# compiled, so runs with -E can go on side by side (e.g. the samples of an analysis, built once beforehand).
+# The model must have been built from this MOBILE with the same VECTRI coupling and mobility.
+if [[ -n ${prebuilt} ]]; then
+  [ -x "$prebuilt" ] || { echo "Already-built model not found or not executable: $prebuilt" >&2; exit 1; }
+  echo '================= Already-built model ============'
+  echo "${prebuilt}"
+else
 
 # 1) Link Makefile and src folder
 # https://www.man7.org/linux/man-pages/man1/ln.1.html
@@ -227,6 +283,8 @@ else
 fi
 #
 
+fi # -E: nothing to link
+
 if [[ ${mob} == 1 ]]; then
   echo '================= MOBILITY active ================'
 elif [[ ${mob} == 0 ]]; then
@@ -243,7 +301,8 @@ fi
 #
 bash fetch_age.sh # Create age weights 
 #
-# 2) Compile program
+# 2) Compile program (not with -E: the model is already built)
+if [[ -z ${prebuilt} ]]; then
 (cd $path && make ENABLE_COUPLING=${vectri} ENABLE_MOBILITY=${mob})
 exit=$? # Save exit status of 'make'.
 
@@ -267,6 +326,7 @@ if [ $exit != 0 ]; then
   echo "Makefile not successful" " --> Exit status:" $exit  
   exit 1
 fi
+fi # -E: nothing to compile
 #-------------------------------
 # A missing $const file leaves $lines empty, which writes a valid but EMPTY &CONST
 # block: every constant silently keeps its compiled-in default and the run
@@ -280,6 +340,13 @@ fi
 [ -r "$const" ] || { echo "Constants file not readable: $const" >&2; exit 1; }
 
 lines=$(<"$const")  # < reads the entire content of the file into the variable "lines"
+
+# Same check as $const: an unreadable file would silently give the default output
+output_lines=""
+if [ -n "$output_file" ]; then
+  [ -r "$output_file" ] || { echo "Output selection file not readable: $output_file" >&2; exit 1; }
+  output_lines=$(<"$output_file")
+fi
 #echo $lines
 # 3) Create NAMELIST
 # https://cyber.dabamos.de/programming/modernfortran/namelists.html
@@ -291,12 +358,13 @@ run_name='${filename}',
 disID=${disID},
 nsteps=${nstep},
 seed=${seed},
-spin_up=${spin_up}
+spin_up=${spin_up},
+vecID=${vecID},
+ecology=${ecology_nml}
 /
 &CLIMA
 rain_file='${rain_file}',
-t2m_file='${temp_file}',
-area_file='${area_file}'
+t2m_file='${temp_file}'
 /
 &HUMAN
 pop_file='${pop_file}',
@@ -306,16 +374,38 @@ mortality_file='${mortality_file}',
 birthrate_file='${birthrate_file}',
 mortality_time_file='${mortality_time_file}',
 demog_counterfactual=${demog_counterfactual},
+demog_growth=${demog_growth},
 /
 &CONST
 ${lines}
+/
+&OUTPUT
+${output_lines}
 /
 EOM
 
 # 4) Execute MOBILE (mobile.out)
 echo '================= Running MoBILE ================='
-${path}/mobile.out ${namelist}     # Pass namelist name as command line argument
+touch ${path}/.run_start           # Marks the run start: only crash reports newer than this count
+${prebuilt:-${path}/mobile.out} ${namelist}     # Pass namelist name as command line argument; with -E, the model given
+rc=$?
+# On macOS the crash backtrace has bare addresses; the system crash report has file:line
+# (with the .dSYM from MODE=debug). Print its top frames. macOS writes it a few seconds late.
+if [[ $rc -ne 0 && $(uname -s) == Darwin ]]; then
+  for i in {1..10}; do
+    report=$(find ~/Library/Logs/DiagnosticReports -name 'mobile.out-*.ips' -newer ${path}/.run_start 2>/dev/null | head -1)
+    [[ -n $report ]] && break; sleep 1
+  done
+  [[ -n $report ]] && python3 -c "
+import json, sys
+b = json.loads(open(sys.argv[1]).read().split('\n', 1)[1])
+t = [t for t in b['threads'] if t.get('triggered')][0]
+print('Crash report', sys.argv[1], '- top frames:')
+for f in t['frames'][:6]: print('  ', f.get('symbol', '?'), f.get('sourceFile', ''), f.get('sourceLine', ''))
+" "$report"
+fi
 #-------------------------------
 mv ${namelist} ${filename}.nc ${filename}.info ${filename}/
 cp $const ${filename}/
+exit $rc   # The model's own status: non-zero when it stopped on an error (ERROR STOP) or crashed
 

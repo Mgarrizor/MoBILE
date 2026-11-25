@@ -129,7 +129,6 @@ def run(imem,igen,vals,data_loc):  # Practically untouched from Adrian's version
                                  '-t',data_loc+'t2m_cal.nc',   # Temperature file
                                  '-r',data_loc+'rain_cal.nc',  # Rainfall file
                                  '-p',data_loc+'pop_cal.nc',   # Population file
-                                 '-x',data_loc+'area.nc',      # Area file
                                  #
                                  #
                                  '-n','0',       # Integration length --> If  = 0  then takes length of driving fields

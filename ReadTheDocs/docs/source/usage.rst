@@ -51,7 +51,7 @@ In order to avoid messing up your GitHub repository the program is made to be ru
 
 .. code-block:: console
 
-   export MOBILE=/path/to/MoBILE/.git
+   export MOBILE=/path/to/MoBILE
 
 Now try 
 

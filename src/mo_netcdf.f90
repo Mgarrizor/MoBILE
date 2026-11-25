@@ -105,7 +105,7 @@ MODULE mo_netcdf
       var_out = var_out + 1
       if(status /= nf90_noerr) then
         print *, err_mes
-        STOP
+        ERROR STOP
       end if
 
       end subroutine
@@ -349,7 +349,7 @@ MODULE mo_netcdf
        print *, err_mes
        print *, itime
        print *, NF90_STRERROR(status) 
-       STOP
+       ERROR STOP
       end if
 
       end subroutine write_check_3D
@@ -377,7 +377,7 @@ MODULE mo_netcdf
       if(status /= nf90_noerr) then
        print *, err_mes
        print *, itime
-       STOP
+       ERROR STOP
       end if
 
       end subroutine write_check_3D_int
@@ -440,7 +440,7 @@ MODULE mo_netcdf
             .and. (.not. diag_age)) then
             print *, 'NetCDF Status: age-disaggregated output requested but diag_age is .false.'
             print *, '               (out_Ia/out_Aa/out_Ia_new/out_imm_a/out_N_a need it) -- Exit'
-            STOP
+            ERROR STOP
         end if
         !
         ! Horrible, clean it up!
@@ -552,7 +552,7 @@ MODULE mo_netcdf
         status = nf90_def_grp(parent_ncid = ncid_out, name = 'Human', new_ncid = ncid_grp(2))
         if(status /= nf90_noerr) then
           print *, 'NetCDF Status: error creating group <<Human>> ; status =', status
-          STOP
+          ERROR STOP
         end if
         !
         ! Data variables are nf90_float: the model computes in default real
@@ -595,7 +595,7 @@ MODULE mo_netcdf
         status = nf90_def_grp(parent_ncid = ncid_out, name = 'Hydro', new_ncid = ncid_grp(4))
         if(status /= nf90_noerr) then
           print *, 'NetCDF Status: error creating group <<Hydro>> ; status =', status
-          STOP
+          ERROR STOP
         end if
         !
         ! Declarations or interfaces related to the coupled mode
@@ -626,7 +626,7 @@ MODULE mo_netcdf
             status = nf90_def_grp(parent_ncid = ncid_out, name = 'I', new_ncid = ncid_sbgrp(3))
             if(status /= nf90_noerr) then
               print *, 'NetCDF Status: error creating subgroup <<I>> ; status =', status
-              STOP
+              ERROR STOP
             end if
         end if
         !
@@ -634,7 +634,7 @@ MODULE mo_netcdf
             status = nf90_def_grp(parent_ncid = ncid_out, name = 'Inew', new_ncid = ncid_sbgrp(7))
             if(status /= nf90_noerr) then
               print *, 'NetCDF Status: error creating subgroup <<Inew>> ; status =', status
-              STOP
+              ERROR STOP
             end if
         end if
         !
@@ -643,7 +643,7 @@ MODULE mo_netcdf
             status = nf90_def_grp(parent_ncid = ncid_out, name = 'A', new_ncid = ncid_sbgrp(4))
             if(status /= nf90_noerr) then
               print *, 'NetCDF Status: error creating subgroup <<A>> ; status =', status
-              STOP
+              ERROR STOP
             end if
         end if
         !
@@ -651,7 +651,7 @@ MODULE mo_netcdf
             status = nf90_def_grp(parent_ncid = ncid_out, name = 'imm', new_ncid = ncid_sbgrp(6))
             if(status /= nf90_noerr) then
               print *, 'NetCDF Status: error creating subgroup <<imm>> ; status =', status
-              STOP
+              ERROR STOP
             end if
         end if
         !
@@ -659,7 +659,7 @@ MODULE mo_netcdf
             status = nf90_def_grp(parent_ncid = ncid_out, name = 'Na', new_ncid = ncid_sbgrp(5))
             if(status /= nf90_noerr) then
               print *, 'NetCDF Status: error creating subgroup <<Na>> ; status =', status
-              STOP
+              ERROR STOP
             end if
         end if
         !
@@ -781,7 +781,7 @@ MODULE mo_netcdf
                 status = nf90_def_var(ncid = ncid_sbgrp(4), name = A_age_names(k), xtype = nf90_float, &
                           dimids = (/ DimId(1), DimId(2), DimId(3)/), varid = arr_VarID(var_out))
                 status = nf90_put_att(ncid = ncid_sbgrp(4), varid = arr_VarID(var_out), name = "units", values = "fraction")
-                status = nf90_put_att(ncid = ncid_sbgrp(4), varid = arr_VarID(var_out), name = "long_name", values = "Age-disaggregated Infected symptomatic population per person")
+                status = nf90_put_att(ncid = ncid_sbgrp(4), varid = arr_VarID(var_out), name = "long_name", values = "Age-disaggregated Infected asymptomatic prevalence per person")
                 var_out = var_out + 1
                 !
             end do
@@ -823,7 +823,7 @@ MODULE mo_netcdf
         status = nf90_def_grp(parent_ncid = ncid_out, name = 'Climate', new_ncid = ncid_grp(3))
         if(status /= nf90_noerr) then
           print *, 'NetCDF Status: error creating group <<Climate>> ; status =', status
-          STOP
+          ERROR STOP
         end if
         !
         if ((out_rain)) then
@@ -874,7 +874,7 @@ MODULE mo_netcdf
         status = nf90_def_grp(parent_ncid = ncid_out, name = 'Vector', new_ncid = ncid_grp(1))
         if(status /= nf90_noerr) then
           print *, 'NetCDF Status: error creating group <<Vector>> ; status =', status
-          STOP
+          ERROR STOP
         end if
         !
         if (out_vect) then
@@ -1120,6 +1120,9 @@ MODULE mo_netcdf
         ! Local use only
         integer :: status, LatDimID, LonDimID, LatVarID, LonVarID, PopVarID
         integer :: numdims, indx_lat=1, indx_lon=1, indx    !indx_pop, indx_rain
+        integer :: ilat, ilon
+        double precision, allocatable :: lat_lo(:), lat_hi(:), lon_lo(:), lon_hi(:) ! Cell edges [degrees]
+        double precision, parameter :: d2r = 4*atan(1.d0)/180.d0                    ! Degrees to radians
 
 
 
@@ -1130,7 +1133,7 @@ MODULE mo_netcdf
         !
         if(status /= nf90_noerr) then
           print *, 'NetCDF Status: error opening population file -- ', pop_file
-          STOP
+          ERROR STOP
         end if
         !
         ! Inquire dimensions and get their IDs ----------------------------------------
@@ -1143,7 +1146,7 @@ MODULE mo_netcdf
             exit
           elseif((indx == size(lat_names)) .and. (status /= nf90_noerr)) then
             print *, 'NetCDF Status: latitude dimension not indentified'
-            STOP
+            ERROR STOP
           end if
         end do
 
@@ -1156,7 +1159,7 @@ MODULE mo_netcdf
             exit
           elseif((indx == size(lon_names)) .and. (status /= nf90_noerr)) then
             print *, 'NetCDF Status: longitude dimension not indentified'
-            STOP
+            ERROR STOP
           end if
         end do
 
@@ -1191,7 +1194,7 @@ MODULE mo_netcdf
             exit
           elseif((indx == size(pop_names)) .and. (status /= nf90_noerr)) then
             print *, 'NetCDF Status: populaton variable not indentified'
-            STOP
+            ERROR STOP
           end if
         end do
 
@@ -1260,7 +1263,7 @@ MODULE mo_netcdf
                   exit
                 elseif((indx == size(time_names)) .and. (status /= nf90_noerr)) then
                   print *, 'NetCDF Status: time dimension not indentified'
-                  STOP
+                  ERROR STOP
                 end if
               end do
         
@@ -1276,7 +1279,7 @@ MODULE mo_netcdf
                     exit
                   else if((indx == size(rain_names)) .and. (status /= nf90_noerr)) then
                     print *, 'NetCDF Status: rainfall variable not indentified'
-                    STOP
+                    ERROR STOP
                   end if
               end do
               !
@@ -1329,7 +1332,7 @@ MODULE mo_netcdf
                   !
                   if (size(time_coord) .ne. ntime) then
                     print *, 'Rainfall and temperature fields have different lenght --> Stop.'
-                    STOP
+                    ERROR STOP
                   end if
                   ! time_coord/time_att are canonically sourced from the
                   ! rainfall file only (see below) -- t2m's own time values
@@ -1348,7 +1351,7 @@ MODULE mo_netcdf
                   exit
                 elseif((indx == size(time_names)) .and. (status /= nf90_noerr)) then
                   print *, 'NetCDF Status: time dimension not indentified'
-                  STOP
+                  ERROR STOP
                 end if
               end do
         
@@ -1364,7 +1367,7 @@ MODULE mo_netcdf
                     exit
                   else if((indx == size(temp_names)) .and. (status /= nf90_noerr)) then
                     print *, 'NetCDF Status: temperature variable not indentified'
-                    STOP
+                    ERROR STOP
                   end if
               end do
               !
@@ -1412,7 +1415,7 @@ MODULE mo_netcdf
                   if (ntime .ne. nsteps) then
                     print *, 'Simulation lenght and immunity fields have different lenght --> Stop.'
                     print *, ntime, '/=', nsteps
-                    STOP
+                    ERROR STOP
                   end if
                   ! time_coord/time_att stay canonically sourced from the
                   ! rainfall file only (see netcdf_read_grid's rain/t2m
@@ -1426,7 +1429,7 @@ MODULE mo_netcdf
                 !=
                 elseif((indx == size(time_names)) .and. (status /= nf90_noerr)) then
                   print *, 'NetCDF Status: time dimension not indentified'
-                  STOP
+                  ERROR STOP
                 end if
               end do
               !
@@ -1441,7 +1444,7 @@ MODULE mo_netcdf
                     exit
                   else if((indx == size(imm_names)) .and. (status /= nf90_noerr)) then
                     print *, 'NetCDF Status: immunity forcing not indentified'
-                    STOP
+                    ERROR STOP
                   end if
               end do
               !
@@ -1451,32 +1454,24 @@ MODULE mo_netcdf
 
         if (agents) then
 
-              ! We need to extract the dates of the forcing and its total length, ntime, so that
-              ! nsteps <= ntime.
-
-              ! Open file
-              status = nf90_open(path = area_file, mode = nf90_nowrite, ncid = ncAreaID)        
-      
-              ! Inquire about rainfall and get its VarID
-              do indx=1,size(area_names)
-                  status = nf90_inq_varid(ncid=ncAreaID, name=area_names(indx), varid=AreaVarID)
-                  
-                  ! If name is found exit do loop
-                  if (status == nf90_noerr) then
-                    print *, 'NetCDF Status: found area variable of name --> ', area_names(indx)
-                    !
-                    exit
-                  else if((indx == size(area_names)) .and. (status /= nf90_noerr)) then
-                    print *, 'NetCDF Status: area variable not indentified'
-                    STOP
-                  end if
-              end do
+              ! Cell areas [m^2] from the grid of the population file, on a sphere of radius Re_area: from the
+              ! cell bounds of its coordinates if it has them, else with the edges halfway between the centres
+              ! (as cdo gridarea)
+              allocate(lat_lo(nlat), lat_hi(nlat), lon_lo(nlon), lon_hi(nlon))
+              call cell_bounds(ncid_in, LatVarID, lat_coord, 'latitude', lat_lo, lat_hi)
+              call cell_bounds(ncid_in, LonVarID, lon_coord, 'longitude', lon_lo, lon_hi)
               !
-              ! Get cell area values
-              status = nf90_get_var(ncid=ncAreaID, varid=AreaVarID, values=grid)
+              do ilat=1,nlat
+                do ilon=1,nlon
+                  grid(ilon,ilat) = real(Re_area**2*abs(sin(lat_hi(ilat)*d2r) - sin(lat_lo(ilat)*d2r)) &
+                                                   *abs(lon_hi(ilon) - lon_lo(ilon))*d2r)
+                end do
+              end do
               !
               allocate(A_cell(nxy))
               A_cell = reshape(grid, (/nxy/))
+              print '("Cell areas from the population grid -- total: ",f14.1," km2")', sum(dble(A_cell))*1.d-6
+              deallocate(lat_lo, lat_hi, lon_lo, lon_hi)
               !
 
         else  ! If not rainfall input set to zero 
@@ -1490,6 +1485,56 @@ MODULE mo_netcdf
         
 
       end subroutine netcdf_read_grid
+
+
+      subroutine cell_bounds(ncid, VarID, coord, axis, lower, upper)
+      ! Edges of the cells along one coordinate [degrees]: the cell bounds of the coordinate if the file has
+      ! them (CF "bounds" attribute, e.g. lat_bnds), else halfway between the centres, the ends extrapolated.
+      ! A coordinate with a single value and no bounds gives no cell size --> STOP
+        implicit none
+        integer, intent(in) :: ncid, VarID
+        real, intent(in) :: coord(:)
+        character(len=*), intent(in) :: axis
+        double precision, intent(out) :: lower(:), upper(:)
+
+        ! Local use only
+        character(len=100) :: bounds_name
+        double precision, allocatable :: bnds(:,:), c(:)
+        integer :: status, BndsVarID, n
+
+        n = size(coord)
+        bounds_name = ''
+        status = nf90_get_att(ncid=ncid, varid=VarID, name="bounds", values=bounds_name)
+
+        if (status == nf90_noerr) then
+          status = nf90_inq_varid(ncid=ncid, name=trim(bounds_name), varid=BndsVarID)
+          if (status /= nf90_noerr) then
+            print *, 'NetCDF Status: bounds of the ', axis, ' not found --> ', trim(bounds_name)
+            ERROR STOP
+          end if
+          allocate(bnds(2,n))
+          status = nf90_get_var(ncid=ncid, varid=BndsVarID, values=bnds)
+          if (status /= nf90_noerr) then
+            print *, 'NetCDF Status: bounds of the ', axis, ' not read --> ', trim(bounds_name)
+            ERROR STOP
+          end if
+          print *, 'NetCDF Status: cell bounds of the ', axis, ' --> ', trim(bounds_name)
+          lower = bnds(1,:)
+          upper = bnds(2,:)
+          deallocate(bnds)
+        else if (n >= 2) then
+          c = dble(coord)
+          upper(1:n-1) = 0.5d0*(c(1:n-1) + c(2:n))
+          lower(2:n)   = upper(1:n-1)
+          lower(1)     = c(1) - (upper(1) - c(1))
+          upper(n)     = c(n) + (c(n) - lower(n))
+        else
+          print *, 'The population file has a single ', axis, ' and no cell bounds: the cell area cannot be known.'
+          print *, 'Add the bounds of the coordinate (CF "bounds" attribute, e.g. lat_bnds, lon_bnds) --> STOP'
+          ERROR STOP
+        end if
+
+      end subroutine cell_bounds
 
 
 

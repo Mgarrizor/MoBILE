@@ -30,9 +30,10 @@ USE, INTRINSIC :: ISO_C_BINDING
 
     type malaria
         integer :: status   ! S=1, E= 2, I=3, A=4, R=5 Susceptible-Exposed-Infected-Asymptomatic-Recovered (SEIAR)
-        real    :: EIR_att  ! Entomological inoculation rate
-        real    :: P1_att   ! Probability of receiving at least one infective bite today
-        real    :: hbr_att  ! Human biting rate
+        ! Default 0: agents_diagnostics sums these on day 0, before transmission first sets them
+        real    :: EIR_att = 0.  ! Entomological inoculation rate
+        real    :: P1_att = 0.   ! Probability of receiving at least one infective bite today
+        real    :: hbr_att = 0.  ! Human biting rate
         real    :: imm      ! Immunity level [0,1]
         logical :: mat_im   ! Maternal immunity 
        ! real    :: par_load ! Parasite load [Gametocytes/microLiter] 
@@ -133,8 +134,10 @@ USE, INTRINSIC :: ISO_C_BINDING
             ! Calculate number of agents per grid cell for a given total, nagent, and
             ! the input human population density, pop_dens
             !
-            norm_check = sum(pop_dens(:)*A_cell(:)) ! Weighted by cell area
-            norm = sum(log(pop_dens(:)*A_cell(:)+1.)) ! Re-scaled weights
+            ! People and weights in simulated cells only (mask_pop = .true.: population, rain and
+            ! temperature data), the only cells that get agents
+            norm_check = sum(pop_dens(:)*A_cell(:), mask=mask_pop) ! Weighted by cell area
+            norm = sum(log(pop_dens(:)*A_cell(:)+1.), mask=mask_pop) ! Re-scaled weights, simulated cells only
             !
             allocate(scale(nxy))
             allocate(scaleI(nxy))
@@ -144,10 +147,18 @@ USE, INTRINSIC :: ISO_C_BINDING
             print *, 'Average scale factor = ', sum(scale(:))/size(scale(:))
             print *, 'Number of people in simulated region', norm_check
             !
+            ! Agents are only placed in simulated cells, i.e. where mask_pop is .true.: cells with
+            ! population AND rain AND temperature data. mask_pop is .false. where rain or temperature
+            ! is missing (e.g. a coastal cell outside the rainfall product), even if people live there.
+            ! norm_check counts the people in simulated cells only: had it counted all cells, this check
+            ! could pass with fewer people in the simulated cells than nagent, and the loop placing the
+            ! remaining agents (do while below) would never end. Example: a 1x1 domain whose only cell
+            ! has people but no rain data -- no agent can be placed, and the run would hang.
             if (norm_check < nagent) then
-                print *, 'More agents than people! --> STOP'
-                STOP 
-            end if 
+                print *, 'More agents than people in simulated cells (with rain and temperature data):', &
+                         norm_check, '< nagent =', nagent, ' --> STOP'
+                ERROR STOP
+            end if
             !
             P_a = norm_check/nagent
             !
@@ -226,7 +237,10 @@ USE, INTRINSIC :: ISO_C_BINDING
                     ! different atribute (age, sex, wealth) distributions. This choice 
                     ! is made when the standard method would require a prohibitive number of
                     ! agents, e.g., when run at regional scales.
-                    npeop(ixy) = min( ceiling(log(pop_dens(ixy)*A_cell(ixy)+1.)/norm*nagent),int(pop_dens(ixy)*A_cell(ixy)) )
+                    ! floor() (not ceiling()) so this first pass never exceeds nagent:
+                    ! ceiling() adds up to one agent per populated cell, which overshoots
+                    ! nagent on grids with many populated cells. The deficit is filled below.
+                    npeop(ixy) = min( floor(log(pop_dens(ixy)*A_cell(ixy)+1.)/norm*nagent),int(pop_dens(ixy)*A_cell(ixy)) )
                     !
                     if (npeop(ixy) /= 0) then ! If there is someone
                         do ipeo = 1,npeop(ixy)
@@ -342,10 +356,11 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             ! Standard distribution of agents:
             ! For this, build a biased dice (see functions below) with weights 
-            ! prop. to pop_dens(:)*A_cell(:) and throw it.
+            ! prop. to pop_dens(:)*A_cell(:) and throw it. Weights are zero in the cells not
+            ! simulated (mask_pop = .false.), so only simulated cells can be drawn.
             !
-            norm = sum(max(pop_dens(:)*A_cell(:)-npeop(:), 0.)) ! Weighted by cell area
-            cdf(:) = cumsum(max(pop_dens(:)*A_cell(:)-npeop(:), 0.))/norm
+            norm = sum(max(pop_dens(:)*A_cell(:)-npeop(:), 0.), mask=mask_pop) ! Weighted by cell area
+            cdf(:) = cumsum(merge(max(pop_dens(:)*A_cell(:)-npeop(:), 0.), 0., mask_pop))/norm
             !
             ! Re-scaled distribution of agents:
             ! Add the correction factor "-npeop(:)" to avoid having a human/agent ratio
@@ -359,6 +374,12 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             write(*,*) ' ' 
             print *, indx, '/ ', nagent
+            ! The loop below can only add agents; if the first pass already placed
+            ! more than nagent it would never terminate and overrun people(:).
+            if (indx > (nagent+1)) then
+                print *, 'First pass placed', indx-1, 'agents > nagent =', nagent, ' --> STOP'
+                ERROR STOP
+            end if
             do while (indx /= (nagent+1))
                !
                call random_number(rand)        ! Throw the dice
@@ -475,6 +496,11 @@ USE, INTRINSIC :: ISO_C_BINDING
                end if
                !
             end do
+            ! Cells with fewer than one person are capped at zero agents above, whatever nagent is.
+            if (any(mask_pop .and. npeop==0 .and. pop_dens*A_cell>=1.)) then
+                print *, count(mask_pop .and. npeop==0 .and. pop_dens*A_cell>=1.), 'populated cells have no agents; nagent =', nagent, ' is too low --> STOP'
+                ERROR STOP
+            end if
             !
             ! Extra growth-capacity slots (nagent+1..nagent_max): distributed
             ! proportional to the just-finished real population npeop(:) --
@@ -588,7 +614,7 @@ USE, INTRINSIC :: ISO_C_BINDING
 
             if (omp_get_max_threads() > 32) then
                 print *, 'RNGLIB supports at most 32 independent generators --> STOP'
-                STOP
+                ERROR STOP
             end if
 
             ! Seed the serial-mode RNG state directly, outside any parallel region.
@@ -773,12 +799,18 @@ USE, INTRINSIC :: ISO_C_BINDING
             if (wsum <= 0._8) return
 
             print *, '===== Transmission saturation ====='
-            print '("  days accumulated: ",i0," (",f5.2," yr), rescaled to 365")', &
+            print '("  per-year average over first ",i0," days (",f5.2," yr) of the run")', &
                 nday_sat, 1._8/yr
-            print '("  annual exposure Lambda, pop-weighted:  ",f9.3)', lsum/wsum
-            print '("  P(infection/yr), pop-weighted mean:    ",f9.4)', psum/wsum
-            print '("  population with P > 0.99:              ",f8.1,"%")', 100._8*w99/wsum
-            print '("  population with P > 0.90:              ",f8.1,"%")', 100._8*w90/wsum
+            ! Lambda = -sum_t log(1-P1): cumulative force of infection, i.e. expected
+            ! infecting bites per person per year (exposure, ignoring immunity and
+            ! current infection status). 365/Lambda = mean wait to infection.
+            print '("  cumulative force of infection [/person/yr]: ",f9.1)', lsum/wsum
+            print '("  mean time to infection [days]:              ",f9.1)', 365._8/max(lsum/wsum, 1.e-12_8)
+            print '("  daily P(infection), pop-weighted:           ",f8.1,"%")', &
+                100._8*(1._8 - exp(-lsum/wsum/365._8))
+            print '("  P(infection/yr), pop-weighted mean:        ",f9.4)', psum/wsum
+            print '("  population with P > 0.99:                  ",f8.1,"%")', 100._8*w99/wsum
+            print '("  population with P > 0.90:                  ",f8.1,"%")', 100._8*w90/wsum
             if (w99/wsum > 0.5_8) then
                 print *, ' --> SATURATED: infection is near-certain for most of the population.'
                 print *, '     Incidence cannot resolve the transmission gradient at this HA.'
@@ -885,7 +917,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             case default
                 print *, "Dengue [Non-functional] - choose disID between: 0 (cholera) & 1 (malaria)"
-                STOP
+                ERROR STOP
             end SELECT
             !
         !===
@@ -904,13 +936,27 @@ USE, INTRINSIC :: ISO_C_BINDING
                          (len(trim(birthrate_file)) /= 0) .or. &
                          (len(trim(mortality_time_file)) /= 0)
 
+            if (demog_growth /= 0.) then
+                if (demog_growth <= 0.) then
+                    print *, 'demog_init: demog_growth must be a positive annual growth factor (e.g. 1.02), or 0 for off --> STOP'
+                    ERROR STOP
+                end if
+                if (have_files .or. demog_counterfactual) then
+                    print *, 'demog_init: demog_growth sets the rates itself: give it without the rate files ' // &
+                             '(-M/-B/-T) and without counterfactual mode --> STOP'
+                    ERROR STOP
+                end if
+            end if
+
             if (demog_counterfactual .and. (.not. have_files)) then
                 print *, 'demog_init: counterfactual mode needs the FACTUAL rate files ' // &
                          '(-M/-B/-T) -- the shadow population has nothing to integrate --> STOP'
-                STOP
+                ERROR STOP
             end if
 
-            if (.not. have_files) then
+            if (demog_growth > 0.) then
+                demog_mode = DEMOG_GROW
+            else if (.not. have_files) then
                 demog_mode = DEMOG_STANDARD
             else if (demog_counterfactual) then
                 demog_mode = DEMOG_COUNTER
@@ -936,6 +982,14 @@ USE, INTRINSIC :: ISO_C_BINDING
             if (demog_mode == DEMOG_COUNTER) then
                 print *, '--> Demographics: COUNTERFACTUAL (age structure held at cumm_age.txt)'
                 call demog_shadow_init()
+            else if (demog_mode == DEMOG_GROW) then
+                print *, '--> Demographics: GROWTH (age structure held at cumm_age.txt, growing by demog_growth a year)'
+                ! The real run's rates: shape-invariant at g = demog_growth, with the birth multiplier that makes the
+                ! ABM's daily scheme realize that g (the spin-up keeps the g=1 multiplier, used for b_spin above).
+                b_calib = demog_calib_factor(demog_growth)
+                call demog_shape_rates(demog_growth, b_grow, mu_grow)
+                call demog_print_growth(demog_growth)
+                b_calib = demog_calib_factor(1.0) ! For the g=1 self-test below
             else
                 print *, '--> Demographics: FACTUAL (supplied rate files drive the real run)'
             end if
@@ -972,6 +1026,16 @@ USE, INTRINSIC :: ISO_C_BINDING
                 ! mu_age_today(:) was set to mu_age(:) (= mu broadcast) once in
                 ! namelist_const and never changes, so only b_t needs setting.
                 b_t_today = birth_rate
+
+            case (DEMOG_GROW)
+                ! No growth in the spin-up: stationary g=1 rates, as in the file modes. Then the constant growth rates.
+                if (in_spinup) then
+                    b_t_today       = b_spin
+                    mu_age_today(:) = mu_spin(:)
+                else
+                    b_t_today       = b_grow
+                    mu_age_today(:) = mu_grow(:)
+                end if
 
             case default ! DEMOG_FACTUAL, DEMOG_COUNTER
                 if (in_spinup) then
@@ -1162,7 +1226,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             case default
                 print *, "Incorrect case, choose disID between: 0 (cholera) & 1 (malaria)"
-                STOP
+                ERROR STOP
             end SELECT
             !
         !===
@@ -1330,7 +1394,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             case default
                 print *, "Incorrect case, choose disID between: 0 (cholera) & 1 (malaria)"
-                STOP
+                ERROR STOP
             end SELECT
             !
         !===
@@ -1369,7 +1433,7 @@ USE, INTRINSIC :: ISO_C_BINDING
             !
             case default
                 print *, "Incorrect case, choose disID between: 0 (cholera), 1 (malaria)"
-                STOP
+                ERROR STOP
             end SELECT
         !===
         end subroutine agents_update
@@ -1798,8 +1862,12 @@ USE, INTRINSIC :: ISO_C_BINDING
                         P_1 = 1 - exp(-people(iagent)%agent_ID%w_NB*lambda_1*P_v0)  ! Heterogeneous Poisson model
                         !
                         ! Apply numerical threshold ---> Need to optimize transmission events for cases where P < epsilon
-                        P_0 = min(real(floor(P_0/eps)),P_0)
-                        P_1 = min(real(floor(P_1/eps)),P_1)
+                        ! Not min(real(floor(P/eps)),P) anymore: floor() returns a 32-bit integer, and P/eps
+                        ! overflows it once P > 2.1e-6. x86 (like LEONARDO) turns the overflow into -2**31 (so P < 0
+                        ! and nobody is ever infected); on arm64 it saturated (the result was clamped to the nearest value that fitted
+                        ! on a 32-bit integer: +2,147,483,647 if too big or -2,147,483,648 if too small), and min() was returning P, which was only hiding the bug.
+                        if (P_0 < eps) P_0 = 0.
+                        if (P_1 < eps) P_1 = 0.
                         ! 
                         ! Save agent-specific 'bulk' daily entomological inoculation rate (EIR)
                         people(iagent)%health_status%malaria_status%EIR_att = lambda_1
@@ -2386,6 +2454,15 @@ USE, INTRINSIC :: ISO_C_BINDING
           real :: r4_normal    !  Single precision (kind=4)
         
           r1 = generate_random()
+          ! M. Garrido Zornoza - October 2026
+          ! random_number() returns [0,1): r1 = 0 gives log(0) = -inf, an infinite normal
+          ! sample, and an overflowing ceiling(exp(...)) in tau_log (see the P_0/P_1 explanation and fix).
+          ! It created agents that were always infected (arm64, Mac) or had a negative
+          ! infection duration (x86, LEONARDO).
+          ! Fix: redraw instead; results are unchanged unless r1 was exactly 0.
+          do while (r1 == 0.)
+            r1 = generate_random()
+          end do
           r2 = generate_random()
           x = sqrt ( - 2.0E+00 * log ( r1 ) ) * cos ( 2.0E+00 * pi * r2 )
 

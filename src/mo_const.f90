@@ -31,7 +31,6 @@ MODULE mo_const
                             !                          6 - Immunity ; 7 - New Cases (Inew)        
     integer :: TempVarID, ncTempID
     integer :: RainVarID, ncRainID
-    integer :: AreaVarID, ncAreaID
     integer :: ImmVarID, ncImmID   ! IDs for immunity forcing file
 
 
@@ -45,6 +44,7 @@ MODULE mo_const
     double precision :: FillValue_temp ! Temperature Fill Value
     real, parameter :: pi = 4*atan(1.) ! Pi 
     real, parameter :: Re = 6371.009   ! Mean radius of the Earth [km]
+    double precision, parameter :: Re_area = 6371000.d0 ! Radius of the Earth for the cell areas [m], as in cdo gridarea
 
     !********** Mobility and people **************************
 
@@ -233,6 +233,9 @@ MODULE mo_const
     ! unknown number of times and any itime-dependent rate would drift.
     real :: b_spin
     real :: mu_spin(0:79)
+    ! Growth-mode rates of the real run: shape-invariant at g_annual = demog_growth, constant, precomputed once.
+    real :: b_grow
+    real :: mu_grow(0:79)
     ! Today's rates actually handed to the birth draw / death checks.
     real :: b_t_today = 0.
     ! Today's FACTUAL rates. In counterfactual mode these drive the shadow
@@ -330,7 +333,8 @@ MODULE mo_const
     real, allocatable :: m_0(:), m_1(:), m_all(:)  ! Vector to host ratio times the vector biting rate
 
     ! VECTRI -- soil
-    real :: soilinfil_SA=(1./3.)*(50+250+750)
+!   real :: soilinfil_SA=(1./3.)*(50+250+750)
+    real :: soilinfil_SA=675.16 ! (calibrated, Senegal)
 
     !********** Clima **************************
     ! Pointers (not allocatable) so that spin-up can redirect them to a
@@ -452,9 +456,10 @@ MODULE mo_const
         interv_beta   = 0.    ! Spatial log-slope of f per degree (0 = uniform)
         interv_theta  = 0.    ! Axis bearing for the f gradient [deg from north]
         bite_day   = 0.       ! Base daily probability to get bitten during day (relevant for short daily trips and vectors that are active during day hours)
-        P_v0 = 0.3            ! Base vector to human transmission probability  Ermert et al. 2011 [DOI:]
-        P_h0 = 0.2            ! Base human to vector transmission probability          "  "
-        P_max= 0.2            ! Maximum transmission probability ~ 0.2 +- 0.15 Churcher et al. 2013 [DOI:]
+!       P_v0 = 0.3            ! Base vector to human transmission probability  Ermert et al. 2011 [DOI:]
+        P_v0 = 0.3453         ! Base vector to human transmission probability (calibrated, Senegal)
+        P_h0 = 0.2            ! Base human to vector transmission probability  Ermert et al. 2011 [DOI:]
+        P_max= 0.2466         ! Maximum transmission probability (calibrated, Senegal); mean and sd ~ 0.2 +- 0.15 Churcher et al. 2013 [DOI:]
                               !                                  ~ 0.125       Bousema  et al. 2011 [DOI:] ---> and references therein | Ouedraogo 2009 [DOI:]
                               !                                                                                                        | Schneider 2007 [DOI:]
                               ! Vector biting rate [day^(-1)]
@@ -464,14 +469,15 @@ MODULE mo_const
       !  srho = 1.0
 
         ! mu  = 1./(61.*365)    ! Background human mortality rate [day^-1] [ref] 
-        mu  = 0.0416/365.   ! Birth and mortality rate - Exponential fit to Senegal's 2000 WorldPop age structure
-      !  mu  = 0.0354/365.  ! Birth and mortality rate - Exponential fit to Senegal's 2020 WorldPop age structure 
+      !  mu  = 0.0416/365.   ! Birth and mortality rate - Exponential fit to Senegal's 2000 WorldPop age structure
+      !  mu  = 0.0354/365.  ! Birth and mortality rate - Exponential fit to Senegal's 2020 WorldPop age structure
+        mu = 0.0291/365.    ! Birth and mortality rate - Exponential fit to Ghana's 2020 WorldPop age structure
         !-- Immunity scheme --!
-        e_0    = 0.2
+        e_0    = 0.1970 ! (calibrated, Senegal)
         !e_0    = 0.09     ! Base increase in endemicity level [per infectious bite]                  [x]
-        e1     = 0.5*e_0  ! e-folding factor in boosted maternal/naive immunity acquisition (fast) [e_0]
-        e2     = 10*e_0   ! e-folding factor in gradual immunity acquisition (slow)                [e_0]
-        A1     = 0.9      ! Coefficient weighting each time scale
+        e1     = 0.2393  ! e-folding factor in boosted maternal/naive immunity acquisition (fast) (calibrated, Senegal)
+        e2     = 1.7276    ! e-folding factor in gradual immunity acquisition (slow) (calibrated, Senegal)
+        A1     = 0.9894  ! Coefficient weighting each time scale (calibrated, Senegal)
         e_th   = 0.001    ! Threshold endemicity level value for R --> S transition                  [x]
  
         mat_rate = log(2.)/(6.*30)  ! Loss rate of maternal immunity = ln(2)/(Half-life of maternal immunity) [day^-1] (~ 6 months)
@@ -502,8 +508,8 @@ MODULE mo_const
         fA_chr   = 0.05   ! Fraction of chronic asymptomatics [unkown]
         tau_chr  = 365.*2    ! Duration of chronic parasitaemia  [unkown]
                           !
-        k_alph   = 1.
-        alph_min = 0.28   !    We take the lowest we can find from literature focusing on highly endemic areas reporting (with PCR) adult prevalence
+        k_alph   = 7.2476 ! (calibrated, Senegal)
+        alph_min = 0.4258 ! (calibrated, Senegal) We take the lowest we can find from literature focusing on highly endemic areas reporting (with PCR) adult prevalence
                           !    1-0.311 (Malawi) Topazian    2020 [DOI:]
                           !    1-0.482 (DCR)    Mvumbi      2015 [DOI:]
                           !    1-0.520 (Gabon)  Dal-Bianco  2007 [DOI:]
@@ -521,8 +527,8 @@ MODULE mo_const
 
         ! Sigmoidal curve param ~ inflection point
         i_star_a = 0.15  
-        i_star_c = 0.5
-        k_star   = 10
+        i_star_c = 0.9868 ! (calibrated, Senegal)
+        k_star   = 15.8706 ! (calibrated, Senegal)
 
         ! Mobility [non-functional ; wait for funding (Marie-Curie!)]---------------------------------------------------
 
@@ -551,7 +557,7 @@ MODULE mo_const
 
       case default
         print *, "Incorrect case, choose disID between: 0 (cholera) and 1 (malaria)"
-        STOP
+        ERROR STOP
       end SELECT
 
       print *, "Disease: ", disease_name
@@ -751,7 +757,7 @@ MODULE mo_const
         ! different row count would silently mis-map ages onto rates.
         if (size(cumm) /= 80) then
             print *, 'demog_build_shape: cumm_age.txt must have exactly 80 rows; found', size(cumm)
-            STOP
+            ERROR STOP
         end if
 
         s(0) = dble(cumm(1))
@@ -761,7 +767,7 @@ MODULE mo_const
 
         if (any(s < 0.d0)) then
             print *, 'demog_build_shape: cumm_age.txt is not monotonically increasing --> STOP'
-            STOP
+            ERROR STOP
         end if
 
         ! The file is written to 4 decimals, so two consecutive tail values can
@@ -1043,6 +1049,26 @@ MODULE mo_const
             '-yr replica at g=1: g_eff =', g_eff, '   shape TVD =', 100.d0*tvd, ' %'
         write(*,*) '=========================='
     end subroutine demog_print_diagnostics
+
+
+    subroutine demog_print_growth(g_annual)
+    !===
+        ! Init-time check of the growth mode: the growth the ABM's daily scheme realizes with the rates of
+        ! g_annual (b_calib set for it by the caller), and how far the shape drifts from cumm_age.txt.
+        implicit none
+        real, intent(in) :: g_annual
+        double precision :: g_eff, tvd
+
+        call demog_replica(g_annual, demog_calib_years, g_eff, tvd)
+        write(*,*) '=========================='
+        write(*,'(A,F10.6,A,F8.4,A)') '  Growth mode: demog_growth =', g_annual, &
+            ' (', 100.*(g_annual - 1.), ' % a year)'
+        write(*,'(A,ES12.4,A,ES12.4,A,ES12.4,A,F10.6)') '  b_daily =', b_grow, &
+            '   mu_daily(0) =', mu_grow(0), '   mu_daily(79) =', mu_grow(79), '   b_calib =', b_calib
+        write(*,'(A,I3,A,F10.6,A,F8.4,A)') '  ', demog_calib_years, &
+            '-yr replica at demog_growth: g_eff =', g_eff, '   shape TVD =', 100.d0*tvd, ' %'
+        write(*,*) '=========================='
+    end subroutine demog_print_growth
 
 
 end MODULE mo_const

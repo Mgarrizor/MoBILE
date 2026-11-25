@@ -17,6 +17,11 @@ BUILD_DIR := ./build    # Location to build the program
 # Touch these lines if the nf-config shell command does not work for your system
 INC_FLAGS := $(shell nf-config --fflags) # Flags needed to compile a FORTRAN program (NetCDF)
 INC_LIBS  := $(shell nf-config --flibs) $(shell nc-config --libs) # Libraries needed to link a FORTRAN program (NetCDF)
+# macOS: also where those libraries are, for the model to find them when it runs (a NetCDF whose libraries are named
+# @rpath/..., e.g. from conda, is not found otherwise)
+ifeq ($(shell uname -s),Darwin)
+INC_LIBS  += $(foreach dir,$(shell nc-config --libdir) $(shell nf-config --prefix)/lib,-Wl,-rpath,$(dir))
+endif
 # Profiling library (Google performance tools). Opt-in via `make PROFILE=1`: the path is
 # machine-specific, so linking it by default breaks the build wherever gperftools is absent.
 PROF_LIB  :=
@@ -37,8 +42,9 @@ endif
 MODE      ?= normal
 COMMON    := -ffixed-line-length-none -ffree-line-length-512 -fopenmp
 ifeq ($(MODE),debug)
-  OPT     := -Og -fbacktrace -Wall -fcheck=all \
-             -ffpe-summary=underflow,overflow $(COMMON)
+	# -g: puts source file and line numbers in the backtrace if the run fails
+  OPT     := -Og -g -fbacktrace -Wall -fcheck=all \
+             -ffpe-trap=invalid,zero,overflow -ffpe-summary=underflow -finit-real=snan $(COMMON)
 else ifeq ($(MODE),fast)
   OPT     := -O3 -ffast-math -march=native $(COMMON)
 else ifeq ($(MODE),normal)
@@ -47,6 +53,15 @@ else
   $(error MODE must be debug, normal or fast -- got '$(MODE)')
 endif
 EXE       := mobile.out # Name of executable file
+# macOS keeps debug info in the .o files; dsymutil gathers it into mobile.out.dSYM,
+# so a trapped run's crash report (Console.app > Crash Reports, or
+# ~/Library/Logs/DiagnosticReports/mobile.out-*.ips) shows file:line. Linux needs nothing.
+DSYM      :=
+ifeq ($(MODE),debug)
+ifeq ($(shell uname -s),Darwin)
+  DSYM    := dsymutil $(EXE)
+endif
+endif
 #=========
 # Coupling flag
 # Conditional definition of COUPLING_FLAG
@@ -79,7 +94,8 @@ endif
 # Note the single quotes around the * expressions. 
 # The shell will incorrectly expand these otherwise, 
 # but we want to send the * directly to the find command.
-SRCS := $(shell find -L $(SRC_DIR) -name '*.f90')# -or -name '*.c')
+# sort: fixed link order, so the same code always gives the same binary (comparable md5)
+SRCS := $(sort $(shell find -L $(SRC_DIR) -name '*.f90'))# -or -name '*.c')
 
 # Filter out main file (mobile.f90) and then substitute suffix		
 MOD1 := $(filter-out $(MAIN),$(SRCS))	
@@ -117,7 +133,8 @@ all: $(EXE)
 
 $(EXE): ./build/mobile.o
 	@echo '2.- Link step'
-	@$(FC) $(OBJS) -o $(EXE) $(INC_LIBS) $(PROF_LIB) $(OPT) 
+	@$(FC) $(OBJS) -o $(EXE) $(INC_LIBS) $(PROF_LIB) $(OPT)
+	@$(DSYM)
 
 # Runs second ----------------------------------
 # - Generate main object file only if module object files or
