@@ -297,8 +297,9 @@ def process_observed(members, counts, model_steps, data, data_steps, observation
     """(model, data, span, draws) with the observational model (observation.py). members: the runs' output per person
     (as model_members gives it), counts: the same as cases of the model's own population (model_count_members). The
     model's cases for each month (the counts through the model's steps up to the first that is not a preparing one,
-    e.g. the monthly sums; the mean of the runs if several) are the mean counts reported cases are drawn around,
-    Y ~ negative binomial(mean rho * cases, dispersion k), `observation` {rho, k, draws, seed}; each draw is then made
+    e.g. the monthly sums) are the mean counts reported cases are drawn around, Y ~ negative binomial(mean rho * cases,
+    dispersion k), `observation` {rho, k, draws, seed}; with several runs (seeds), each run's share of the draws around
+    its own cases, pooled, so that the draws hold the model's randomness as well as the reporting; each draw is then made
     per person as the data are (divided by the observations' population N of each month) and goes through the rest of
     the model's steps as process_both takes the model's series (the filter first, then the windows). model: the median
     of the processed draws (the series the metrics compare); draws: the processed draws (draws x values of model); data
@@ -323,7 +324,14 @@ def process_observed(members, counts, model_steps, data, data_steps, observation
     population = _population(monthly[0], data)
     # Per person, with the population of each month for the steps that need it (a log's offset in cases)
     base = replace(monthly[0], values=mean / population, units="cases per person", extra={**monthly[0].extra, "N": population})
-    drawn = draw(mean, observation["rho"], observation["k"], observation.get("draws", DRAWS), observation.get("seed"))
+    # Each run (seed) gets its share of the draws around its own cases, and the draws are pooled: the band then holds the
+    # model's own randomness as well as the reporting. A run that died out has its draws too (none reported after it)
+    total, runs = int(observation.get("draws", DRAWS)), len(monthly)
+    if total < runs:
+        raise DataError(f"the observational model needs at least one draw per run: {total} draws for {runs} runs")
+    generator = np.random.default_rng(observation.get("seed"))  # One stream for all the runs: their draws independent
+    drawn = np.vstack([draw(member.values, observation["rho"], observation["k"], total // runs + (i < total % runs), generator)
+                       for i, member in enumerate(monthly)])
     matrix = drawn / population  # Per person, as the data
     processed, shape = process_draws(base, matrix, rest, validation, part, others)
     return median_of(processed, shape), data_out, span, processed
