@@ -4942,6 +4942,45 @@ class TestCalibrationModel(unittest.TestCase):
         with self.assertRaisesRegex(DataError, "no folder"):
             run_elsewhere(self.folder / "nowhere")
 
+    def test_drivers_across_cells(self):
+        # Each cell processed on its own, then the median and the 5th and 95th percentiles across the cells, as in the
+        # climate notebooks: monthly rain totals of 1, 2, 3 and 10 mm/day (median 2.5, not their mean 4), and monthly mean
+        # temperatures of 10, 20, 30 and 60 °C (median 25, not 30)
+        from mobile.calibration_model import CELL_BAND, driver_series
+        from mobile.plots import comparison_figure
+        days = 59
+        run = fake_run(self.folder / "runs" / "cells", np.full((days, 2, 2), 0.01), np.ones((2, 2)))
+        with netCDF4.Dataset(run / "output" / "output.nc", "a") as data:
+            data["Climate/rain"][:] = np.broadcast_to(np.array([[1.0, 2.0], [3.0, 10.0]]), (days, 2, 2))
+            data["Climate/t2m"][:] = np.broadcast_to(np.array([[10.0, 20.0], [30.0, 60.0]]), (days, 2, 2))
+        rain, temperature = driver_series(run, "rain", "month"), driver_series(run, "t2m", "month")
+        low, high = CELL_BAND
+        totals = 31 * np.array([1.0, 2.0, 3.0, 10.0])  # January
+        np.testing.assert_allclose([rain.values[0], rain.extra[low][0], rain.extra[high][0]],
+                                   [np.median(totals), np.percentile(totals, 5), np.percentile(totals, 95)], rtol=1e-6)
+        np.testing.assert_allclose([temperature.values[0], temperature.extra[low][0], temperature.extra[high][0]],
+                                   [25.0, 11.5, 55.5], rtol=1e-6)  # By hand: 10 + 0.15 x (20 - 10), 30 + 0.85 x (60 - 30)
+        self.assertIn("median over the 4 simulated cells", temperature.notes[-1])
+        # Drawn as whiskers on the rain bars and a band around the temperature line
+        labels = [rain.label(i) for i in range(len(rain))]
+        figure = comparison_figure(rain, rain, labels, rain.values, rain.values,
+                                   drivers=[("rain", "Rainfall", rain), ("t2m", "Temperature", temperature)])
+        bars = [trace for trace in figure.data if trace.type == "bar"]
+        self.assertEqual(len(bars), 1)
+        np.testing.assert_allclose(bars[0].error_y.array, rain.extra[high] - rain.values, rtol=1e-6)
+        np.testing.assert_allclose(bars[0].error_y.arrayminus, rain.values - rain.extra[low], rtol=1e-6)
+        filled = [trace for trace in figure.data if getattr(trace, "fill", None) == "tonexty"]
+        self.assertEqual(len(filled), 1)
+        self.assertIn("5–95 % of cells", filled[0].name)
+        # One simulated cell (a point): no band, no whiskers
+        point = np.full((days, 2, 2), np.nan)
+        point[:, 0, 0] = 0.01
+        single = fake_run(self.folder / "runs" / "point", point, np.ones((2, 2)))
+        alone = [("rain", "Rainfall", driver_series(single, "rain", "month")), ("t2m", "Temperature", driver_series(single, "t2m", "month"))]
+        figure = comparison_figure(rain, rain, labels, rain.values, rain.values, drivers=alone)
+        self.assertFalse(any(getattr(trace, "fill", None) == "tonexty" for trace in figure.data))
+        self.assertFalse(any(trace.type == "bar" and trace.error_y.array is not None for trace in figure.data))
+
     @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root reads any folder")
     def test_unreadable_neighbour(self):
         # A folder that cannot be read, next to the runs (as in /tmp), is skipped, not an error

@@ -383,10 +383,12 @@ to the mean of the data** multiplies the model on the plot only, to compare timi
 If the units of the two differ by name, an amber note asks to check that they are the same quantity.
 
 **Possible drivers** draws rainfall and temperature in panels below, as the model read them, and the vector densities
-the run gave (each the mean over the simulated cells of the run chosen in the Model box), within the periods the model
-and the data share and on the same time axis: zooming in one panel zooms them all. The vector density is at the left
+the run gave (of the run chosen in the Model box), within the periods the model and the data share and on the same time
+axis: zooming in one panel zooms them all. Each simulated cell is processed on its own (as below), then the panel shows
+the median over the cells, with 5–95 % of the cells as a band around a line (temperature, vector densities) or as
+whiskers on bars (rainfall), as the climate notebooks show the cells; a single cell has no band. The vector density is at the left
 of its panel and the infective vector density, much lower, on its own scale at the right; they need Vector density and
-Infective vector density ticked in the Outputs card when the run is made. Each is processed on its own, on the spot: into periods (as they are, week, month, season or year), by a
+Infective vector density ticked in the Outputs card when the run is made. Each is processed on its own, cell by cell, on the spot: into periods (as they are, week, month, season or year), by a
 statistic (sum, mean, minimum, maximum; monthly sums of rain are in mm per month), and optionally as a climatology by
 month. They are for looking only: they do not enter the metrics.
 
