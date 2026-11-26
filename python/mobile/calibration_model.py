@@ -122,6 +122,23 @@ def _series(run_dir, name, info, space):
                       lambda: _read_series(run_dir, name, info, space))
 
 
+def _cells(run_dir, name, info):
+    """(days, values (days x simulated cells)) of an output of one run, cell by cell."""
+    run_dir = Path(run_dir)
+    return _read_once((run_dir / "output" / "output.nc",), ("cells", name, info["group"]), lambda: _read_cells(run_dir, name, info))
+
+
+def _read_cells(run_dir, name, info):
+    with netCDF4.Dataset(run_dir / "output" / "output.nc") as data:
+        variable = data[f"{info['group']}/{name}" if info["group"] else name]
+        values = np.ma.filled(variable[:].astype("f8"), np.nan)  # (time, lat, lon)
+        days = _dates(data["time"])
+    simulated = np.isfinite(values).any(axis=0)
+    if not simulated.any():
+        raise DataError(f"{name} has no value in any cell")
+    return days, values[:, simulated]
+
+
 def _read_series(run_dir, name, info, space):
     manifest = json.loads((run_dir / "run.json").read_text())
     with netCDF4.Dataset(run_dir / "output" / "output.nc") as data:
@@ -265,16 +282,28 @@ DRIVERS = {"rain": ("Rainfall", "sum"), "t2m": ("Temperature", "mean"), "vectors
 DRIVER_VARIABLES = {"rain": {"rain": "Rainfall"}, "t2m": {"t2m": "Temperature"},
                     "vectors": {"V": "Vector density", "Vinf": "Infective vector density"}}
 DRIVER_OUTPUTS = {"vectors": "tick Vector density and Infective vector density in the Outputs card, and run again"}
+CELL_LEVELS = (5, 50, 95)  # Percentiles of a driver across the simulated cells: a band around the median
+CELL_BAND = ("cells_p5", "cells_p95")  # Their extra columns in the series of a driver (driver_series)
 DRIVER_PERIODS = {"as_is": "As they are (days)", "week": "Week", "month": "Month", "season": "Season", "year": "Year"}
 
 
 def driver_series(folder, name, period="month", how=None, by_month=False, first=None, last=None, seed=None):
-    """A driver (rainfall, temperature) of a run, as the model read it (the mean over the simulated cells), processed on
-    its own: within first and last (dates), into periods by a statistic, and optionally a climatology by month."""
+    """A driver (rainfall, temperature, vectors) of a run, as the model read it, processed on its own, cell by cell:
+    within first and last (dates), into periods by a statistic, and optionally a climatology by month; then the median
+    over the simulated cells, with their 5th and 95th percentiles in the extra columns CELL_BAND (none for a single
+    cell), as the climate notebooks show the cells. Each cell is first the mean over the seeds taken of a seed band."""
     from .calibration_steps import apply_steps  # Not at the top: calibration_steps imports calibration_data only
 
     how = how or DRIVERS.get(name, (None, "mean"))[1]
-    raw = model_series(folder, name, "mean", seed, aggregation="sum" if how == "sum" else "mean")
+    variables = run_variables(folder)
+    if name not in variables or variables[name]["static"]:
+        raise DataError(f"the run has no daily output {name!r}")
+    info = variables[name]
+    chosen = chosen_seeds(folder, seed)
+    runs = [Path(folder)] if chosen is None else [Path(folder) / f"seed_{s}" for s in chosen]
+    read = [_cells(run_dir, name, info) for run_dir in runs]
+    days, cells = read[0][0], np.mean([values for _, values in read], axis=0)  # Each cell's mean over the seeds taken
+    which = "single run" if chosen is None else f"seed{'s' * (len(chosen) > 1)} {', '.join(map(str, chosen))}"
     steps = []
     if first is not None or last is not None:
         steps.append({"kind": "select", "what": "window", "first": first, "last": last, "items": []})
@@ -282,7 +311,21 @@ def driver_series(folder, name, period="month", how=None, by_month=False, first=
         steps.append({"kind": "aggregate", "period": period, "how": how, "complete": True, "days": 1})
     if by_month:
         steps.append({"kind": "climatology", "by": "month"})
-    result = apply_steps(raw, steps)
+    aggregation = "sum" if how == "sum" else "mean"
+    processed = [apply_steps(_as_observations(days, cells[:, k], folder, name, info, "mean", which, aggregation), steps)
+                 for k in range(cells.shape[1])]
+    result = processed[0]
+    across = "the one simulated cell"
+    if len(processed) > 1:
+        stack = np.array([cell.values for cell in processed])
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)  # A period no cell has a value for stays empty
+            low, middle, high = np.nanpercentile(stack, CELL_LEVELS, axis=0)
+        result = replace(result, values=middle, extra={**result.extra, CELL_BAND[0]: low, CELL_BAND[1]: high})
+        across = (f"median over the {len(processed)} simulated cells, each processed by the steps, with their "
+                  f"{CELL_LEVELS[0]}th to {CELL_LEVELS[2]}th percentiles (5–95 % of cells)")
+    result = replace(result, notes=(f"model: {info['long_name']} ({name}) of {Path(folder).name}, {which}, cell by cell",
+                                    *result.notes[1:], across))
     if how == "sum" and period != "as_is" and result.units.replace(" ", "").endswith("/day"):
         # A sum of an amount per day over a period is an amount per period, e.g. mm/day summed by month: mm per month
         result = replace(result, units=f"{result.units.replace(' ', '')[:-len('/day')]} per {period}")

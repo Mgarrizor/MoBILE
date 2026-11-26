@@ -679,16 +679,34 @@ def _panel(observations):
     return observations if isinstance(observations, list) else [(None, observations)]
 
 
-def _driver_trace(observations, colour, label):
+def _driver_traces(observations, colour, label):
+    """The traces of a driver: bars for an amount (a sum, e.g. rain) and a line otherwise; with the spread of the
+    cells (calibration_model.CELL_BAND, 5-95 % of cells) as whiskers on the bars or a band around the line, when the
+    cells differ."""
+    from .calibration_model import CELL_BAND
+
     if observations.shape == "dated":
         start = pd.to_datetime(observations.index["start"]).to_numpy()
         end = pd.to_datetime(observations.index["end"]).to_numpy()
         x = start + (end - start) / 2
     else:
         x = [observations.label(i) for i in range(len(observations))]
-    kind = go.Bar if observations.aggregation == "sum" else go.Scatter
-    style = {"marker": {"color": colour}} if kind is go.Bar else {"mode": "lines+markers", "line": {"color": colour, "width": 1.5}, "marker": {"size": 3}}
-    return kind(x=x, y=observations.values, name=label, hovertemplate=f"{label}: %{{y:.4g}} {observations.units}<extra></extra>", **style)
+    values = np.asarray(observations.values, dtype="f8")
+    low, high = (np.asarray(observations.extra[key], dtype="f8") if key in observations.extra else None for key in CELL_BAND)
+    spread = low is not None and high is not None and not np.allclose(low, high, equal_nan=True)
+    what = "median of cells" if spread else None
+    hover = f"{label}{f' ({what})' if what else ''}: %{{y:.4g}} {observations.units}"
+    if spread:
+        hover += "<br>5–95 % of cells: %{customdata[0]:.4g} to %{customdata[1]:.4g}"
+    custom = np.stack([low, high], axis=1) if spread else None
+    if observations.aggregation == "sum":
+        whiskers = {"error_y": {"type": "data", "symmetric": False, "array": high - values, "arrayminus": values - low,
+                                "color": "#475569", "thickness": 1.2}} if spread else {}
+        return [go.Bar(x=x, y=values, name=f"{label}{'; whiskers: 5–95 % of cells' if spread else ''}", marker={"color": colour},
+                       customdata=custom, hovertemplate=hover + "<extra></extra>", **whiskers)]
+    line = go.Scatter(x=x, y=values, name=label, mode="lines+markers", line={"color": colour, "width": 1.5}, marker={"size": 3},
+                      customdata=custom, hovertemplate=hover + "<extra></extra>", legendgroup=label)
+    return [*_band(x, low, high, colour, label, "5–95 % of cells"), line] if spread else [line]
 
 
 CALIBRATION_WINDOW = "#2e9e6b"  # Green and purple: apart from the blue of the data and the red of the model
@@ -821,8 +839,8 @@ def comparison_figure(model, data, labels, model_values, data_values, scale=Fals
         colours = colours_of(name)
         for k, (series_label, series) in enumerate(panel):
             # A second series, e.g. the infective vectors, much smaller than the first: on its own scale, at the right
-            figure.add_trace(_driver_trace(series, colours[k % len(colours)], series_label or label), row=row, col=1,
-                             secondary_y=True if k else (False if len(panel) > 1 else None))
+            for trace in _driver_traces(series, colours[k % len(colours)], series_label or label):
+                figure.add_trace(trace, row=row, col=1, secondary_y=True if k else (False if len(panel) > 1 else None))
     figure.update_layout(_base_layout(), plot_bgcolor="white", barmode="group", height=ONE_PANEL + 40 + 200 * len(drivers),
                          margin={"l": 70, "r": 30, "t": 50, "b": 90}, showlegend=True,
                          legend={"orientation": "h", "x": 0.5, "xanchor": "center", "y": -0.08, "yanchor": "top"})
