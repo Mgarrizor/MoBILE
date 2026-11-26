@@ -169,10 +169,11 @@ The settings are remembered for the next session in `~/.config/mobile/last_setup
   Demography, Interventions), each with folded sections by theme (e.g. *Immunity acquisition*, *Symptomatic
   probability*). A slider starts at the default compiled into the model. An amber dot marks a moved slider, its
   section and its tab, so a change in a folded section is not missed; **Reset parameters** puts them all back. Rates
-  per day such as `mu` are shown per year, and tiny fractions (`wpond_min`, `wperm_default`) as log10 of the value;
-  the label says so. Hover over the name of a parameter (or move to it with Tab) for what it does and where it
-  comes from. All of this is in `mobile/parameters.yaml`: the default, the range (only 12 ranges are curated so far;
-  the others are the default ±50%), the tab, the section and the description of each parameter. The tests compare its
+  per day such as `mu` are shown per year, and tiny fractions (`wpond_min`, `wperm_default`) and `wperm_ratio` (0.006
+  for An. gambiae to 0.7 for An. funestus) as log10 of the value; the label says so. Hover over the name of a
+  parameter (or move to it with Tab) for what it does and where it comes from. All of this is in
+  `mobile/parameters.yaml`: the default, the range (only 12 ranges are curated so far; the others are the default
+  ±50%), the tab, the section and the description of each parameter. The tests compare its
   defaults with the Fortran source, so a default changed in the model, or a parameter added to `&CONST`, must be
   added there too, and the per-species values (`species`) with the SELECT CASE of VECTRI's `init_constants`. The
   parameters of the cholera model and of mobility are not shown and keep their default.

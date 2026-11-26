@@ -439,18 +439,20 @@ parameters:
     group: Hydro
     section: Permanent water
     value: 0.006
-    min: 0.003
-    max: 0.009
+    min: -5.0
+    max: 0.0
     curated: false
-    info: Fraction of permanent water (pools and ponding near streams, rivers and lakes) that the mosquito uses to breed.
+    info: Fraction of permanent water (pools and ponding near streams, rivers and lakes) that the mosquito uses to breed,
+      from 0.006 for An. gambiae to 0.7 for An. funestus. The slider is log10 of the value.
     source: utils/vectri/mo_constants.f90
+    display: log10
     species: {1: 0.7, 2: 0.02, 10: 0.1, 11: 0.1}
   wperm_default:
     group: Hydro
     section: Permanent water
     value: 1.0e-05
-    min: -6.0
-    max: -4.0
+    min: -5.0
+    max: 0.0
     curated: false
     info: Fraction of a cell covered by permanent water when no map of it is read, and its minimum otherwise. The slider is
       log10 of the value.
