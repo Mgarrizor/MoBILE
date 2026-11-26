@@ -1721,8 +1721,9 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         if record["status"] == "finished":
             return ui.p(f"Calibration finished: {trials}.", class_="mt-3 mb-0")
         if record["status"] == "stopped":
-            return ui.card(ui.p(f"Calibration stopped: {record['failed']} trials failed, too many to go on (the first ones all, or "
-                                "more than one in ten). The end of the log of a run:", class_="mb-1"),
+            return ui.card(ui.p(f"Calibration stopped: {trials}. Too many trials failed to go on (the first ones all, or more than "
+                                "one in ten), the disk or the quota is full, or an error stopped it. The end of the log of a run, or the "
+                                "error:", class_="mb-1"),
                            ui.tags.pre(record.get("failure") or "", class_="small mb-1"),
                            ui.p("Fix the cause and press Resume.", class_="mb-0"), class_="border-danger mt-3")
         return ui.p(f"Calibration {record['status']}: {trials}. Choose it under Calibrations and press Resume to go on.", class_="mt-3 mb-0")
