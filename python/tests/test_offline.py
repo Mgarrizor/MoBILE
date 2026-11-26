@@ -609,8 +609,13 @@ class TestVectorSpecies(unittest.TestCase):
 
     def test_ranges_hold_the_species_value(self):
         self.assertEqual(species_spec("wpond_ratio", 1)["min"], shown_parameters()["wpond_ratio"]["min"])  # 0.5: inside
-        wide = species_spec("wperm_ratio", 1)  # 0.7, out of 0.003-0.009: +/- 50 %, at most 1 for a fraction
-        self.assertEqual((wide["min"], wide["max"], wide["curated"]), (0.35, 1.0, False))
+        wide = species_spec("wurbn_ratio", 1)  # 0.1, out of 0.005-0.015: +/- 50 %
+        self.assertEqual((round(wide["min"], 6), round(wide["max"], 6), wide["curated"]), (0.05, 0.15, False))
+        # wperm_ratio on a log10 slider from 1e-5 to 1 holds every species' value: 0.006 (gambiae) to 0.7 (funestus)
+        permanent = species_spec("wperm_ratio", 1)
+        self.assertEqual((permanent["value"], permanent["min"], permanent["max"]), (0.7, -5.0, 0.0))
+        for value in (0.006, 0.7):
+            self.assertAlmostEqual(to_model("wperm_ratio", to_shown("wperm_ratio", value)), value)
         flush = species_spec("rlarv_flushmin", 10)  # 78.5: not a fraction
         self.assertEqual((flush["min"], flush["max"]), (39.25, 117.75))
         self.assertEqual(set(slider_parameters(10, True)), {n for n, s in shown_parameters().items() if s["group"] in ("Vector", "Hydro", "Interventions")})
