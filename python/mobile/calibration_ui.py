@@ -133,6 +133,9 @@ def _data_box():
              "such as a climatology use the same years on both sides; the steps below and the plot already show them cut, and say "
              "the period. Observations of a climatology or yearly ones are not cut, nor the data sets a Combine step takes; an "
              "objective with a Combine step keeps the observations as processed here.", class_="small text-muted mb-2"),
+        ui.p("⚠ Dated values need a column of dates, best written as YYYY-MM-DD (e.g. 1990-07-01; a date stands for the "
+             "period that contains it), or columns of first and last days. A year and a month in separate columns are not "
+             "dates: join them into one column first.", class_="small text-warning-emphasis mb-2"),
         ui.div(
             ui.input_text("cal_data_file", "File of observations", width="100%"),
             ui.div(ui.input_action_button("browse_cal_data_file", "Browse", class_="btn-sm"),
