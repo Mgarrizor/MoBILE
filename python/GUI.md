@@ -23,13 +23,13 @@ folder in the Setup tab.
 - `mobile gui my_config.yaml` starts from a configuration file (`mobile example my_config.yaml` writes a copy
   of the bundled example to edit). Without one, the GUI starts with the settings of your last session, or the
   bundled example the first time.
-- Close it with the **Close GUI** button, or Ctrl+C in the terminal. Closing the browser tab does not stop it.
+- Close it with the **Close GUI** button, at the top right, or Ctrl+C in the terminal. Closing the browser tab does not stop it.
 
 ## The page
 
-The tabs follow the order of the work: **1. Setup**, **2. Parameters & SA**, **3. Results**. The GUI opens on Setup.
-The header with the tabs stays in view while the page scrolls, and a tab opens at its top.
-The sidebar, always visible below the header, starts runs and loads earlier ones. The **Analysis (to come)** menu holds
+The tabs follow the order of the work: **1. Setup**, **2. Parameters & SA**, **3. Run**, **4. Results**. The GUI opens
+on Setup. The header with the tabs stays in view while the page scrolls, and a tab opens at its top; at its right,
+**Close GUI**, the colour theme and the logo. The **Analysis (to come)** menu holds
 work that is not implemented yet (Time series, Demography, Mobility), and the **Calibration (in development)** tab, so
 far, its Data box; the sensitivity analysis is in **2. Parameters & SA**. **Help** has a short
 guide, the documentation and the publications on VECTRI and VECTRI-ABM (listed in `mobile/publications.yaml`, where
@@ -58,7 +58,7 @@ Everything a run needs that is not a parameter or an output.
   - **Vector ecology only** (a switch above the rows): VECTRI's ponds, larvae and adult vectors in each cell, from
     rainfall and temperature, with no people modelled (`mobile.sh -e 1`, with `-v 1 -d 1`). The human and disease
     rows hide, and the Vector row offers every species, **Aedes included** (*Ae. albopictus*, *Ae. aegypti*: the
-    dengue model is not written, so Aedes runs only here). While such a setup is applied, HA (sidebar), the age
+    dengue model is not written, so Aedes runs only here). While such a setup is applied, HA (Setup), the age
     structure, growth and optional files (Setup), the Human and Demography sliders (tab 2), and the human outputs and
     infective vectors (Outputs) are hidden and not used: the outputs are rainfall, temperature, the water fields and
     the vectors. A calibration can compare those; the observational model, which needs people, is refused.
@@ -74,11 +74,16 @@ Everything a run needs that is not a parameter or an output.
   printed below them),
   spin-up to equilibrium and threads. A period shorter than the driving data is run on copies of the
   rainfall, temperature and immunity forcing files cut to it, kept in the run folder.
+  - **HA** (humans per agent) and **Seed**, below Threads, need no **Apply setup**: the next run, analysis or
+    calibration takes them as they are, as they often change between runs. The number of agents follows from HA: the
+    people of the simulated region over HA, shown under it. Results depend on HA, so keep it fixed when comparing
+    runs. Below 1 there are more agents than people and the model stops at once: the line turns red, and Run and Run
+    analysis refuse to start.
 - **Results folder**: where the runs are saved. It does not have to be the folder you started from. Type a path
   or use **Browse**, and to make a new folder, type its name under *New folder in the folder shown* and press
   **Create and open**. It then opens, and **Use this folder** selects it. Names use letters, digits, `.`, `_`
   and `-` only (no spaces), and the folder cannot be inside the MoBILE repository. It takes effect with
-  **Apply setup**, and *Earlier runs* in the sidebar then lists the runs in that folder.
+  **Apply setup**, and *Earlier runs* in tab 3. Run then lists the runs in that folder.
 - **What the driving files must be**, folded above the cards: the table of the README of MoBILE for the GUI (variable
   names, units, time axis, and how to put each file on the model grid with CDO), the coordinates, what the GUI does
   not need, and, under *Why these choices*, why conservative remapping and when `fracarea` or `destarea`. An amber note
@@ -141,8 +146,8 @@ Everything a run needs that is not a parameter or an output.
   are simulated (with population, and rain and temperature on the first day) and the people in those, as the model counts
   them. The run of a region gets copies of the driving files cut to it; the cut population file keeps the cell bounds
   of the whole grid (`lat_bnds`, `lon_bnds`), from which the model computes the area of the cells of a point or a
-  row. The region is part of the setup, applied with **Apply setup**, and the humans per agent in the
-  sidebar are then those of the region.
+  row. The region is part of the setup, applied with **Apply setup**, and the humans per agent (HA) are then those
+  of the region.
 - **Preview driving files** draws a file as a map (rainfall and temperature by day, population density) before you apply it, so mismatched grids show up early. **Dots on the map** mark cells whose daily
   values are plotted below the map, one line per dot. There is one dot to start with, near the middle of the data.
   A click on the map moves the highlighted dot; press **Add dot** and click the map to place another (up to 8,
@@ -178,13 +183,13 @@ The settings are remembered for the next session in `~/.config/mobile/last_setup
   objectives need, listed above the switches with the objectives that need them (in red if not ticked).
 - **Apply parameters & outputs**, under both: runs, sensitivity analyses and calibrations use the parameters and
   outputs applied. With a changed set not applied (amber dot on the tab) or an invalid one (red), Run, the analysis
-  and the calibration refuse to start. Applying shows the Results tab; under the button, what is applied.
+  and the calibration refuse to start. Applying shows the Run tab; under the button, what is applied.
 - **Sensitivity analysis (Sobol)**, below: see the next section.
 
 ### Sensitivity analysis
 
 How much of the variance of an output each parameter explains, from many runs with the parameters drawn from their
-distributions ([SALib](https://salib.readthedocs.io/), Sobol). It uses the setup applied in tab 1, the HA and seed of the sidebar, and every
+distributions ([SALib](https://salib.readthedocs.io/), Sobol). It uses the setup applied in tab 1 and its HA and seed, and every
 parameter not sampled at its slider value.
 
 1. **Parameters to sample**: tick at least two, by group. Choose a distribution (uniform, log-uniform, normal or
@@ -192,7 +197,7 @@ parameter not sampled at its slider value.
    slider, in the same units. Normal needs a mean and sd; log-normal those of ln x.
 2. **Sobol**: the base samples N, a power of 2, and whether to compute second-order indices (S2, for each pair).
    The number of runs is shown with its formula: N(2D+2) with S2, N(D+2) without, D the parameters sampled.
-3. **Stochastic** (amber): repeat the analysis for several seeds, from the sidebar seed up, with the same samples,
+3. **Stochastic** (amber): repeat the analysis for several seeds, from the seed of tab 1 up, with the same samples,
    to see how much chance changes the indices. The number of runs is multiplied by the seeds.
 4. **Runs at the same time**: each uses the threads of the setup; the line under the number of runs warns when
    they need more cores than the computer has. **Analysis name** (optional) names its folder.
@@ -237,20 +242,20 @@ more groups:
 The first analysis of a variable reads every run, which for thousands of runs takes minutes; what is read is kept,
 so analysing it again is quick. **How the indices are calculated**, under the choices, says what the numbers mean.
 
-### Sidebar
+### 3. Run tab
 
-- **Run simulation**: **HA** (humans per agent) and **Seed**. The number of agents follows from HA: the people of the simulated
-  region over HA, shown under it. Results depend on HA, so keep it fixed when comparing runs. Below 1 there are more
-  agents than people and the model stops at once: the line turns red, and Run and Run analysis refuse to start.
-  **Seed band** runs several consecutive seeds with the
-  same parameters, to see the spread between them. **Run name** (optional) is the name of the output folder,
+- **Run simulation**: **Seed band** runs several consecutive seeds, from the seed of tab 1, with the same
+  parameters, to see the spread between them. **Run name** (optional) is the name of the output folder,
   letters, digits, `.`, `_`, `-` only; without one, it is named after the date.
-- **Run** starts the run and shows the Results tab. **Cancel** stops it, and can only be pressed during a run.
+  **Run** starts the run and shows the Results tab. **Cancel** stops it, and can only be pressed during a run.
 - **Earlier runs** and **Load run**: reload a run or seed band from the results folder, and show it in the Results
-  tab. Its sliders, outputs and setup are restored, and applied.
-- **Close GUI**, at the bottom, stops the GUI.
+  tab. Its sliders, outputs and setup are restored, and applied, and so are its HA and seed.
+- **What the next run uses**, at the right: the setup applied (model, period, region and its people, agents and
+  seeds, threads, driving files, results folder) and the parameters and outputs applied (the sliders moved from
+  their defaults, and the outputs written). A line above it says when tab 1 has changes not applied (the run uses the
+  setup applied last) or tab 2 has (the run refuses to start).
 
-### 3. Results tab
+### 4. Results tab
 
 Until there are results, the tab says how to get them.
 
@@ -277,7 +282,7 @@ which compares them (the objectives and Optuna come next).
 
 The **Model** box takes an output of a finished run from the results folder (**Refresh** lists runs made since), or of a
 run in any other folder: type it under **Or a run in another folder**, or **Browse**, and press **Use this run** (the
-comparison only reads its outputs, and the setup does not change; **Earlier runs** in the sidebar stays on the results
+comparison only reads its outputs, and the setup does not change; **Earlier runs** in tab 3 stays on the results
 folder). Then choose the **Output** (as in the Results tab), how to put the cells together each day (**Over the cells
 (each day)**: the mean weighted by the people of each cell, which gives the value per person of the whole region for
 per-person outputs such as new cases; a plain mean; or a sum; a run on a point has one cell), and, for a seed band, one
@@ -437,7 +442,7 @@ synthetic monthly cases per person (1980–2003, about 1e-4 to 2e-3), the decada
 right, 0.06 for 10 times too many cases and 0.23 for 10 times too few; the seasonal shape's correlation and the decadal
 tendency's did not change with the scale (to 0.002), and fell from 1.0 to 0.01 for a season three months late.
 
-**Calibration with Optuna** runs the model many times with the setup applied, the HA and seed of the sidebar and the
+**Calibration with Optuna** runs the model many times with the setup applied and its HA and seed, and the
 sliders, each time with other values of what is calibrated, and keeps the trials that do best on all the objectives
 together (the Pareto front):
 
@@ -570,7 +575,7 @@ together (the Pareto front):
 - **Use as template**, under Calibrations, fills the card and the objectives from the calibration chosen, for a new
   one: its objectives (those whose observations are still where they were), what it calibrates and the ranges (its
   cells or regions found again on the setup now), the validation windows, the observational model, the sampler, trials, start-up trials, seeds
-  (the first one in the sidebar) and threads per run, and a new name (e.g. look_2). Change what you like, then Create
+  (the first one in tab 1) and threads per run, and a new name (e.g. look_2). Change what you like, then Create
   only or Run calibration; the calibration chosen is not changed. It also fills the other tabs, for you to apply:
   its setup in the boxes of tab 1 (the dot turns amber if it differs from the setup applied: press Apply setup), its
   fixed parameters on the sliders and the outputs its objectives need, the others off (tab 2 turns amber: press

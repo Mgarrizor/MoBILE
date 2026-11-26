@@ -62,7 +62,7 @@ ELSEWHERE_SECONDS = 30  # How often the list of calibrations is read again while
 def calibration_run_card():
     return ui.card(
         ui.card_header("Calibration with Optuna"),
-        ui.p("Runs the model many times with the setup applied in tab 1, the HA and seed of the sidebar and the parameters of "
+        ui.p("Runs the model many times with the setup applied in tab 1 and its HA and seed, the parameters of "
              "the sliders, each time with other values of what is calibrated, chosen by ",
              ui.a("Optuna", href="https://optuna.org/", target="_blank"),
              " from the trials before: every run is processed and compared with the data as each objective says, and Optuna "
@@ -164,7 +164,7 @@ def calibration_run_card():
             ),
             ui.div(
                 ui.h6("Runs"),
-                ui.input_numeric("cal_seeds", ui.TagList(with_tip("Seeds per trial", "Each trial runs every seed, from the sidebar seed "
+                ui.input_numeric("cal_seeds", ui.TagList(with_tip("Seeds per trial", "Each trial runs every seed, from the seed of tab 1 "
                                  "up; the objectives compare the median of the seeds, each processed. " + KEPT_TIP), kept()),
                                  value=1, min=1, step=1),
                 ui.input_numeric("cal_threads", ui.TagList(with_tip("Threads per run", "CPU threads of each run, at first those of the "
@@ -1610,7 +1610,7 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
             ui.update_numeric("cal_obs_k_low", value=observed["k"][0])
             ui.update_numeric("cal_obs_k_high", value=observed["k"][1])
             ui.update_numeric("cal_obs_draws", value=observed["draws"])
-        # Optuna and runs; the sidebar seed is the first seed
+        # Optuna and runs; the seed of tab 1 is the first seed
         ui.update_select("cal_sampler", selected=record["sampler"]["name"])
         ui.update_numeric("cal_trials", value=record["n_trials"])
         ui.update_numeric("cal_startup", value=record["sampler"]["startup_trials"])

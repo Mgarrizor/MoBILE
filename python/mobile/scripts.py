@@ -49,36 +49,21 @@ PAGE_STYLE = """
 body.ecology-only .human-only { display: none !important; }
 body.ecology-only #param_tab .nav-link[data-value="Human"],
 body.ecology-only #param_tab .nav-link[data-value="Demography"] { display: none; }  /* Not in parameters.ECOLOGY_GROUPS */
-.sidebar-heading { font-size: 1.1rem; font-weight: 600;
-                   color: var(--bs-primary); margin: 0.25rem 0 0; }
-.bslib-sidebar-layout > .sidebar > .sidebar-content { gap: 0.7rem; padding: 1.1rem 1.1rem 1rem; }
 /* Run and Cancel keep the same size whatever their label, as Run shows a spinner while busy.
    Cancel is pastel red while it can be used, that is while a run is going. */
-.run-bar > * { width: 100%; white-space: nowrap; }
+.run-bar > * { flex: 1 1 0; white-space: nowrap; }
 #cancel:not(:disabled) { background-color: #f4a6a6; border-color: #f4a6a6; color: #5c1a1a; }
 #cancel:not(:disabled):hover { background-color: #ee8e8e; border-color: #ee8e8e; }
-/* Sidebar entries are typed, without up and down buttons */
-.bslib-sidebar-layout input[type=number] { -moz-appearance: textfield; appearance: textfield; }
-.bslib-sidebar-layout input[type=number]::-webkit-inner-spin-button,
-.bslib-sidebar-layout input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 /* The header, with the tabs in its second row, stays in view while the page scrolls */
-.bslib-page-sidebar { height: auto; min-height: 100vh; }
-.bslib-page-sidebar > .navbar { position: sticky; top: 0; z-index: 1030; flex-direction: column; align-items: stretch; padding-top: 0.3rem; padding-bottom: 0; }
+.mobile-page { height: auto; min-height: 100vh; }
+.mobile-page > .navbar { position: sticky; top: 0; z-index: 1030; flex-direction: column; align-items: stretch; padding-top: 0.3rem; padding-bottom: 0;
+  border-bottom: var(--bs-border-width) solid var(--bs-border-color-translucent); background-color: var(--bs-body-bg); color: var(--bs-body-color); }
+.mobile-main { padding: 1.5rem; }
 .navbar .nav-tabs { flex-wrap: nowrap; border-bottom: 0; padding: 0.1rem 0.75rem 0; gap: 0.25rem; }
 .navbar .nav-tabs .nav-link { color: var(--bs-link-color); background: transparent; border: 0; border-bottom: 3px solid transparent;
   border-radius: 0; padding: 0.3rem 1rem; font-weight: 500; }
 .navbar .nav-tabs .nav-link:hover { color: var(--bs-link-hover-color); border-bottom-color: rgba(var(--bs-primary-rgb), 0.45); }
 .navbar .nav-tabs .nav-link.active { color: var(--bs-emphasis-color); background: transparent; border-bottom-color: var(--bs-primary); }
-/* The sidebar stays in view below the header */
-@media (min-width: 992px) {
-  /* The collapse button stays in view below the header, at the right edge of the sidebar, or at the left edge when it is collapsed */
-  .bslib-page-sidebar .bslib-sidebar-layout > .collapse-toggle { position: sticky; top: calc(var(--header-height, 0px) + 0.5rem); right: auto;
-    align-self: start; justify-self: end; margin: 0.5rem 1rem 0 0; }
-  .bslib-page-sidebar .bslib-sidebar-layout.sidebar-collapsed > .collapse-toggle { top: calc(var(--header-height, 0px) + 0.5rem); right: auto;
-    justify-self: start; margin: 0.5rem 0 0 0.5rem; }
-  .bslib-sidebar-layout:not(.sidebar-collapsed) > .sidebar { position: sticky; top: var(--header-height, 0px); align-self: start;
-    height: calc(100vh - var(--sidebar-top, 0px)); overflow-y: auto; overflow-x: hidden; }
-}
 .apply-bar { display: flex; flex-direction: column; align-items: center; margin: 1rem 0; }
 /* The resolution of the PNG of a plot, typed at its top right, above Plotly's buttons */
 .png-dpi { display: flex; justify-content: flex-end; font-size: 0.75rem; color: var(--bs-secondary-color); line-height: 1; margin-bottom: 1px; }
@@ -517,30 +502,26 @@ $(document).on('click', '.browse-entry', function(event) {
 """
 
 
-# The tabs move into the header, a tab opens at its top, and the sidebar is as high as the visible part of its column,
-# so that one scroll reaches its last button
-SIDEBAR_FIT = """
-function fitSidebar() {
-  const layout = document.querySelector('.bslib-sidebar-layout');
-  const header = document.querySelector('.bslib-page-sidebar > .navbar');
-  if (!layout || !header) return;
-  const root = document.documentElement.style;
-  root.setProperty('--header-height', header.offsetHeight + 'px');
-  root.setProperty('--sidebar-top', Math.max(layout.getBoundingClientRect().top, header.offsetHeight) + 'px');
+# The tabs move into the header, and a tab opens at its top. --header-height keeps what sticks below the header
+# (calibration_progress) in view
+HEADER_FIT = """
+function fitHeader() {
+  const header = document.querySelector('.mobile-page > .navbar');
+  if (!header) return;
+  document.documentElement.style.setProperty('--header-height', header.offsetHeight + 'px');
 }
 $(function() {
-  const header = document.querySelector('.bslib-page-sidebar > .navbar');
+  const header = document.querySelector('.mobile-page > .navbar');
   const tabs = document.querySelector('ul.nav.shiny-tab-input');
   if (header && tabs) header.appendChild(tabs);
-  fitSidebar();
+  fitHeader();
 });
-window.addEventListener('scroll', fitSidebar, {passive: true});
-window.addEventListener('resize', fitSidebar);
+window.addEventListener('resize', fitHeader);
 // A main tab opens at its top, whatever the scroll position of the one before
 document.addEventListener('shown.bs.tab', function(event) {
   if (event.target.closest('ul#tab')) window.scrollTo(0, 0);
 });
-$(document).on('shiny:connected shiny:value', fitSidebar);
+$(document).on('shiny:connected shiny:value', fitHeader);
 """
 
 

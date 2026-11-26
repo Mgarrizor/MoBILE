@@ -242,7 +242,7 @@ def sensitivity_card():
         ui.card_header("Sensitivity analysis (Sobol)"),
         ui.p(
             "Runs the model for many combinations of the parameters you tick, drawn from their distributions, with the setup ",
-            "applied in tab 1, the HA (and so the agents) and seed of the sidebar, and every other parameter at its slider value above. ",
+            "applied in tab 1 and its HA (and so the agents) and seed, and every other parameter at its slider value above. ",
             "Sobol indices then say how much of the variance of an output each parameter explains, alone (S1) or with the others (ST).",
             class_="small text-muted mb-1",
         ),
@@ -262,7 +262,7 @@ def sensitivity_card():
                 ui.h6("Runs"),
                 ui.div(
                     ui.input_switch("sa_stochastic", with_tip("Stochastic", "Repeat the whole analysis for several seeds, from the "
-                                    "sidebar seed up, with the same samples. The indices of each seed show how much chance changes them."),
+                                    "seed of tab 1 up, with the same samples. The indices of each seed show how much chance changes them."),
                                     value=False),
                     ui.panel_conditional("input.sa_stochastic", ui.input_numeric("sa_n_seeds", "Number of seeds", value=5, min=2, step=1)),
                     class_="sa-stochastic mb-2",
