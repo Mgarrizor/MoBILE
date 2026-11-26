@@ -199,7 +199,7 @@ class TestConfig(unittest.TestCase):
             spec = parameters[name]
             self.assertTrue(spec["min"] <= slider_start(name) <= spec["max"], f"{name}: starts outside its range")
             self.assertAlmostEqual(to_shown(name, to_model(name, slider_start(name))), slider_start(name), msg=name)
-        self.assertEqual(len(shown_parameters()), 56)
+        self.assertEqual(len(shown_parameters()), 57)
 
     def test_parameter_file_matches_the_source(self):
         malaria, cholera = fortran_defaults(MOBILE), fortran_defaults(MOBILE, "cholera")
