@@ -80,7 +80,8 @@ Everything a run needs that is not a parameter or an output.
     runs. Below 1 there are more agents than people and the model stops at once: the line turns red, and Run and Run
     analysis refuse to start.
 - **Results folder**: where the runs are saved. It does not have to be the folder you started from. Type a path
-  or use **Browse**, and to make a new folder, type its name under *New folder in the folder shown* and press
+  or use **Browse** (as every Browse button, it opens in the folder the GUI was started from; `..` goes up), and to
+  make a new folder, type its name under *New folder in the folder shown* and press
   **Create and open**. It then opens, and **Use this folder** selects it. Names use letters, digits, `.`, `_`
   and `-` only (no spaces), and the folder cannot be inside the MoBILE repository. It takes effect with
   **Apply setup**, and *Earlier runs* in tab 3. Run then lists the runs in that folder.
@@ -245,7 +246,8 @@ so analysing it again is quick. **How the indices are calculated**, under the ch
 ### 3. Run tab
 
 - **Run simulation**: **Seed band** runs several consecutive seeds, from the seed of tab 1, with the same
-  parameters, to see the spread between them. **Run name** (optional) is the name of the output folder,
+  parameters, to see the spread between them. The model is built once, by the first seed, and kept in the band
+  (`bin/mobile.out`); the others run it as it is. **Run name** (optional) is the name of the output folder,
   letters, digits, `.`, `_`, `-` only; without one, it is named after the date.
   **Run** starts the run and shows the Results tab. **Cancel** stops it, and can only be pressed during a run.
 - **Earlier runs** and **Load run**: reload a run or seed band from the results folder, and show it in the Results
@@ -302,8 +304,9 @@ The **Data** box:
 2. **Import**: say what the values are (dated, a climatology of calendar months or of seasons, yearly, by age band, or a single value),
    which column holds them, whether they add up (counts, e.g. cases) or are averaged (rates, prevalences), their units,
    and the columns of their shape: for dated values a date per row (standing for the period that contains it, e.g. a
-   mid-month date for that month) or a first and last day. Optionally an uncertainty column, and other columns to keep,
-   such as the population. Rows repeated exactly are kept once, rows giving different values for the same period are
+   mid-month date for that month; best written as YYYY-MM-DD) or a first and last day. A year and a month in separate
+   columns are not dates: join them into one column first (the Data box says so above the file). Optionally an
+   uncertainty column, and other columns to keep, such as the population. Rows repeated exactly are kept once, rows giving different values for the same period are
    refused, and gaps and missing values are reported.
 3. **Processing** is a list of steps you build, applied in order to the values loaded: choose a step under the list and
    press **Add step**; each step can be changed, moved up or down (↑ ↓) or removed (×), and the plot, the table and the

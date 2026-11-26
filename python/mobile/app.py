@@ -42,7 +42,7 @@ from .scripts import (
 from .shapes import ShapeError, areas, name_field, outlines, read_shapes
 from .setup import (
     OPTIONAL_FILES, REQUIRED_FILES, from_fields, from_manifest, create_folder, list_folder, region_from_fields, region_mode,
-    save_setup, start_folder, typed_path, usable_shapes,
+    save_setup, typed_path, usable_shapes,
 )
 from .growth import GrowthError, ceiling_needed, fit_growth, growth_over, percent, read_population
 from .setup_ui import (
@@ -1439,7 +1439,9 @@ def create_app(config):
             )
 
         def open_browser(field, kind):
-            browse.set({"field": field, "kind": kind, "folder": start_folder(input[field]())})
+            # The browser opens in the folder the GUI was started in (from which typed relative paths are read too;
+            # the GUI never changes it)
+            browse.set({"field": field, "kind": kind, "folder": Path.cwd()})
             footer = [ui.modal_button("Cancel")]
             if kind == "folder":
                 footer.insert(0, ui.input_action_button("browser_use_folder", "Use this folder", class_="btn-primary"))

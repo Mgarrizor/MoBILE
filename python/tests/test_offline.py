@@ -35,7 +35,7 @@ from mobile.species import VECTORS
 from mobile.rundir import create_run_dir, fill_template
 from mobile.app import free_port
 from mobile.layout import OUTPUT_FLAGS, logo_files, publications
-from mobile.outcome import Outcome, RunState, run_label, run_name_problem
+from mobile.outcome import Outcome, RunState, run_label, run_model, run_name_problem
 from mobile.plots import (
     MAX_DOTS, add_dot, cell_envelope, climate_figure, colour_values, default_dot, grid_step, index_map_figure,
     indices_figure, map_figure, monthly_figure, move_dot, next_cells, remove_dot, second_order_figure, units_label,
@@ -47,7 +47,6 @@ from mobile.driving import climatology, field_limits, mean_age, open_field
 from mobile.results import list_runs, load_run, load_seed_band, write_seed_band
 from mobile.setup import (
     create_folder, from_fields, from_manifest, list_folder, load_setup, region_from_fields, region_mode, save_setup,
-    start_folder,
 )
 from mobile.checks import driving_days, driving_problems
 from mobile.period import SPIN_UP_DAYS, day_range, length_text, period_days, period_problems
@@ -756,10 +755,6 @@ class TestSetup(unittest.TestCase):
         self.assertEqual(list_folder(self.folder, "netcdf"), (["settings", "sub"] if (self.folder / "settings").exists() else ["sub"], ["a.NC", "b.nc"]))
         self.assertEqual(list_folder(self.folder, "text")[1], ["data.csv", "notes.txt"])
         self.assertEqual(list_folder(self.folder, "folder")[1], [])
-        self.assertEqual(start_folder(str(self.folder / "b.nc")), self.folder.resolve())
-        # Empty, or a path that does not exist: the folder the GUI was started in
-        self.assertEqual(start_folder(""), Path.cwd())
-        self.assertEqual(start_folder(str(self.folder / "nowhere" / "x.nc")), Path.cwd())
 
     def test_new_folder(self):
         path, problem = create_folder(self.folder, " kenya_2025 ")
@@ -1735,6 +1730,48 @@ def write_known_study(root, n, seeds=(1,), second_order=False, noise=0.0, days=4
     }
     (folder / RECORD).write_text(json.dumps(record))
     return folder, a, b
+
+
+class TestSeedBand(unittest.TestCase):
+    """A seed band run through run_MOBILE.sh with a stand-in mobile.sh that writes a model when it builds and an
+    empty output."""
+
+    FAKE = """#!/bin/bash
+mkdir -p output && echo '#!/bin/bash' > output/mobile.out
+echo '================= Running MoBILE ================='
+touch output/output.nc
+echo 'Program finished successfully'
+"""
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        root = Path(folder.name)
+        fake = root / "MoBILE"
+        (fake / "utils").mkdir(parents=True)
+        (fake / "src").mkdir()
+        (fake / "utils" / "run_MOBILE.sh").write_text((Path(MOBILE) / "utils" / "run_MOBILE.sh").read_text())
+        (fake / "src" / "mo_namelist.f90").write_text((Path(MOBILE) / "src" / "mo_namelist.f90").read_text())
+        (fake / "mobile.sh").write_text(self.FAKE)
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(root)
+        self.config = replace(Config.load(CONFIG), mobile=fake, runs_dir=root / "runs")
+
+    def test_model_built_once(self):
+        # The first seed builds the model and keeps it in the band; the others run it as it is. The output is empty:
+        # what run_model reads of it is not tested here
+        with mock.patch("mobile.results.RunResult.variables", return_value=[]), \
+                mock.patch("mobile.results.RunResult.days", return_value=0):
+            outcome = run_model(self.config, [5, 6, 7], RunState(), "band")
+        self.assertEqual((outcome.status, outcome.seeds), ("finished", [5, 6, 7]))
+        band = self.config.runs_dir / "band"
+        manifests = [json.loads((band / f"seed_{seed}" / "run.json").read_text()) for seed in (5, 6, 7)]
+        kept = band / "bin" / "mobile.out"
+        self.assertEqual([manifest["prebuilt"] for manifest in manifests], [None, str(kept), str(kept)])
+        self.assertEqual(len({manifest["binary_md5"] for manifest in manifests}), 1)
+        # The band still loads and is listed, with its model inside
+        self.assertEqual(len(load_seed_band(band)), 3)
+        self.assertEqual(list(list_runs(self.config.runs_dir)), [str(band)])
 
 
 class TestStudyResults(unittest.TestCase):

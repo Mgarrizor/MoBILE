@@ -7,7 +7,7 @@ from pathlib import Path
 
 from .results import load_run, load_seed_band, write_seed_band
 from .rundir import new_run_id
-from .runner import Runner, RunnerBusy
+from .runner import BuildOnce, RunCancelled, Runner, RunnerBusy
 from .variables import AGE_FIELD, age_groups, age_label
 
 
@@ -87,28 +87,42 @@ def run_name_problem(name, runs_dir):
     return None
 
 
+BAND_BINARY = Path("bin") / "mobile.out"  # In a seed band: the model its first seed built, run by the others
+
+
 def run_model(config, seeds, state, name=None):
     """Run one seed after another with the same parameters, threads and binary, in runs_dir/<name>
-    (a date-based name by default)."""
+    (a date-based name by default). In a seed band the first seed builds the model and keeps it in the band
+    (BAND_BINARY); the others run it as it is, as the runs of an analysis or a calibration do."""
     outcome = Outcome(status="finished", overrides=dict(config.params), nagent=config.run["nagent"])
     band = (name or f"seed_band_{new_run_id()}") if len(seeds) > 1 else None
     if band:
         outcome.run_dir = str(config.runs_dir / band)
+        once = BuildOnce(config.runs_dir / band / BAND_BINARY)
     for member, seed in enumerate(seeds, start=1):
         if state.cancelled:
             outcome.status = "cancelled"
             break
-        runner = Runner(config.with_run(seed=seed))
+        # The seeds run one at a time, so the model is ready, or the first seed is to build it
+        prebuilt = once.acquire() if band else None
+        runner = Runner(config.with_run(seed=seed), prebuilt)
         state.update(runner=runner, member=member, members=len(seeds), message="Starting", fraction=None)
 
         def on_progress(event):
             state.update(message=event.message, fraction=event.fraction)
 
         try:
-            result = runner.run(f"{band}/seed_{seed}" if band else name, on_progress=on_progress)
+            result = runner.run(f"{band}/seed_{seed}" if band else name, on_progress=on_progress,
+                                on_built=once.keep if band and prebuilt is None else None)
         except RunnerBusy as error:
             outcome.status, outcome.log = "failed", str(error)
             break
+        except RunCancelled:  # A prebuilt seed cancelled before it started
+            outcome.status = "cancelled"
+            break
+        finally:
+            if band and prebuilt is None:
+                once.release()
         if not band:
             outcome.run_dir = str(result.run_dir)
         if not result.ok:

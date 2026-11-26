@@ -166,17 +166,6 @@ def list_folder(folder, kind):
     return folders, files
 
 
-def start_folder(value):
-    """Where the file browser opens: the folder of the path in the box, or else the folder the GUI was started in (from
-    which typed relative paths are read too; the GUI never changes it)."""
-    if value and str(value).strip():
-        path = typed_path(value)
-        for candidate in (path, path.parent):
-            if candidate.is_dir():
-                return candidate
-    return Path.cwd()
-
-
 def create_folder(parent, name):
     """Make a folder in `parent` for the file browser: (its path, None), or (None, why it cannot be made)."""
     name = name.strip()
