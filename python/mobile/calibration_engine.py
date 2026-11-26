@@ -26,6 +26,7 @@ period so that it leaves the mean of each cell, and so the gaps and their order,
 """
 
 import datetime
+import errno
 import fcntl
 import json
 import math
@@ -36,6 +37,7 @@ import sqlite3
 import subprocess
 import threading
 import time
+import traceback
 from contextlib import closing
 from dataclasses import replace
 from functools import lru_cache
@@ -97,6 +99,10 @@ TRIALS = "trials"
 BINARY = Path("bin") / "mobile.out"
 ATTEMPTS = 2  # A failed run is tried once more before its trial fails
 FAIL_FAST = 3  # The calibration stops if this many trials fail before any completes: they would all fail alike
+# Deleted from a completed trial once it is off the Pareto front (prune_trials): its plots are drawn from what was kept
+# in SERIES. In each seed's folder, then in the trial's (the temperature with its offsets)
+PRUNED_RUN = ("output", "run.log")
+PRUNED_TRIAL = ("t2m.nc",)
 SAMPLERS = {
     "tpe": "TPE (Tree-structured Parzen Estimator): multivariate, with constant liar for trials run side by side",
     "random": "Random: every trial drawn independently, as a reference",
@@ -808,6 +814,35 @@ def trial_folder(folder, number):
     return Path(folder) / TRIALS / f"trial_{number:05d}"
 
 
+def prune_trials(folder, study, objectives):
+    """Delete the model output of the completed trials off the Pareto front (PRUNED_RUN, PRUNED_TRIAL), and return their
+    numbers. Their comparisons are drawn from SERIES; the drivers (output.nc, t2m.nc) only for trials of the front, which
+    keep their output, so a trial dropping off the front loses it. A trial without the series of every objective kept
+    (e.g. made by an earlier version, whose plots read its output) is left whole; failed trials too."""
+    trials = study.get_trials(deepcopy=False)
+    rows = [{"number": trial.number, "state": trial.state.name, "values": trial.values,
+             "violation": trial.user_attrs.get(CONSTRAINT, (None,))[0]} for trial in trials]
+    kept = set(front(study, rows))
+    pruned = []
+    for trial in trials:
+        if trial.state != optuna.trial.TrialState.COMPLETE or trial.number in kept:
+            continue
+        here = trial_folder(folder, trial.number)
+        doomed = [path for seed in sorted(here.glob("seed_*")) for path in (seed / name for name in PRUNED_RUN)]
+        doomed += [here / name for name in PRUNED_TRIAL]
+        doomed = [path for path in doomed if path.exists()]
+        if not doomed or not all(path.is_file() for index in range(len(objectives))
+                                 for path in _series_files(here / SERIES, index, None)):
+            continue
+        for path in doomed:
+            if path.is_dir():
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                path.unlink(missing_ok=True)
+        pruned.append(trial.number)
+    return pruned
+
+
 def stop_runs_left(folder):
     """Stop the model runs of a calibration still running on this computer although the process that ran it died (e.g. a
     GUI closed or crashed): they would go on writing in the trial folders the calibration, resumed, makes again, and
@@ -876,8 +911,8 @@ def run_calibration(folder, state, parallel=1, threads=None, deadline=None, tria
     clone, as for setup_config.
 
     The status is finished when the trials asked for have completed; stopped if the first FAIL_FAST trials all failed, or
-    more than CRASH_RATE of them (the record then holds the end of the log of a run, as failure); "stopped at deadline";
-    cancelled; or incomplete. Raises CalibrationError if another process runs it (is_running)."""
+    more than CRASH_RATE of them, at once if the disk or the quota is full, or on an error not expected (the record then
+    holds the end of the log of a run, or the error, as failure); "stopped at deadline"; cancelled; or incomplete. Raises CalibrationError if another process runs it (is_running)."""
     folder = Path(folder)
     record = read_calibration(folder)
     if not resumable(record):
@@ -1209,6 +1244,7 @@ def _run_locked(folder, record, state, parallel, threads, deadline=None, trial_s
             if time.time() + (expected or 0) > deadline:
                 at_deadline.set()
                 not_started(trial, "not started: the deadline was near")
+        prune(wait=False)
         values, offsets = suggest(trial, record)
         here = trial_folder(folder, trial.number)
         here.mkdir(parents=True, exist_ok=True)
@@ -1270,17 +1306,24 @@ def _run_locked(folder, record, state, parallel, threads, deadline=None, trial_s
         except RunCancelled:
             trial.set_user_attr("cancelled", True)
             raise
-        except (TrialFailed, DataError) as error:
+        except (TrialFailed, DataError, OSError) as error:  # OSError: e.g. its series could not be written
             trial.set_user_attr("failure", str(error)[-2000:])
             state.count("failed")
             with state.lock:
                 state.failure = state.failure or str(error)
                 systematic = state.failed >= FAIL_FAST and state.done == state.done_before
                 crashing = failed_before + state.failed > crash_limit
-            if systematic or crashing:
+            # The disk full, or the quota (e.g. on a cluster): every trial after it would fail alike
+            full = isinstance(error, OSError) and error.errno in (errno.ENOSPC, errno.EDQUOT)
+            if systematic or crashing or full:
                 state.update(message="stopped")
                 state.cancel()
             raise TrialFailed(str(error)) from None
+        except Exception:
+            # Not expected: it ends the calibration (Optuna raises it again), stopped, its traceback kept with the trial and
+            # in the record (_run_locked), for the GUI to show
+            trial.set_user_attr("failure", traceback.format_exc()[-2000:])
+            raise
         state.count("done")
         return results
 
@@ -1298,6 +1341,21 @@ def _run_locked(folder, record, state, parallel, threads, deadline=None, trial_s
         enough = len(study.get_trials(deepcopy=False, states=(optuna.trial.TrialState.COMPLETE, optuna.trial.TrialState.RUNNING)))
         if state.cancelled or at_deadline.is_set() or enough >= target:
             study.stop()
+
+    pruning = threading.Lock()
+
+    def prune(wait):
+        """prune_trials, at the start of each trial (wait False: skipped if another trial is at it; not after a trial, which
+        would hold up the count of those running in after_trial) and at the end."""
+        if not pruning.acquire(blocking=wait):
+            return
+        try:
+            with NETCDF_LOCK:  # Not while output is read
+                prune_trials(folder, study, objectives)
+        except OSError:
+            pass  # Never stops the calibration: done again at the next trial
+        finally:
+            pruning.release()
 
     state.update(message="Running")
     catch = (TrialFailed, RunCancelled)
@@ -1319,7 +1377,13 @@ def _run_locked(folder, record, state, parallel, threads, deadline=None, trial_s
                            gc_after_trial=False)
             if len(study.get_trials(deepcopy=False)) == before:
                 break
+    except Exception:  # noqa: BLE001 - not expected (objective): the calibration stops, its traceback as the failure
+        traceback.print_exc()
+        with state.lock:
+            state.failure = traceback.format_exc()[-2000:]
+        state.update(message="stopped")
     finally:
+        prune(wait=True)
         completed, failed = counts(study)
         if state.message == "stopped":
             outcome = "stopped"

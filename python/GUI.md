@@ -539,7 +539,9 @@ together (the Pareto front):
   out and persisting is and searches along it, instead of losing those trials. Its objectives get the values of a
   series that does not vary (correlation 0, the relative RMSE of a constant series). Every trial records when its last
   case was, in each seed. It goes on until as many trials have **completed** as asked for: a trial that fails is made up for by
-  another. It stops if its first 3 trials all fail, or more than one in ten of the trials asked for (at least 3).
+  another. It stops if its first 3 trials all fail, or more than one in ten of the trials asked for (at least 3); at
+  once if the disk or the quota is full (a trial's files could not be written: every trial after it would fail alike);
+  and on an error not expected. The card then shows the end of the log of a run, or the error (in a job, its log).
   Trials left running by a process that ended (the GUI closed, a job killed) are not counted as failures.
 - **Without the GUI**, e.g. in a batch job on a cluster: `mobile calibrate <folder>` runs or continues it, one line per
   trial, and stops cleanly before the end of a Slurm job (no trial is started that would not end 2 minutes before it,
@@ -628,7 +630,11 @@ together (the Pareto front):
   trial, not optimised: no regime is imposed on the calibration. Optuna's figures show what it samples, dT₁ and the gaps (and dT_trend); the offsets of the cells follow from them. Its folder, `calibration/<name>/` in the
   results folder, holds `calibration.json`, the Optuna study (`optuna.db`, and `optuna.snapshot.db`, a copy that can be
   copied while it runs), `status.json`, the model (`bin/`) and the trials, each with the series its objectives compared
-  (`series/`), from which its plots are drawn. A
+  (`series/`), from which its plots are drawn. Only the trials of the Pareto front keep their model output
+  (`seed_<seed>/output/`, `run.log`) and their temperature (`t2m.nc`), which their drivers are drawn from: once a
+  trial is scored and off the front, or drops off it later, they are deleted (a Kericho trial of 0.1° cells: 6 MB
+  before, 0.3 MB after), here and in a job on a cluster alike. A trial made by an earlier version, without its series,
+  is left whole, as are failed trials. A
   calibration made by an earlier version of the engine is listed with "earlier version: cannot be resumed": it can be
   looked at, not run further.
 
