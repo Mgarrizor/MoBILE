@@ -79,8 +79,8 @@ def _how_to_calibrate():
     """The steps of a calibration, in the order of the tab."""
     steps = [
         ui.TagList(ui.tags.strong("Apply the setup"), " in tab 1: the driving files, region and period. The calibration runs "
-                   "the model with it, the HA and seed of the sidebar, and the parameters and outputs applied in tab 2."),
-        ui.TagList(ui.tags.strong("Run the model once"), " from the sidebar, with the output you want to compare ticked in the "
+                   "the model with it, its HA and seed, and the parameters and outputs applied in tab 2."),
+        ui.TagList(ui.tags.strong("Run the model once"), " from tab 3. Run, with the output you want to compare ticked in the "
                    "Outputs card (e.g. New symptomatic cases). Any finished run with that output will do, also an earlier one or one "
                    "from another folder: it is only used to build the objectives and check them. Adding an objective ticks the "
                    "output it needs in the Outputs card; the runs of the calibration write the outputs applied there."),
@@ -104,8 +104,8 @@ def _how_to_calibrate():
 def _model_box():
     return ui.card(
         ui.card_header("Model"),
-        ui.p("An output of a finished run, reduced over the cells of its region into a daily series. Run the model from the "
-             "sidebar first; its runs are listed here.", class_="small text-muted mb-2"),
+        ui.p("An output of a finished run, reduced over the cells of its region into a daily series. Run the model from "
+             "tab 3. Run first; its runs are listed here.", class_="small text-muted mb-2"),
         ui.div(ui.input_select(f"{MODEL}_run", "Run", {}, width="100%"),
                ui.input_action_button(f"{MODEL}_refresh", "Refresh", class_="btn-sm ms-2 mb-3", title="List the runs again"),
                class_="d-flex align-items-end"),
@@ -133,6 +133,9 @@ def _data_box():
              "such as a climatology use the same years on both sides; the steps below and the plot already show them cut, and say "
              "the period. Observations of a climatology or yearly ones are not cut, nor the data sets a Combine step takes; an "
              "objective with a Combine step keeps the observations as processed here.", class_="small text-muted mb-2"),
+        ui.p("⚠ Dated values need a column of dates, best written as YYYY-MM-DD (e.g. 1990-07-01; a date stands for the "
+             "period that contains it), or columns of first and last days. A year and a month in separate columns are not "
+             "dates: join them into one column first.", class_="small text-warning-emphasis mb-2"),
         ui.div(
             ui.input_text("cal_data_file", "File of observations", width="100%"),
             ui.div(ui.input_action_button("browse_cal_data_file", "Browse", class_="btn-sm"),

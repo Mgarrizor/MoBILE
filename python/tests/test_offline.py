@@ -35,7 +35,7 @@ from mobile.species import VECTORS
 from mobile.rundir import create_run_dir, fill_template
 from mobile.app import free_port
 from mobile.layout import OUTPUT_FLAGS, logo_files, publications
-from mobile.outcome import Outcome, RunState, run_label, run_name_problem
+from mobile.outcome import Outcome, RunState, run_label, run_model, run_name_problem
 from mobile.plots import (
     MAX_DOTS, add_dot, cell_envelope, climate_figure, colour_values, default_dot, grid_step, index_map_figure,
     indices_figure, map_figure, monthly_figure, move_dot, next_cells, remove_dot, second_order_figure, units_label,
@@ -47,7 +47,6 @@ from mobile.driving import climatology, field_limits, mean_age, open_field
 from mobile.results import list_runs, load_run, load_seed_band, write_seed_band
 from mobile.setup import (
     create_folder, from_fields, from_manifest, list_folder, load_setup, region_from_fields, region_mode, save_setup,
-    start_folder,
 )
 from mobile.checks import driving_days, driving_problems
 from mobile.period import SPIN_UP_DAYS, day_range, length_text, period_days, period_problems
@@ -610,8 +609,13 @@ class TestVectorSpecies(unittest.TestCase):
 
     def test_ranges_hold_the_species_value(self):
         self.assertEqual(species_spec("wpond_ratio", 1)["min"], shown_parameters()["wpond_ratio"]["min"])  # 0.5: inside
-        wide = species_spec("wperm_ratio", 1)  # 0.7, out of 0.003-0.009: +/- 50 %, at most 1 for a fraction
-        self.assertEqual((wide["min"], wide["max"], wide["curated"]), (0.35, 1.0, False))
+        wide = species_spec("wurbn_ratio", 1)  # 0.1, out of 0.005-0.015: +/- 50 %
+        self.assertEqual((round(wide["min"], 6), round(wide["max"], 6), wide["curated"]), (0.05, 0.15, False))
+        # wperm_ratio on a log10 slider from 1e-5 to 1 holds every species' value: 0.006 (gambiae) to 0.7 (funestus)
+        permanent = species_spec("wperm_ratio", 1)
+        self.assertEqual((permanent["value"], permanent["min"], permanent["max"]), (0.7, -5.0, 0.0))
+        for value in (0.006, 0.7):
+            self.assertAlmostEqual(to_model("wperm_ratio", to_shown("wperm_ratio", value)), value)
         flush = species_spec("rlarv_flushmin", 10)  # 78.5: not a fraction
         self.assertEqual((flush["min"], flush["max"]), (39.25, 117.75))
         self.assertEqual(set(slider_parameters(10, True)), {n for n, s in shown_parameters().items() if s["group"] in ("Vector", "Hydro", "Interventions")})
@@ -756,10 +760,6 @@ class TestSetup(unittest.TestCase):
         self.assertEqual(list_folder(self.folder, "netcdf"), (["settings", "sub"] if (self.folder / "settings").exists() else ["sub"], ["a.NC", "b.nc"]))
         self.assertEqual(list_folder(self.folder, "text")[1], ["data.csv", "notes.txt"])
         self.assertEqual(list_folder(self.folder, "folder")[1], [])
-        self.assertEqual(start_folder(str(self.folder / "b.nc")), self.folder.resolve())
-        # Empty, or a path that does not exist: the folder the GUI was started in
-        self.assertEqual(start_folder(""), Path.cwd())
-        self.assertEqual(start_folder(str(self.folder / "nowhere" / "x.nc")), Path.cwd())
 
     def test_new_folder(self):
         path, problem = create_folder(self.folder, " kenya_2025 ")
@@ -1735,6 +1735,48 @@ def write_known_study(root, n, seeds=(1,), second_order=False, noise=0.0, days=4
     }
     (folder / RECORD).write_text(json.dumps(record))
     return folder, a, b
+
+
+class TestSeedBand(unittest.TestCase):
+    """A seed band run through run_MOBILE.sh with a stand-in mobile.sh that writes a model when it builds and an
+    empty output."""
+
+    FAKE = """#!/bin/bash
+mkdir -p output && echo '#!/bin/bash' > output/mobile.out
+echo '================= Running MoBILE ================='
+touch output/output.nc
+echo 'Program finished successfully'
+"""
+
+    def setUp(self):
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        root = Path(folder.name)
+        fake = root / "MoBILE"
+        (fake / "utils").mkdir(parents=True)
+        (fake / "src").mkdir()
+        (fake / "utils" / "run_MOBILE.sh").write_text((Path(MOBILE) / "utils" / "run_MOBILE.sh").read_text())
+        (fake / "src" / "mo_namelist.f90").write_text((Path(MOBILE) / "src" / "mo_namelist.f90").read_text())
+        (fake / "mobile.sh").write_text(self.FAKE)
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(root)
+        self.config = replace(Config.load(CONFIG), mobile=fake, runs_dir=root / "runs")
+
+    def test_model_built_once(self):
+        # The first seed builds the model and keeps it in the band; the others run it as it is. The output is empty:
+        # what run_model reads of it is not tested here
+        with mock.patch("mobile.results.RunResult.variables", return_value=[]), \
+                mock.patch("mobile.results.RunResult.days", return_value=0):
+            outcome = run_model(self.config, [5, 6, 7], RunState(), "band")
+        self.assertEqual((outcome.status, outcome.seeds), ("finished", [5, 6, 7]))
+        band = self.config.runs_dir / "band"
+        manifests = [json.loads((band / f"seed_{seed}" / "run.json").read_text()) for seed in (5, 6, 7)]
+        kept = band / "bin" / "mobile.out"
+        self.assertEqual([manifest["prebuilt"] for manifest in manifests], [None, str(kept), str(kept)])
+        self.assertEqual(len({manifest["binary_md5"] for manifest in manifests}), 1)
+        # The band still loads and is listed, with its model inside
+        self.assertEqual(len(load_seed_band(band)), 3)
+        self.assertEqual(list(list_runs(self.config.runs_dir)), [str(band)])
 
 
 class TestStudyResults(unittest.TestCase):
@@ -3513,8 +3555,8 @@ sleep ${FAKE_SLEEP:-0}
         self.assertAlmostEqual(float(np.corrcoef(m, d)[0, 1]), best["values"][0], places=6)  # The plot is what was scored
 
     def test_validation_window(self):
-        from mobile.calibration_engine import (CalibrationError, create_calibration, evaluate, read_calibration, run_calibration,
-                                               trial_comparison, trial_folder, trials_table)
+        from mobile.calibration_engine import (CalibrationError, best_trials, create_calibration, evaluate, read_calibration,
+                                               run_calibration, trial_comparison, trial_folder, trials_table)
         from mobile.sensitivity_runs import StudyState
 
         window = ("2002-07-01", "2002-12-31")
@@ -3530,7 +3572,7 @@ sleep ${FAKE_SLEEP:-0}
         self.assertEqual(record["validation"], list(window))
         rows = trials_table(folder)
         self.assertTrue(all(len(row["validation"]) == 2 and all(isinstance(v, float) for v in row["validation"]) for row in rows))
-        row = rows[0]
+        row = best_trials(folder)[0]  # Of the front: its output kept (prune_trials)
         run_dirs = [trial_folder(folder, row["number"]) / f"seed_{seed}" for seed in record["seeds"]]
         # Scored on the months outside the window; the window apart, kept with the trial
         np.testing.assert_allclose(row["values"], evaluate(record["objectives"], run_dirs, window, "calibration"))
@@ -3677,8 +3719,8 @@ sleep ${FAKE_SLEEP:-0}
     def test_status_file_snapshot_and_kept_series(self):
         import optuna
 
-        from mobile.calibration_engine import (SERIES, SNAPSHOT, STATUS, create_calibration, objective_series, read_status, resolved,
-                                               run_calibration, trial_comparison, trial_folder)
+        from mobile.calibration_engine import (SERIES, SNAPSHOT, STATUS, best_trials, create_calibration, objective_series, read_status,
+                                               resolved, run_calibration, trial_comparison, trial_folder)
         from mobile.sensitivity_runs import StudyState
 
         window = ("2002-07-01", "2002-12-31")
@@ -3696,13 +3738,14 @@ sleep ${FAKE_SLEEP:-0}
         self.assertEqual(sum(t.state == optuna.trial.TrialState.COMPLETE for t in snapshot.trials), 4)
         # The series compared are kept with each trial, for the whole period and each part: the same as from the output
         objectives = resolved(folder, record)["objectives"]
-        here = trial_folder(folder, 1)
+        number = best_trials(folder)[0]["number"]  # Of the front: its output kept (prune_trials)
+        here = trial_folder(folder, number)
         run_dirs = [here / f"seed_{seed}" for seed in record["seeds"]]
         self.assertEqual(len(list((here / SERIES).glob("*.nc"))), 2 * 2 * 3)  # 2 objectives x (model, data) x 3 parts
         for part in (None, "calibration", "validation"):
             model, data = objective_series(objectives[0], run_dirs, window, part)
             shutil.rmtree(run_dirs[0]) if part == "validation" else None  # The last without the output: from what was kept
-            kept = trial_comparison(folder, 1, 0, part)
+            kept = trial_comparison(folder, number, 0, part)
             np.testing.assert_allclose(kept[0].values, model.values)
             np.testing.assert_allclose(kept[1].values, data.values)
             self.assertTrue(kept[0].index.equals(model.index))
@@ -3861,8 +3904,10 @@ sleep ${FAKE_SLEEP:-0}
 
     def test_transmission_dying_out_is_infeasible_not_failed(self):
         # The toy has cases only above 18 °C: offsets of the west of -2 °C or lower (with a small gap) leave none anywhere
-        from mobile.calibration_engine import (CONSTRAINT, DataError, INFEASIBLE, create_calibration, evaluate, open_study,
-                                               read_calibration, resolved, run_calibration, trial_folder, trials_table, best_trials)
+        from mobile.calibration_engine import (CONSTRAINT, DataError, INFEASIBLE, create_calibration, evaluate, offset_temperature,
+                                               open_study, read_calibration, resolved, run_calibration, trial_folder, trials_table,
+                                               best_trials)
+        from mobile.runner import Runner
         from mobile.calibration_results import results_figure
         from mobile.sensitivity_runs import StudyState
 
@@ -3890,10 +3935,13 @@ sleep ${FAKE_SLEEP:-0}
         self.assertTrue(front and not any(row["infeasible"] for row in front))
         study = open_study(folder, read_calibration(folder))
         self.assertEqual(study.trials[never[0]["number"]].constraints, {"transmission": 1.0})
-        # Control: as before (no flat series allowed), such a trial fails
-        here = trial_folder(folder, never[0]["number"])
+        # Control: as before (no flat series allowed), such a trial fails; run again, its output deleted (off the front)
+        self.assertFalse((trial_folder(folder, never[0]["number"]) / "seed_12345" / "output").exists())
+        offset_temperature(self.root / "temperature.nc", self.root / "never.nc", self.cells, never[0]["offsets"])
+        result = Runner(replace(self.config, inputs={**self.config.inputs, "temp_file": str(self.root / "never.nc")})).run("never")
+        self.assertTrue(result.ok, result.log_tail())
         with self.assertRaisesRegex(DataError, "not defined for these values"):
-            evaluate(resolved(folder, read_calibration(folder))["objectives"], [here / "seed_12345"])
+            evaluate(resolved(folder, read_calibration(folder))["objectives"], [result.run_dir])
         # The regime of every trial: the toy repeats the same seasons, so the years are alike (CV ~0) while it persists
         self.assertEqual(never[0]["regime"]["fade_out"], 1.0)
         self.assertIsNone(never[0]["regime"]["annual_cv"])  # No cases: not defined
@@ -4344,7 +4392,7 @@ echo "64200001|cal_x|PENDING|0:00|20:00|(Priority)"
             self.assertEqual(certificate(datetime.datetime(2026, 11, 12, 22, 0))[1], "expired at 21:00: log in again")
 
     def test_regions_share_an_offset(self):
-        from mobile.calibration_engine import create_calibration, read_calibration, region_mean, run_calibration, trials_table
+        from mobile.calibration_engine import best_trials, create_calibration, read_calibration, region_mean, run_calibration
         from mobile.calibration_run_ui import offset_cells, regions
         from mobile.plots import regions_figure
         from mobile.sensitivity_runs import StudyState
@@ -4376,7 +4424,8 @@ echo "64200001|cal_x|PENDING|0:00|20:00|(Priority)"
         record = run_calibration(folder, StudyState(), parallel=2)
         self.assertEqual(record["status"], "finished")
         self.assertAlmostEqual(read_calibration(folder)["temperature"]["means"][0], region["mean"], places=4)
-        row = next(row for row in trials_table(folder) if not row["baseline"])
+        front = best_trials(folder)  # Of the front: its temperature kept (prune_trials)
+        row = next((row for row in front if not row["baseline"]), front[0])
         with netCDF4.Dataset(folder / "trials" / f"trial_{row['number']:05d}" / "t2m.nc") as data:
             shift = data["temperature"][:] - self.t2m
         np.testing.assert_allclose(shift, row["offsets"]["dT_1"], atol=1e-5)  # Every cell of the region moved by the same dT
@@ -4429,6 +4478,7 @@ echo "64200001|cal_x|PENDING|0:00|20:00|(Priority)"
         self.assertTrue(any(means[1] + row["offsets"]["dT_2"] < means[0] + row["offsets"]["dT_1"] for row in rows))
 
     def test_temperature_trend(self):
+        from mobile import calibration_engine
         from mobile.calibration_engine import (CalibrationError, baseline, create_calibration, offset_temperature, read_calibration,
                                                run_calibration, trial_folder, trials_table)
         from mobile.calibration_results import value_panels
@@ -4457,8 +4507,10 @@ echo "64200001|cal_x|PENDING|0:00|20:00|(Priority)"
         self.assertEqual(baseline(temperature)["dT_trend"], 0.0)
         self.assertIsNone(baseline({**temperature, "trend": [0.5, 3.0]}))  # No trend is outside the range
         self.assertIn("Temperature trend (-1 to 3 °C per decade, 0 on 2001-12-31)", [panel[0] for panel in value_panels(read_calibration(folder))])
-        # Run: each trial samples it within the range, and its temperature file carries it
-        self.assertEqual(run_calibration(folder, StudyState(), parallel=2)["status"], "finished")
+        # Run: each trial samples it within the range, and its temperature file carries it (every file kept: the front may
+        # hold only the start trial, without a trend)
+        with mock.patch.object(calibration_engine, "prune_trials"):
+            self.assertEqual(run_calibration(folder, StudyState(), parallel=2)["status"], "finished")
         rows = trials_table(folder)
         self.assertEqual(next(row for row in rows if row["baseline"])["offsets"]["dT_trend"], 0.0)
         for row in rows:
@@ -4735,6 +4787,32 @@ echo "64200001|cal_x|PENDING|0:00|20:00|(Priority)"
         with self.assertRaisesRegex(DataError, "Agents per cell .* Humans per agent"):
             model_count_members(plain.run_dir, "Inew")
 
+    def test_outputs_read_once(self):
+        """A run's output is read once for all the objectives and parts of a trial: read again only when its files change
+        (a run made again in the same folder), and the values given are never shared."""
+        from mobile import calibration_model
+        from mobile.calibration_model import model_count_members, model_members
+        from mobile.runner import Runner
+
+        result = Runner(replace(self.config, output=("out_I_new", "out_N", "out_HA"))).run("read_once")
+        self.assertTrue(result.ok, result.log_tail())
+        with mock.patch.object(calibration_model, "_read_counts", wraps=calibration_model._read_counts) as counts, \
+                mock.patch.object(calibration_model, "_read_series", wraps=calibration_model._read_series) as series:
+            first = model_count_members(result.run_dir, "Inew")[0], model_members(result.run_dir, "Inew")[0]
+            again = model_count_members(result.run_dir, "Inew")[0], model_members(result.run_dir, "Inew")[0]
+            self.assertEqual((counts.call_count, series.call_count), (1, 1))  # Not read again
+            for one, other in zip(first, again):
+                np.testing.assert_array_equal(one.values, other.values)
+                self.assertFalse(np.shares_memory(one.values, other.values))  # A copy each time
+            first[0].values[:] = -1.0  # Changing what was given changes nothing kept
+            self.assertTrue(np.all(model_count_members(result.run_dir, "Inew")[0].values >= 0))
+            # The output written again (control): read again, with the new values
+            with netCDF4.Dataset(result.run_dir / "output" / "output.nc", "a") as data:
+                data["Human/Inew"][:] = data["Human/Inew"][:] * 2.0
+            doubled = model_count_members(result.run_dir, "Inew")[0]
+            self.assertEqual(counts.call_count, 2)
+        np.testing.assert_allclose(doubled.values, 2.0 * again[0].values, rtol=1e-6)
+
     def test_views_are_kept_and_never_fail_a_trial(self):
         from mobile.calibration_engine import (SERIES, VIEW, create_calibration, read_calibration, run_calibration, trial_comparison,
                                                trial_folder, trials_table)
@@ -4763,6 +4841,93 @@ echo "64200001|cal_x|PENDING|0:00|20:00|(Priority)"
         # Without views, as before
         plain = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=1, name="no_views")
         self.assertEqual(read_calibration(plain)["views"], [])
+
+    def test_trials_off_the_front_lose_their_output(self):
+        from mobile.calibration_engine import (SERIES, best_trials, create_calibration, open_study, prune_trials, read_calibration,
+                                               resolved, run_calibration, trial_comparison, trial_folder, trials_table)
+        from mobile.calibration_model import driver_panel
+        from mobile.sensitivity_runs import StudyState
+
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=12, startup_trials=6,
+                                    sampler_seed=1, name="pruned")
+        record = run_calibration(folder, StudyState(), parallel=2)
+        self.assertEqual((record["status"], record["completed"]), ("finished", 12))
+        front = {row["number"] for row in best_trials(folder)}
+        rows = [row for row in trials_table(folder) if row["state"] == "COMPLETE"]
+        self.assertTrue(front and len(front) < len(rows), front)
+        for row in rows:  # Every trial keeps its series and manifest; only those of the front their output and temperature
+            here = trial_folder(folder, row["number"])
+            on_front = row["number"] in front
+            self.assertTrue((here / SERIES / "objective_0_whole_model.nc").is_file())
+            self.assertTrue((here / "seed_12345" / "run.json").is_file())
+            self.assertEqual((here / "seed_12345" / "output" / "output.nc").is_file(), on_front, row["number"])
+            self.assertEqual((here / "seed_12345" / "run.log").is_file(), on_front, row["number"])
+            self.assertEqual((here / "t2m.nc").is_file(), on_front, row["number"])
+        off = min(set(row["number"] for row in rows) - front)
+        model, data, *_ = trial_comparison(folder, off, 0)  # Drawn from its series
+        self.assertEqual(len(model), len(data))
+        with self.assertRaises(OSError):  # Its drivers are not: the GUI says so in the panel's place
+            driver_panel(trial_folder(folder, off) / "seed_12345", "t2m", "month", "mean")
+        driver_panel(trial_folder(folder, min(front)) / "seed_12345", "t2m", "month", "mean")
+        # Control: a trial off the front without its series (as made by an earlier version, drawn from its output) is left whole
+        study = open_study(folder, read_calibration(folder))
+        objectives = resolved(folder, read_calibration(folder))["objectives"]
+        old, new = sorted(set(row["number"] for row in rows) - front)[:2]
+        for number in (old, new):
+            output = trial_folder(folder, number) / "seed_12345" / "output"
+            output.mkdir()
+            (output / "output.nc").write_text("")
+        shutil.rmtree(trial_folder(folder, old) / SERIES)
+        self.assertEqual(prune_trials(folder, study, objectives), [new])
+        self.assertTrue((trial_folder(folder, old) / "seed_12345" / "output" / "output.nc").is_file())
+        self.assertFalse((trial_folder(folder, new) / "seed_12345" / "output").exists())
+        self.assertEqual(prune_trials(folder, study, objectives), [])  # Nothing left to delete
+
+    def test_errors_scoring_a_trial(self):
+        import errno
+
+        from mobile import calibration_engine
+        from mobile.calibration_engine import create_calibration, open_study, read_calibration, run_calibration
+        from mobile.sensitivity_runs import StudyState
+
+        def failure_of(folder, number):
+            return open_study(folder, read_calibration(folder)).trials[number].user_attrs.get("failure") or ""
+
+        # A file that cannot be written (e.g. its series): that trial fails, with why, and another makes up for it
+        calls = []
+
+        def once(*args, **kwargs):
+            calls.append(1)
+            if len(calls) == 2:
+                raise PermissionError(errno.EACCES, "Permission denied", "view_0_whole_model.nc")
+
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=3, name="denied")
+        with mock.patch.object(calibration_engine, "keep_views", side_effect=once):
+            record = run_calibration(folder, StudyState())
+        self.assertEqual((record["status"], record["completed"], record["failed"]), ("finished", 3, 1))
+        self.assertIn("Permission denied", failure_of(folder, 1))
+        # The disk full: stopped at once, saying so (each trial after it would fail alike)
+        full = OSError(errno.ENOSPC, "No space left on device")
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=3, name="full")
+        with mock.patch.object(calibration_engine, "keep_views", side_effect=full):
+            record = run_calibration(folder, StudyState())
+        self.assertEqual((record["status"], record["completed"], record["failed"]), ("stopped", 0, 1))
+        self.assertIn("No space left on device", record["failure"])
+        self.assertEqual(read_calibration(folder)["failure"], record["failure"])  # In the record the GUI reads
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=3, name="quota")
+        with mock.patch.object(calibration_engine, "keep_views", side_effect=OSError(errno.EDQUOT, "Disk quota exceeded")):
+            record = run_calibration(folder, StudyState())  # The quota full, as on a cluster: the same
+        self.assertEqual((record["status"], record["failed"]), ("stopped", 1))
+        # An error not expected: stopped, not raised, its traceback with the trial and in the record
+        folder = create_calibration(self.config, self.objectives(), temperature=self.temperature(), n_trials=3, name="bug")
+        with mock.patch.object(calibration_engine, "keep_views", side_effect=ValueError("not foreseen")), \
+                mock.patch("sys.stderr"):  # Its traceback is printed too, for the terminal
+            record = run_calibration(folder, StudyState())
+        self.assertEqual(record["status"], "stopped")
+        self.assertIn("ValueError: not foreseen", record["failure"])
+        self.assertIn("in objective", record["failure"])  # Where it was raised
+        self.assertIn("ValueError: not foreseen", failure_of(folder, 0))
+        self.assertEqual(read_calibration(folder)["status"], "stopped")
 
     def test_earlier_versions_are_not_resumed(self):
         from mobile.calibration_engine import (CalibrationError, calibration_label, create_calibration, read_calibration, run_calibration,
@@ -4878,6 +5043,45 @@ class TestCalibrationModel(unittest.TestCase):
             run_elsewhere(self.folder)
         with self.assertRaisesRegex(DataError, "no folder"):
             run_elsewhere(self.folder / "nowhere")
+
+    def test_drivers_across_cells(self):
+        # Each cell processed on its own, then the median and the 5th and 95th percentiles across the cells, as in the
+        # climate notebooks: monthly rain totals of 1, 2, 3 and 10 mm/day (median 2.5, not their mean 4), and monthly mean
+        # temperatures of 10, 20, 30 and 60 °C (median 25, not 30)
+        from mobile.calibration_model import CELL_BAND, driver_series
+        from mobile.plots import comparison_figure
+        days = 59
+        run = fake_run(self.folder / "runs" / "cells", np.full((days, 2, 2), 0.01), np.ones((2, 2)))
+        with netCDF4.Dataset(run / "output" / "output.nc", "a") as data:
+            data["Climate/rain"][:] = np.broadcast_to(np.array([[1.0, 2.0], [3.0, 10.0]]), (days, 2, 2))
+            data["Climate/t2m"][:] = np.broadcast_to(np.array([[10.0, 20.0], [30.0, 60.0]]), (days, 2, 2))
+        rain, temperature = driver_series(run, "rain", "month"), driver_series(run, "t2m", "month")
+        low, high = CELL_BAND
+        totals = 31 * np.array([1.0, 2.0, 3.0, 10.0])  # January
+        np.testing.assert_allclose([rain.values[0], rain.extra[low][0], rain.extra[high][0]],
+                                   [np.median(totals), np.percentile(totals, 5), np.percentile(totals, 95)], rtol=1e-6)
+        np.testing.assert_allclose([temperature.values[0], temperature.extra[low][0], temperature.extra[high][0]],
+                                   [25.0, 11.5, 55.5], rtol=1e-6)  # By hand: 10 + 0.15 x (20 - 10), 30 + 0.85 x (60 - 30)
+        self.assertIn("median over the 4 simulated cells", temperature.notes[-1])
+        # Drawn as whiskers on the rain bars and a band around the temperature line
+        labels = [rain.label(i) for i in range(len(rain))]
+        figure = comparison_figure(rain, rain, labels, rain.values, rain.values,
+                                   drivers=[("rain", "Rainfall", rain), ("t2m", "Temperature", temperature)])
+        bars = [trace for trace in figure.data if trace.type == "bar"]
+        self.assertEqual(len(bars), 1)
+        np.testing.assert_allclose(bars[0].error_y.array, rain.extra[high] - rain.values, rtol=1e-6)
+        np.testing.assert_allclose(bars[0].error_y.arrayminus, rain.values - rain.extra[low], rtol=1e-6)
+        filled = [trace for trace in figure.data if getattr(trace, "fill", None) == "tonexty"]
+        self.assertEqual(len(filled), 1)
+        self.assertIn("5–95 % of cells", filled[0].name)
+        # One simulated cell (a point): no band, no whiskers
+        point = np.full((days, 2, 2), np.nan)
+        point[:, 0, 0] = 0.01
+        single = fake_run(self.folder / "runs" / "point", point, np.ones((2, 2)))
+        alone = [("rain", "Rainfall", driver_series(single, "rain", "month")), ("t2m", "Temperature", driver_series(single, "t2m", "month"))]
+        figure = comparison_figure(rain, rain, labels, rain.values, rain.values, drivers=alone)
+        self.assertFalse(any(getattr(trace, "fill", None) == "tonexty" for trace in figure.data))
+        self.assertFalse(any(trace.type == "bar" and trace.error_y.array is not None for trace in figure.data))
 
     @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root reads any folder")
     def test_unreadable_neighbour(self):

@@ -127,14 +127,45 @@ def quick_start():
     """The steps from a setup to its results, as the tabs are numbered."""
     strong = ui.tags.strong
     return ui.tags.ol(
-        ui.tags.li(strong("Setup"), ": choose the model, the period to simulate and the driving files, then press ", strong("Apply setup"), "."),
+        ui.tags.li(strong("Setup"), ": choose the model, the period to simulate and the driving files, then press ", strong("Apply setup"),
+                   ". HA (and so the number of agents) and the seed are there too, and need no Apply."),
         ui.tags.li(strong("Parameters"), ": move the sliders to change, tick the outputs, then press ", strong("Apply parameters & outputs"),
                    ". Sliders you do not move keep their value."),
-        ui.tags.li("In the sidebar, set the number of agents and the seed, and press ", strong("Run"),
-                   ". The model is compiled, then simulated: the example takes minutes."),
+        ui.tags.li(strong("Run"), ": check what the next run uses, and press ", strong("Run"),
+                   ". The model is compiled, then simulated: the example takes minutes. Or load an earlier run under ",
+                   strong("Earlier runs"), "."),
         ui.tags.li(strong("Results"), ": choose a variable and a day, and click a cell on the map for its time series."),
         class_="mb-2",
     )
+
+
+def run_tab():
+    """Tab 3: the run and its seeds, earlier runs to load, and what the next run uses (the server's run_plan)."""
+    controls = ui.card(
+        ui.card_header("Run simulation"),
+        ui.input_switch(
+            "seed_band", with_tip("Seed band", "Run several consecutive seeds with the same parameters, to see how much the results vary by chance."),
+            value=False,
+        ),
+        ui.panel_conditional("input.seed_band", ui.input_numeric("n_seeds", "Number of seeds", value=5, min=2, step=1)),
+        ui.input_text("run_name", "Run name (optional)", placeholder="e.g. kenya_e0_high"),
+        ui.div(
+            ui.input_task_button("run", "Run", label_busy="Running…", class_="btn-primary"),
+            ui.input_action_button("cancel", "Cancel", disabled=True),
+            class_="run-bar d-flex gap-2",
+        ),
+    )
+    earlier = ui.card(
+        ui.card_header("Earlier runs"),
+        ui.input_select("previous_run", "Runs in the results folder", {}, width="100%"),
+        ui.div(ui.output_text("runs_folder"), class_="small text-muted text-break mb-2"),
+        ui.div(ui.input_action_button("load", "Load run"), class_="run-bar d-flex"),
+    )
+    plan = ui.card(
+        ui.card_header("What the next run uses"),
+        ui.output_ui("run_plan"),
+    )
+    return ui.layout_columns(ui.div(controls, earlier, class_="d-flex flex-column gap-3"), plan, col_widths=(5, 7), class_="mt-3")
 
 
 def no_run_yet():
@@ -142,8 +173,8 @@ def no_run_yet():
     strong = ui.tags.strong
     return ui.card(
         ui.card_header("No results yet"),
-        ui.p("Press ", strong("Run"), " in the sidebar to simulate with the current setup and parameters, or choose an earlier "
-             "run under ", strong("Earlier runs"), " and press ", strong("Load run"), ". The results then show here.", class_="mb-0"),
+        ui.p("Press ", strong("Run"), " in tab 3. Run to simulate with the current setup and parameters, or choose an earlier "
+             "run under ", strong("Earlier runs"), " there and press ", strong("Load run"), ". The results then show here.", class_="mb-0"),
         class_="border-info mb-3 no-run-yet",
     )
 
@@ -234,11 +265,12 @@ def theme_switch():
 
 
 def page_title(header):
-    """The header, then the theme switch and the ICTP logo at the right."""
+    """The header, then Close GUI, the theme switch and the ICTP logo at the right."""
     ictp = logo_files(ASSETS, "ictp")
     return ui.div(
         header,
         ui.div(
+            ui.input_action_button("close", "Close GUI", class_="btn-sm"),
             theme_switch(),
             _logo(ictp[0], "", 40) if ictp else _logo_placeholder("ICTP logo", id="ictp_logo"),
             style="display: flex; align-items: center; gap: 1rem;",
@@ -316,7 +348,7 @@ def help_tab():
     return ui.div(
         ui.card(ui.card_header("Getting started"), quick_start(),
                 ui.p("An earlier run, with its setup and parameters, is reloaded from ", ui.tags.strong("Earlier runs"),
-                     " in the sidebar. Hover over ⓘ for an explanation of a setting.", class_="small text-muted mb-0")),
+                     " in tab 3. Run. Hover over ⓘ for an explanation of a setting.", class_="small text-muted mb-0")),
         docs(),
         publications_card(),
         class_="mt-3",

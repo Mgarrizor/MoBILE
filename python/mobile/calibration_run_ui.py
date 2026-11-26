@@ -62,7 +62,7 @@ ELSEWHERE_SECONDS = 30  # How often the list of calibrations is read again while
 def calibration_run_card():
     return ui.card(
         ui.card_header("Calibration with Optuna"),
-        ui.p("Runs the model many times with the setup applied in tab 1, the HA and seed of the sidebar and the parameters of "
+        ui.p("Runs the model many times with the setup applied in tab 1 and its HA and seed, the parameters of "
              "the sliders, each time with other values of what is calibrated, chosen by ",
              ui.a("Optuna", href="https://optuna.org/", target="_blank"),
              " from the trials before: every run is processed and compared with the data as each objective says, and Optuna "
@@ -164,7 +164,7 @@ def calibration_run_card():
             ),
             ui.div(
                 ui.h6("Runs"),
-                ui.input_numeric("cal_seeds", ui.TagList(with_tip("Seeds per trial", "Each trial runs every seed, from the sidebar seed "
+                ui.input_numeric("cal_seeds", ui.TagList(with_tip("Seeds per trial", "Each trial runs every seed, from the seed of tab 1 "
                                  "up; the objectives compare the median of the seeds, each processed. " + KEPT_TIP), kept()),
                                  value=1, min=1, step=1),
                 ui.input_numeric("cal_threads", ui.TagList(with_tip("Threads per run", "CPU threads of each run, at first those of the "
@@ -1610,7 +1610,7 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
             ui.update_numeric("cal_obs_k_low", value=observed["k"][0])
             ui.update_numeric("cal_obs_k_high", value=observed["k"][1])
             ui.update_numeric("cal_obs_draws", value=observed["draws"])
-        # Optuna and runs; the sidebar seed is the first seed
+        # Optuna and runs; the seed of tab 1 is the first seed
         ui.update_select("cal_sampler", selected=record["sampler"]["name"])
         ui.update_numeric("cal_trials", value=record["n_trials"])
         ui.update_numeric("cal_startup", value=record["sampler"]["startup_trials"])
@@ -1721,8 +1721,9 @@ def calibration_run_server(input, output, session, setup, objectives, overrides,
         if record["status"] == "finished":
             return ui.p(f"Calibration finished: {trials}.", class_="mt-3 mb-0")
         if record["status"] == "stopped":
-            return ui.card(ui.p(f"Calibration stopped: {record['failed']} trials failed, too many to go on (the first ones all, or "
-                                "more than one in ten). The end of the log of a run:", class_="mb-1"),
+            return ui.card(ui.p(f"Calibration stopped: {trials}. Too many trials failed to go on (the first ones all, or more than "
+                                "one in ten), the disk or the quota is full, or an error stopped it. The end of the log of a run, or the "
+                                "error:", class_="mb-1"),
                            ui.tags.pre(record.get("failure") or "", class_="small mb-1"),
                            ui.p("Fix the cause and press Resume.", class_="mb-0"), class_="border-danger mt-3")
         return ui.p(f"Calibration {record['status']}: {trials}. Choose it under Calibrations and press Resume to go on.", class_="mt-3 mb-0")

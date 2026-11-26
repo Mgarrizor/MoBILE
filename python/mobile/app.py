@@ -5,6 +5,7 @@ import os
 import signal
 import socket
 from dataclasses import replace
+from pathlib import Path
 
 import plotly.graph_objects as go
 import plotly.offline
@@ -17,11 +18,11 @@ from .cells import CellSizeError
 from .grid import extent_key, load_grid, mask_like, read_grid
 from .layout import (
     ANALYSIS_TABS, ASSETS, GUI_OUTPUT, HA_BELOW_ONE, OUTPUT_FLAGS, funders, help_tab, needed_outputs, no_run_yet, output_groups,
-    output_label, output_switch_id, page_header, page_title, player_controls, slider_grid, slider_tabs, tab_title, with_tip,
+    output_label, output_switch_id, page_header, page_title, player_controls, run_tab, slider_grid, slider_tabs, tab_title, with_tip,
 )
 from .outcome import RunState, load_outcome, run_label, run_model, run_name_problem
 from .parameters import shown_parameters, slider_parameters, slider_start, species_changes, species_spec, to_model, to_shown
-from .species import ECOLOGY_DISEASE, VECTORS, vectors_for
+from .species import ECOLOGY_DISEASE, VECTORS, model_said, vectors_for
 from .plots import (
     BOX, COLOUR_MAPS, LAND, age_cumulative_figure, age_fit_figure, age_heterogeneity_figure, age_sex_figure, cell_figure, envelope_figure, grid_figure, map_figure, message_figure,
     MAX_DOTS, DOT_COLOURS, add_dot, default_dot, dot_label, move_dot, next_cells, remove_dot, send_figure, sig, snap_to_cell,
@@ -35,13 +36,13 @@ from .calibration_run_ui import calibration_run_server, observation_outputs
 from .calibration_ui import calibration_server, calibration_tab
 from .sensitivity_ui import sensitivity_card, sensitivity_server
 from .scripts import (
-    BROWSER_HANDLER, CLOSED_HANDLER, DOTS_HANDLER, ECOLOGY_HANDLER, PARAMETER_MARKS, PARAMETER_STYLE, PLAYER, PLOT_HANDLER, SIDEBAR_FIT, SLIDER_FORMAT, TAB_DOTS, THEME,
+    BROWSER_HANDLER, CLOSED_HANDLER, DOTS_HANDLER, ECOLOGY_HANDLER, PARAMETER_MARKS, PARAMETER_STYLE, PLAYER, PLOT_HANDLER, HEADER_FIT, SLIDER_FORMAT, TAB_DOTS, THEME,
     PAGE_STYLE,
 )
 from .shapes import ShapeError, areas, name_field, outlines, read_shapes
 from .setup import (
     OPTIONAL_FILES, REQUIRED_FILES, from_fields, from_manifest, create_folder, list_folder, region_from_fields, region_mode,
-    save_setup, start_folder, typed_path, usable_shapes,
+    save_setup, typed_path, usable_shapes,
 )
 from .growth import GrowthError, ceiling_needed, fit_growth, growth_over, percent, read_population
 from .setup_ui import (
@@ -55,8 +56,8 @@ from .variables import (
 
 
 STATIC_MESSAGE = "This variable does not change over time: see the map."
-HUMANS_PER_AGENT_RANGE = (0.5, 2)  # Outside it, the sidebar suggests a number of agents
-FEW_AGENTS = 1000  # Below it, with HA above 1, the sidebar warns that the results will be noisy
+HUMANS_PER_AGENT_RANGE = (0.5, 2)  # Outside it, tab 1 suggests a number of agents
+FEW_AGENTS = 1000  # Below it, with HA above 1, tab 1 warns that the results will be noisy
 REGION_MAP_TITLES = {
     "all": "The whole grid is simulated",
     "box": "Drag a rectangle to choose the subregion",
@@ -70,7 +71,8 @@ def selected_flags(flags):
 
 
 def comparable(config):
-    """A setup without the agents and seed, which the sidebar sets for each run: to tell whether the Setup tab is applied."""
+    """A setup without the agents and seed, which a run takes as they are (HA and Seed are not applied): to tell whether
+    the Setup tab is applied."""
     return replace(config, run={**config.run, "nagent": 0, "seed": 0})
 
 
@@ -79,40 +81,10 @@ def create_app(config):
     default_output = {flag for flags in OUTPUT_FLAGS.values() for flag, _, on in flags if on}
     initial_output = set(config.output) if config.output is not None else set(GUI_OUTPUT)
 
-    app_ui = ui.page_sidebar(
-        ui.sidebar(
-            ui.div("Run simulation", class_="sidebar-heading"),
-            ui.div(
-                ui.input_numeric(
-                    "ha", with_tip("Humans per agent (HA)", "People represented by one agent, which sets the number of agents. "
-                                   "Close to 1 is best for reliable results: more agents is slower but closer to the real population."),
-                    value=None, min=0, step="any",
-                ),
-                ui.div(ui.output_ui("humans_per_agent"), class_="small text-muted mb-2"),
-                class_="human-only",  # No agents in a vector-ecology-only run
-            ),
-            ui.input_numeric(
-                "seed", with_tip("Seed", "Starting point of the random numbers. The same seed and threads give the same results."),
-                value=config.run["seed"], min=1, step=1,
-            ),
-            ui.input_switch(
-                "seed_band", with_tip("Seed band", "Run several consecutive seeds with the same parameters, to see how much the results vary by chance."),
-                value=False,
-            ),
-            ui.panel_conditional("input.seed_band", ui.input_numeric("n_seeds", "Number of seeds", value=5, min=2, step=1)),
-            ui.input_text("run_name", "Run name (optional)", placeholder="e.g. kenya_e0_high"),
-            ui.div(
-                ui.input_task_button("run", "Run", label_busy="Running…", class_="btn-primary"),
-                ui.input_action_button("cancel", "Cancel", disabled=True),
-                class_="run-bar d-flex flex-column gap-2",
-            ),
-            ui.div("Earlier runs", class_="sidebar-heading mt-4"),
-            ui.input_select("previous_run", "Runs in the results folder", {}),
-            ui.div(ui.output_text("runs_folder"), class_="small text-muted text-break mb-2"),
-            ui.input_action_button("load", "Load run", class_="w-100"),
-            ui.input_action_button("close", "Close GUI", class_="btn-sm w-100 mt-4"),
-            width=300,
-        ),
+    app_ui = ui.page_fillable(
+        {"class": "mobile-page"},
+        # The header: the title row, then the tabs (moved into it by HEADER_FIT)
+        ui.div(ui.div(page_title(ui.output_ui("header")), class_="container-fluid"), class_="navbar navbar-static-top"),
         ui.head_content(
             ui.tags.script(ui.HTML(THEME)),
             ui.tags.style(PAGE_STYLE),
@@ -125,91 +97,96 @@ def create_app(config):
             ui.tags.script(ui.HTML(PARAMETER_MARKS)),
             ui.tags.script(ui.HTML(SLIDER_FORMAT)),
             ui.tags.script(ui.HTML(BROWSER_HANDLER)),
-            ui.tags.script(ui.HTML(SIDEBAR_FIT)),
+            ui.tags.script(ui.HTML(HEADER_FIT)),
             ui.tags.script(ui.HTML(DOTS_HANDLER)),
             ui.tags.script(ui.HTML(TAB_DOTS)),
             ui.tags.script(ui.HTML(ECOLOGY_HANDLER)),
         ),
-        ui.output_ui("status"),
-        ui.navset_tab(
-            ui.nav_panel(tab_title("1. Setup", "setup"), setup_tab(config), value="setup"),
-            ui.nav_panel(
-                tab_title("2. Parameters & SA", "parameters"),
-                ui.layout_columns(
-                    ui.card(
-                        ui.card_header("Parameters for single runs"),
-                        ui.p("Only the sliders you move are changed for the next run; the others keep their value.", class_="small text-muted mb-1"),
-                        ui.output_ui("parameter_sliders"),
-                        ui.div(ui.input_action_button("reset", "Reset parameters", class_="btn-lg"), class_="mt-3 text-center"),
-                    ),
-                    ui.card(
-                        ui.card_header("Outputs"),
-                        ui.p("What the next run writes: only what is ticked. Rainfall and temperature are always written; fields by "
-                             "age give large files.", class_="small text-muted mb-1"),
-                        ui.output_ui("outputs_needed"),
-                        *output_groups(initial_output),
-                    ),
-                    col_widths=(7, 5),
-                    class_="mt-3",
-                ),
-                ui.div(
-                    ui.input_action_button("apply_parameters", with_tip("Apply parameters & outputs", "Runs, sensitivity analyses "
-                                           "and calibrations use the parameters and outputs applied."), class_="btn-primary btn-lg"),
-                    ui.output_ui("parameters_state"),
-                    class_="mt-3 text-center",
-                ),
-                sensitivity_card(),
-                value="parameters",
-            ),
-            ui.nav_panel(
-                "3. Results",
-                ui.div(ui.output_ui("run_summary"), class_="mt-3"),
-                ui.card(
+        ui.tags.main(
+            ui.output_ui("status"),
+            ui.navset_tab(
+                ui.nav_panel(tab_title("1. Setup", "setup"), setup_tab(config), value="setup"),
+                ui.nav_panel(
+                    tab_title("2. Parameters & SA", "parameters"),
                     ui.layout_columns(
-                        ui.div(ui.input_select("variable", "Variable", {}), ui.output_ui("age_choice")),
-                        ui.output_ui("seed_choice"),
-                        ui.div(
-                            ui.input_slider("day", ui.TagList("Day ", ui.tags.span(id="day_date", class_="ms-1")), min=1, max=max(config.run["nstep"], 2), value=1, step=1, width="100%"),
-                            player_controls(),
+                        ui.card(
+                            ui.card_header("Parameters for single runs"),
+                            ui.p("Only the sliders you move are changed for the next run; the others keep their value.", class_="small text-muted mb-1"),
+                            ui.output_ui("parameter_sliders"),
+                            ui.div(ui.input_action_button("reset", "Reset parameters", class_="btn-lg"), class_="mt-3 text-center"),
                         ),
-                        col_widths=(3, 2, 7),
-                    ),
-                    ui.accordion(
-                        ui.accordion_panel(
-                            "Map display: colours, range and terrain",
-                            ui.layout_columns(
-                                ui.input_select("colour_map", "Colour map", list(COLOUR_MAPS)),
-                                ui.input_radio_buttons("scale", "Scale", {"linear": "Linear", "log": "Log"}, inline=True),
-                                ui.input_numeric("vmin", "Minimum", value=None, step="any"),
-                                ui.input_numeric("vmax", "Maximum", value=None, step="any"),
-                                ui.div(ui.input_action_button("auto_range", "Automatic range", class_="btn-sm"), class_="pt-4"),
-                                col_widths=(2, 2, 2, 2, 3),
-                            ),
-                            ui.input_switch("terrain", with_tip("Terrain", "The relief, as a shading over the map: slopes facing away from the light (northwest) darker, those facing it lighter. Downloaded the first time it is used for an area."), value=False),
-                            ui.output_ui("terrain_status"),
+                        ui.card(
+                            ui.card_header("Outputs"),
+                            ui.p("What the next run writes: only what is ticked. Rainfall and temperature are always written; fields by "
+                                 "age give large files.", class_="small text-muted mb-1"),
+                            ui.output_ui("outputs_needed"),
+                            *output_groups(initial_output),
                         ),
-                        open=False,
+                        col_widths=(7, 5),
+                        class_="mt-3",
                     ),
-                    ui.p("Click a cell on the map for its time series below, and a second cell to compare. "
-                         "Drag to zoom, double-click to see the whole grid again.", class_="small text-muted mb-0"),
-                    ui.div(id="map", style="height: 680px;"),
-                    ui.div(id="cell_plot", style="height: 300px;"),
-                    ui.panel_conditional("input.seed_band", ui.div(id="envelope_plot", style="height: 340px;")),
+                    ui.div(
+                        ui.input_action_button("apply_parameters", with_tip("Apply parameters & outputs", "Runs, sensitivity analyses "
+                                               "and calibrations use the parameters and outputs applied."), class_="btn-primary btn-lg"),
+                        ui.output_ui("parameters_state"),
+                        class_="mt-3 text-center",
+                    ),
+                    sensitivity_card(),
+                    value="parameters",
                 ),
-                value="results",
+                ui.nav_panel("3. Run", run_tab(), value="run"),
+                ui.nav_panel(
+                    "4. Results",
+                    ui.div(ui.output_ui("run_summary"), class_="mt-3"),
+                    ui.card(
+                        ui.layout_columns(
+                            ui.div(ui.input_select("variable", "Variable", {}), ui.output_ui("age_choice")),
+                            ui.output_ui("seed_choice"),
+                            ui.div(
+                                ui.input_slider("day", ui.TagList("Day ", ui.tags.span(id="day_date", class_="ms-1")), min=1, max=max(config.run["nstep"], 2), value=1, step=1, width="100%"),
+                                player_controls(),
+                            ),
+                            col_widths=(3, 2, 7),
+                        ),
+                        ui.accordion(
+                            ui.accordion_panel(
+                                "Map display: colours, range and terrain",
+                                ui.layout_columns(
+                                    ui.input_select("colour_map", "Colour map", list(COLOUR_MAPS)),
+                                    ui.input_radio_buttons("scale", "Scale", {"linear": "Linear", "log": "Log"}, inline=True),
+                                    ui.input_numeric("vmin", "Minimum", value=None, step="any"),
+                                    ui.input_numeric("vmax", "Maximum", value=None, step="any"),
+                                    ui.div(ui.input_action_button("auto_range", "Automatic range", class_="btn-sm"), class_="pt-4"),
+                                    col_widths=(2, 2, 2, 2, 3),
+                                ),
+                                ui.input_switch("terrain", with_tip("Terrain", "The relief, as a shading over the map: slopes facing away from the light (northwest) darker, those facing it lighter. Downloaded the first time it is used for an area."), value=False),
+                                ui.output_ui("terrain_status"),
+                            ),
+                            open=False,
+                        ),
+                        ui.p("Click a cell on the map for its time series below, and a second cell to compare. "
+                             "Drag to zoom, double-click to see the whole grid again.", class_="small text-muted mb-0"),
+                        ui.div(id="map", style="height: 680px;"),
+                        ui.div(id="cell_plot", style="height: 300px;"),
+                        ui.panel_conditional("input.seed_band", ui.div(id="envelope_plot", style="height: 340px;")),
+                    ),
+                    value="results",
+                ),
+                ui.nav_menu(
+                    "Analysis (to come)",
+                    *[ui.nav_panel(name, ui.p(text, class_="text-muted mt-3")) for name, text in ANALYSIS_TABS],
+                ),
+                ui.nav_panel("Calibration (in development)", calibration_tab(), value="calibration"),
+                ui.nav_panel("Help", help_tab(), value="help"),
+                id="tab",
+                selected="setup",
             ),
-            ui.nav_menu(
-                "Analysis (to come)",
-                *[ui.nav_panel(name, ui.p(text, class_="text-muted mt-3")) for name, text in ANALYSIS_TABS],
-            ),
-            ui.nav_panel("Calibration (in development)", calibration_tab(), value="calibration"),
-            ui.nav_panel("Help", help_tab(), value="help"),
-            id="tab",
-            selected="setup",
+            funders(),
+            class_="mobile-main",
         ),
-        funders(),
-        title=page_title(ui.output_ui("header")),
-        window_title="MoBILE - GUI",  # Else the browser takes it from the title above: only the theme switch has text then
+        padding=0,
+        gap=0,
+        title="MoBILE - GUI",
     )
 
     def server(input, output, session):
@@ -356,7 +333,7 @@ def create_app(config):
                 return
             applied.set({"overrides": overrides(), "output": selected_output()})
             ui.notification_show("Parameters & outputs applied.", type="message", duration=3)
-            ui.update_navs("tab", selected="results")
+            ui.update_navs("tab", selected="run")
 
         @render.ui
         def parameters_state():
@@ -1462,7 +1439,9 @@ def create_app(config):
             )
 
         def open_browser(field, kind):
-            browse.set({"field": field, "kind": kind, "folder": start_folder(input[field]())})
+            # The browser opens in the folder the GUI was started in (from which typed relative paths are read too;
+            # the GUI never changes it)
+            browse.set({"field": field, "kind": kind, "folder": Path.cwd()})
             footer = [ui.modal_button("Cancel")]
             if kind == "folder":
                 footer.insert(0, ui.input_action_button("browser_use_folder", "Use this folder", class_="btn-primary"))
@@ -1633,6 +1612,69 @@ def create_app(config):
                 f"{'Loaded' if outcome.loaded else 'Showing'}: {outcome.nagent:,} agents, {seeds}, changed parameters: {changed}. "
                 f"Folder: {outcome.run_dir}",
                 class_="small mb-2",
+            )
+
+        @render.ui
+        def run_plan():
+            """What the next run uses (tab 3. Run): the setup applied, HA and the seed, and the parameters and outputs applied."""
+            config_ = setup()
+            ecology = config_.ecology
+            notes = []
+            if not_applied():
+                notes.append(ui.p(not_applied(), class_="small text-danger mb-2"))
+            if setup_state()[0] != "applied":
+                notes.append(ui.p("Tab 1. Setup has changes not applied: the run uses the setup below, the one applied last.",
+                                  class_="small text-warning-emphasis mb-2"))
+            period = period_values(config_)
+            if period is None:
+                when = "all the days of the rainfall file"
+            else:
+                start, end = parse_day(period[2]), parse_day(period[3])
+                when = f"{period[2]} to {period[3]}, {length_text((end - start).days + 1)}"
+            when += ", with spin-up" if config_.run["spin_up"] == 1 else ", without spin-up"
+            mode = region_mode(config_.region)
+            place = {"point": "One cell", "box": "Subregion"}.get(mode, "Whole grid")
+            cells = grid().get("simulated")
+            people = grid().get("people")
+            where = place + (f": {cells:,} cell{'s' * (cells != 1)} simulated" if cells is not None else "")
+            where += f", {people:,.0f} people" if people is not None and not ecology else ""
+            seed, n_seeds = input.seed(), input.n_seeds() if input.seed_band() else 1
+            seeds = (f"seed {seed}" if n_seeds == 1 else f"seeds {seed} to {seed + n_seeds - 1} (seed band)") if isinstance(seed, int) \
+                else "no seed set"
+            nagent = agents()
+            if ecology:
+                who = f"No agents (vector ecology only); {seeds}"
+            elif nagent is None:
+                who = f"HA not set; {seeds}"
+            else:
+                who = f"{nagent:,} agents (HA {input.ha():,.8g}); {seeds}"
+            files = [ui.tags.span(Path(config_.inputs[key]).name, title=str(config_.inputs[key]))
+                     for key in ("rain_file", "temp_file", "pop_file") if config_.inputs.get(key)]
+            moved = applied_overrides()
+            changed = ", ".join(f"{name} = {value:.4g}" for name, value in moved.items()) or "none: all at their defaults"
+            written = ", ".join(output_label(flag) for flag in applied_output()) or "none"
+
+            def row(name, *value):
+                return ui.tags.tr(ui.tags.th(name, class_="fw-normal text-muted pe-3", style="white-space: nowrap;"), ui.tags.td(*value))
+
+            return ui.TagList(
+                *notes,
+                ui.tags.table(
+                    ui.tags.tbody(
+                        ui.tags.tr(ui.tags.td(ui.tags.strong("Setup (tab 1)"), colspan="2", class_="pt-0")),
+                        row("Model", model_said(config_.run)),
+                        row("Period", when),
+                        row("Region", where),
+                        row("Agents and seed", who),
+                        row("Threads", str(config_.run["threads"])),
+                        row("Driving files", *[item for file in files for item in (file, ui.tags.br())][:-1]),
+                        row("Results folder", str(config_.runs_dir)),
+                        ui.tags.tr(ui.tags.td(ui.tags.strong("Parameters & outputs (tab 2)"), colspan="2", class_="pt-3")),
+                        row("Parameters changed", changed),
+                        row("Outputs", f"{written} (and rainfall and temperature)"),
+                    ),
+                    class_="table table-sm table-borderless small mb-0",
+                ),
             )
 
         @render.ui

@@ -162,7 +162,7 @@ def calibrate(folder, parallel=None, trial_minutes=None, end_time=None, mobile=N
         + f" after {_duration(time.time() - started)}: {record['completed']} of {target} trials completed, "
           f"{record['failed']} failed in all")
     if status == "stopped" and record.get("failure"):
-        say("The end of the log of a run that failed:\n" + record["failure"].rstrip())
+        say("The end of the log of a run that failed, or the error:\n" + record["failure"].rstrip())
     code = EXIT.get(status, EXIT_ERROR)
     say(f"exit {code}: " + {0: "done", RESUMABLE: "not done: run the same command again to go on"}.get(code, "see above"))
     return code

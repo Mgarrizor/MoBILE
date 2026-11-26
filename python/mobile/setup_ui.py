@@ -184,8 +184,22 @@ def setup_tab(config):
         ui.output_ui("period_summary"),
         ui.input_switch("setup_spin_up", with_tip("Spin-up to equilibrium", "Let the model settle to equilibrium before the simulated period starts."), value=run["spin_up"] == 1),
         ui.input_numeric("setup_threads", with_tip("Threads", "CPU threads used by the model. Results depend on the number: keep it fixed to compare runs."), value=run["threads"], min=1, step=1),
+        ui.div(
+            ui.input_numeric(
+                "ha", with_tip("Humans per agent (HA)", "People represented by one agent, which sets the number of agents. "
+                               "Close to 1 is best for reliable results: more agents is slower but closer to the real population."),
+                value=None, min=0, step="any",
+            ),
+            ui.div(ui.output_ui("humans_per_agent"), class_="small text-muted mb-2"),
+            class_="human-only",  # No agents in a vector-ecology-only run
+        ),
+        ui.input_numeric(
+            "seed", with_tip("Seed", "Starting point of the random numbers. The same seed and threads give the same results."),
+            value=run["seed"], min=1, step=1,
+        ),
+        ui.p("HA and the seed need no Apply setup: the next run takes them as they are, as they often change between runs.",
+             class_="small text-muted"),
         _path_input("setup_runs_dir", "Results folder", str(config.runs_dir), "folder"),
-        ui.p("The number of agents and the seed are set in the sidebar, as they often change between runs.", class_="small text-muted"),
     )
     files_box = ui.card(
         ui.card_header("Driving files"),
@@ -205,7 +219,7 @@ def setup_tab(config):
     )
     return ui.div(
         ui.p("Choose the model, the period to simulate, the driving data and, if not the whole grid, the region to simulate, then press ",
-             ui.tags.strong("Apply setup"), ". Next, set the parameters in the Parameters & SA tab and press Run in the sidebar.",
+             ui.tags.strong("Apply setup"), ". Next, set the parameters in the Parameters & SA tab, and press Run in the Run tab.",
              class_="text-muted"),
         driving_files_help(),
         model_menu(config),
