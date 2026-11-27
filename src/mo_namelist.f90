@@ -219,6 +219,7 @@ MODULE mo_namelist
                              wurbn_tau, wurbn_sf,                                    & ! Urban water: log(people per km2 / wurbn_tau + 1) x wurbn_sf
                              rbiocapacity, rlarvsurv, rlarv_tmin, neggmn,            & ! Larvae and eggs (per species in init_constants)
                              rtgono, rtsporo,                                        & ! Gonotrophic and sporogonic thresholds (per species)
+                             rbeta_indoor,                                           & ! Weight of the indoor temperature felt by adult vectors
                              alph_min,k_alph                                               !
 
             ! Does the file exist?

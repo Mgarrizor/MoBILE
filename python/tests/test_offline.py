@@ -198,7 +198,7 @@ class TestConfig(unittest.TestCase):
             spec = parameters[name]
             self.assertTrue(spec["min"] <= slider_start(name) <= spec["max"], f"{name}: starts outside its range")
             self.assertAlmostEqual(to_shown(name, to_model(name, slider_start(name))), slider_start(name), msg=name)
-        self.assertEqual(len(shown_parameters()), 56)
+        self.assertEqual(len(shown_parameters()), 57)
 
     def test_parameter_file_matches_the_source(self):
         malaria, cholera = fortran_defaults(MOBILE), fortran_defaults(MOBILE, "cholera")
@@ -5127,6 +5127,22 @@ class TestCalibrationModel(unittest.TestCase):
         self.assertEqual(right.side, "right")
         # The panels zoom together: the time axes of the upper ones follow that of the bottom one
         self.assertEqual((figure.layout.xaxis.matches, figure.layout.xaxis2.matches, figure.layout.xaxis3.matches), ("x3", "x3", None))
+
+    def test_pond_fraction_driver(self):
+        from mobile.calibration_data import DataError
+        from mobile.calibration_model import driver_panel
+        days = 59
+        run = fake_run(self.folder / "runs" / "one", np.full((days, 2, 2), 0.01), np.array([[1.0, 2.0], [3.0, 4.0]]))
+        with self.assertRaisesRegex(DataError, "no daily output 'wpond'.*tick Pond fraction"):
+            driver_panel(run, "ponds")
+        with netCDF4.Dataset(run / "output" / "output.nc", "a") as data:
+            field = data.createGroup("Hydro").createVariable("wpond", "f4", ("time", "lat", "lon"), fill_value=np.float32(np.nan))
+            field.units, field.long_name = "[fraction]", "Fraction of temporary rain-driven ponds"
+            field[:] = np.arange(days)[:, None, None] * np.array([[1.0, 2.0], [3.0, 4.0]]) * 1e-5  # Cells apart, growing
+        [(label, series)] = driver_panel(run, "ponds", "month", "mean")
+        self.assertEqual(label, "Pond fraction")
+        january = np.arange(31).mean() * 1e-5 * np.array([1.0, 2.0, 3.0, 4.0])
+        np.testing.assert_allclose(series.values[0], np.median(january), rtol=1e-5)  # Median over the cells
 
     def test_metrics(self):
         import pandas as pd
