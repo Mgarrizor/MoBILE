@@ -182,12 +182,13 @@ class TestConfig(unittest.TestCase):
         parameters = all_parameters()
         # Every parameter of &CONST, and only those: one added to the model must be added here too
         self.assertEqual(set(parameters), namelist_names(MOBILE, "CONST"))
-        self.assertEqual(sum(spec["curated"] for spec in parameters.values()), 19)
+        self.assertEqual(sum(spec["curated"] for spec in parameters.values()), 20)
         # The ranges of the pond scheme, set by hand from the source (Asare et al. 2016) and the physical bounds: e.g.
         # wpond_max down to below VECTRI's original 0.2, soil infiltration from clay (50) to sand (700), wide enough to
         # calibrate; the defaults (Senegal's) inside them
-        expected = {"wpond_max": (0.1, 1.0), "wpond_ratio": (0.1, 1.0), "wpond_shapep2": (0.25, 2.0), "wpond_depthref": (250.0, 350.0),
-                    "wpond_CN": (80.0, 90.0), "wpond_ref": (0.005, 0.02), "soilinfil_SA": (50.0, 750.0)}
+        expected = {"wpond_max": (0.1, 1.0), "wpond_ratio": (0.1, 1.0), "wpond_shapep2": (0.5, 2.0), "wpond_depthref": (250.0, 350.0),
+                    "wpond_CN": (80.0, 90.0), "wpond_ref": (0.005, 0.02), "soilinfil_SA": (50.0, 750.0),
+                    "wpond_evap": (1.0, 9.0)}
         self.assertEqual({name: (parameters[name]["min"], parameters[name]["max"]) for name in expected}, expected)
         for name, spec in parameters.items():
             self.assertIn(spec["group"], (*PARAMETER_GROUPS, "Cholera", "Mobility"), name)
@@ -198,7 +199,7 @@ class TestConfig(unittest.TestCase):
             spec = parameters[name]
             self.assertTrue(spec["min"] <= slider_start(name) <= spec["max"], f"{name}: starts outside its range")
             self.assertAlmostEqual(to_shown(name, to_model(name, slider_start(name))), slider_start(name), msg=name)
-        self.assertEqual(len(shown_parameters()), 57)
+        self.assertEqual(len(shown_parameters()), 58)
 
     def test_parameter_file_matches_the_source(self):
         malaria, cholera = fortran_defaults(MOBILE), fortran_defaults(MOBILE, "cholera")
