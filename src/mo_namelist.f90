@@ -210,6 +210,7 @@ MODULE mo_namelist
                              rlarv_flushtau, rlarv_flushmin,                             & ! Rain-driven mortality
                              soilinfil_SA,                                               & ! Soil infiltration parameter for Sensitivity Analysis purposes
                              wpond_depthref, wpond_CN, wpond_ref,                        & ! Pond scheme (Asare et al. 2019?)
+                             wpond_evap,                                                 & ! Evaporation from the ponds
                              dgono,dsporo,                                               & !
                              e_0, e1, e2, A1, e_th, mat_rate, rho,                       & ! Immunity scheme
                              m_a, m_c, k_m, i_star_a, i_star_c, k_star,                  & ! Symptomatic scheme

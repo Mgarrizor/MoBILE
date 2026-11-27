@@ -406,10 +406,10 @@ parameters:
     group: Hydro
     section: Temporary ponds
     value: 1.0
-    min: 0.25
+    min: 0.5
     max: 2.0
     curated: true
-    info: Shape factor p of the pond geometry, divided by 2 (Asare et al. 2016; the source says p = 1, range 0.5 to 2, yet stores 1.0 here; the range covers both readings).
+    info: Shape factor p of the pond geometry, dw/dt = K w^(-p/2)... (Asare et al. 2016, p = 1, range 0.5 to 2 for temporary ponds, 3 to 5 for lakes). The source calls it p divided by 2, but uses it as p.
     source: utils/vectri/mo_constants.f90
   wpond_depthref:
     group: Hydro
@@ -436,7 +436,16 @@ parameters:
     min: 0.005
     max: 0.02
     curated: true
-    info: Reference pond water fraction (Asare et al. 2016, range 0.5 % to 2 %).
+    info: Reference pond water fraction (Asare et al. 2016, range 0.5 % to 2 %; 0.02 is 10 % of VECTRI's original largest pond fraction, 0.2).
+    source: utils/vectri/mo_constants.f90
+  wpond_evap:
+    group: Hydro
+    section: Temporary ponds
+    value: 5.0
+    min: 1.0
+    max: 9.0
+    curated: true
+    info: Evaporation from the temporary ponds, in mm/day, the same every day and in every cell; with rain on the ponds it sets how fast they dry between storms.
     source: utils/vectri/mo_constants.f90
   soilinfil_SA:
     group: Hydro
