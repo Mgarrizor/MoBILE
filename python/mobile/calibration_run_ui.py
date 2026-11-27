@@ -52,7 +52,8 @@ from .outcome import run_name_problem
 
 OPTIONAL_OUTPUTS = (("out_I_new", "the regime of each trial (epidemic or endemic) is not measured"),
                     ("out_vect", "the drivers of a trial cannot show the vector density"),
-                    ("out_vecinfc", "the drivers of a trial cannot show the infective vector density"))  # Used if written
+                    ("out_vecinfc", "the drivers of a trial cannot show the infective vector density"),
+                    ("out_wpond", "the drivers of a trial cannot show the pond fraction"))  # Used if written
 MAX_CELLS = 20  # Temperature offsets are calibrated for at most this many cells or regions
 MAX_SIMULATED = 5000  # And the cells of the setup, grouped in regions or not, at most this many
 REFRESH_SECONDS = 3  # How often the progress of a calibration is drawn again while it runs

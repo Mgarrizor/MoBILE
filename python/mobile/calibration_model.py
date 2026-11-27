@@ -277,11 +277,13 @@ def seed_spread(members, steps, others=None, first_note=None):
 
 
 # Possible drivers of incidence, read from the same run: {name: (label, default statistic)}
-DRIVERS = {"rain": ("Rainfall", "sum"), "t2m": ("Temperature", "mean"), "vectors": ("Vector densities", "mean")}
+DRIVERS = {"rain": ("Rainfall", "sum"), "t2m": ("Temperature", "mean"), "vectors": ("Vector densities", "mean"),
+           "ponds": ("Pond fraction", "mean")}
 # The outputs each driver draws, with their labels: vector density on the left axis, infective vectors on a twin right one
 DRIVER_VARIABLES = {"rain": {"rain": "Rainfall"}, "t2m": {"t2m": "Temperature"},
-                    "vectors": {"V": "Vector density", "Vinf": "Infective vector density"}}
-DRIVER_OUTPUTS = {"vectors": "tick Vector density and Infective vector density in the Outputs card, and run again"}
+                    "vectors": {"V": "Vector density", "Vinf": "Infective vector density"}, "ponds": {"wpond": "Pond fraction"}}
+DRIVER_OUTPUTS = {"vectors": "tick Vector density and Infective vector density in the Outputs card, and run again",
+                  "ponds": "tick Pond fraction in the Outputs card, and run again"}
 CELL_LEVELS = (5, 50, 95)  # Percentiles of a driver across the simulated cells: a band around the median
 CELL_BAND = ("cells_p5", "cells_p95")  # Their extra columns in the series of a driver (driver_series)
 DRIVER_PERIODS = {"as_is": "As they are (days)", "week": "Week", "month": "Month", "season": "Season", "year": "Year"}

@@ -670,8 +670,9 @@ def observations_figure(observations, name, compare=None, compare_label=""):
 MODELLED = "#e34948"  # The second categorical colour: the model, beside the observations in the first
 
 
-# Teal for rainfall, ochre for temperature, violet for the vector density and magenta for the infective ones (twin axis)
-DRIVER_COLOURS = {"rain": "#0f9aa8", "t2m": "#d99a0b", "vectors": ("#6d5bd0", "#be185d")}
+# Teal for rainfall, ochre for temperature, violet for the vector density and magenta for the infective ones (twin axis),
+# navy for the ponds
+DRIVER_COLOURS = {"rain": "#0f9aa8", "t2m": "#d99a0b", "vectors": ("#6d5bd0", "#be185d"), "ponds": "#1e3a5f"}
 
 
 def _panel(observations):
